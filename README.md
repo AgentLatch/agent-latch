@@ -46,7 +46,7 @@ agent-latch --interactive                            # guided mode
 Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-commit-hook) or the [GitHub Action](docs/ci.md#github-actions):
 
 ```yaml
-- uses: AgentLatch/agent-latch@main
+- uses: AgentLatch/agent-latch@v0.1.0
   with:
     fail-on: high
 ```

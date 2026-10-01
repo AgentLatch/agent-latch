@@ -15,13 +15,15 @@ Run AgentLatch automatically: locally before each commit, and on every push or p
    ```yaml
    repos:
      - repo: https://github.com/AgentLatch/agent-latch
-       rev: main  # pin a release tag or commit SHA once available
+       rev: v0.1.0
        hooks:
          - id: agent-latch
    ```
 
 3. Enable it: `pre-commit install`.
 4. Try it on all files: `pre-commit run agent-latch --all-files`.
+
+Examples in this guide pin release `v0.1.0`. Check the [releases page](https://github.com/AgentLatch/agent-latch/releases) for the latest version; `pre-commit autoupdate` bumps `rev` for you.
 
 The hook runs `agent-latch scan --fail-on high` and blocks the commit when a high or critical finding exists. It runs when Python, YAML, Markdown, or text files change, and scans the whole repository, not only staged files.
 
@@ -53,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: AgentLatch/agent-latch@main  # pin a release tag or commit SHA once available
+      - uses: AgentLatch/agent-latch@v0.1.0
         with:
           fail-on: high
 ```
@@ -91,7 +93,7 @@ The action:
 Scan one agent folder with its manifest and audit dependencies:
 
 ```yaml
-      - uses: AgentLatch/agent-latch@main
+      - uses: AgentLatch/agent-latch@v0.1.0
         with:
           path: agents/support-bot
           config: agents/support-bot/agent-manifest.yaml
@@ -101,7 +103,7 @@ Scan one agent folder with its manifest and audit dependencies:
 Report without failing the build, then act on the result:
 
 ```yaml
-      - uses: AgentLatch/agent-latch@main
+      - uses: AgentLatch/agent-latch@v0.1.0
         id: agentlatch
         with:
           fail-on: none
@@ -122,7 +124,7 @@ AgentLatch is a normal command-line tool, so any CI system can run it. Fail on t
 agent-latch:
   image: python:3.12
   script:
-    - pip install "git+https://github.com/AgentLatch/agent-latch.git"
+    - pip install "git+https://github.com/AgentLatch/agent-latch.git@v0.1.0"
     - agent-latch scan --fail-on high --plain
     - agent-latch scan --format sarif --output agent-latch.sarif
   artifacts:
