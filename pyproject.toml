@@ -31,7 +31,7 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
   "Topic :: Security",
 ]
-dependencies = ["rich>=13.9,<15"]
+dependencies = ["rich>=13.9,<15", "rich-argparse>=1.5,<2", "PyYAML>=6,<7"]
 
 [project.urls]
 Homepage = "https://github.com/AgentLatch/agent-latch"

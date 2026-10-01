@@ -20,6 +20,10 @@ _SARIF_LEVEL = {
 }
 
 
+def severity_sort_key(finding: Finding) -> tuple[int, str, int]:
+    return (_SEVERITY_ORDER.get(finding.severity, 99), finding.path, finding.line)
+
+
 def finding_dict(finding: Finding) -> dict[str, Any]:
     result = asdict(finding)
     result["owasp"] = list(finding.owasp)
@@ -27,12 +31,18 @@ def finding_dict(finding: Finding) -> dict[str, Any]:
 
 
 def json_report(
-    findings: list[Finding], scanned_path: str, dependency_manifests: int | None = None
+    findings: list[Finding],
+    scanned_path: str,
+    dependency_manifests: int | None = None,
+    manifest: str | None = None,
+    suppressed: int = 0,
 ) -> str:
     payload = {
         "scanner": {"name": "AgentLatch", "version": __version__},
         "scan_target": scanned_path,
+        "manifest": manifest,
         "finding_count": len(findings),
+        "suppressed_count": suppressed,
         "dependency_audit": (
             {
                 "status": "completed" if dependency_manifests else "no_supported_manifests",
@@ -49,7 +59,10 @@ def json_report(
 
 
 def sarif_report(
-    findings: list[Finding], scanned_path: str, dependency_manifests: int | None = None
+    findings: list[Finding],
+    scanned_path: str,
+    dependency_manifests: int | None = None,
+    manifest: str | None = None,
 ) -> str:
     rules_by_id: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
@@ -102,6 +115,7 @@ def sarif_report(
                 },
                 "artifacts": [{"location": {"uri": scanned_path}}],
                 "properties": {
+                    "agentManifest": manifest,
                     "dependencyAuditManifestCount": dependency_manifests,
                     "dependencyAuditStatus": (
                         ("completed" if dependency_manifests else "no_supported_manifests")
@@ -117,11 +131,20 @@ def sarif_report(
 
 
 def text_report(
-    findings: list[Finding], scanned_path: str, dependency_manifests: int | None = None
+    findings: list[Finding],
+    scanned_path: str,
+    dependency_manifests: int | None = None,
+    manifest: str | None = None,
+    suppressed: int = 0,
 ) -> str:
+    header = f"AgentLatch scan: {scanned_path}"
+    if manifest is not None:
+        header += f"\nManifest: {manifest}"
+    if suppressed:
+        header += f"\n{suppressed} finding(s) suppressed by ignore rules or inline comments."
     if not findings:
         lines = [
-            f"AgentLatch scan: {scanned_path}",
+            header,
             "No findings from the enabled checks. This does not mean the project is secure.",
         ]
         if dependency_manifests is not None:
@@ -137,7 +160,7 @@ def text_report(
                 "The dependency audit sends package names and versions to the configured vulnerability service; it does not install packages."
             )
         return "\n".join(lines)
-    lines = [f"AgentLatch scan: {scanned_path}", f"Findings: {len(findings)}", ""]
+    lines = [header, f"Findings: {len(findings)}", ""]
     if dependency_manifests is not None:
         lines.insert(
             2,
@@ -152,7 +175,7 @@ def text_report(
             3,
             "Dependency audit sends package names and versions to the configured advisory service; no packages are installed.",
         )
-    ordered = sorted(findings, key=lambda item: (_SEVERITY_ORDER.get(item.severity, 99), item.path, item.line))
+    ordered = sorted(findings, key=severity_sort_key)
     for finding in ordered:
         mappings = ", ".join(finding.owasp)
         lines.extend(

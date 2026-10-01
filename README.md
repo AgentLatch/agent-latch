@@ -8,6 +8,59 @@
 
 AgentLatch aims to make AI-agent security checks approachable for developers working with agentic AI. The first version focuses on a small, explainable set of static checks. Framework integrations, runtime authorization, policy enforcement, and evaluations are future layers—not capabilities this scanner currently provides.
 
+## Quick start
+
+Requires Python 3.11+. Install AgentLatch in its own virtual environment (Windows: see [Getting started](docs/getting-started.md#windows-powershell)):
+
+```sh
+git clone https://github.com/AgentLatch/agent-latch.git
+cd agent-latch
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install -e .
+```
+
+Scan an agent project:
+
+```sh
+agent-latch scan /path/to/my-agent
+```
+
+Try it on the bundled, deliberately insecure example:
+
+```sh
+cd examples/vulnerable-agent
+agent-latch scan --config agent-manifest.yaml
+```
+
+More ways to run it:
+
+```sh
+agent-latch scan --config agent-manifest.yaml        # audit declared tools and prompts
+agent-latch scan . --dependencies                    # add known-vulnerability checks (sends package names to PyPI)
+agent-latch scan . --fail-on high                    # exit 1 on high-severity findings, for CI
+agent-latch scan . --exclude tests/                  # skip a path for one run
+agent-latch scan . --format sarif --output results.sarif
+agent-latch --interactive                            # guided mode
+```
+
+Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-commit-hook) or the [GitHub Action](docs/ci.md#github-actions):
+
+```yaml
+- uses: AgentLatch/agent-latch@main
+  with:
+    fail-on: high
+```
+
+## Documentation
+
+| Guide | Covers |
+|---|---|
+| [Getting started](docs/getting-started.md) | Install on Linux, macOS, WSL, and Windows; scanning; options; [ignoring false positives with `.agent-latch-ignore`](docs/getting-started.md#ignoring-false-positives-and-known-findings); output formats; exit codes; dependency audit; troubleshooting |
+| [Agent manifests](docs/agent-manifest.md) | Declaring agents, tools, permissions, and prompts in `agent-manifest.yaml`, and what is checked |
+| [pre-commit and CI](docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
+| [Detection rules](docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
+| [Vulnerable example](examples/vulnerable-agent) | A demo project and the findings it should produce |
+
 ## Why AgentLatch?
 
 AI agents combine model-generated decisions with tools, credentials, code execution, and external data. Traditional code and dependency checks are useful, but they do not by themselves explain agent-specific risks. AgentLatch is a small starting point: run selected checks locally, inspect the exact file and evidence, and map relevant findings to OWASP Agentic Top 10 categories.
@@ -29,118 +82,41 @@ These layers will remain clearly distinguished: detecting a risky pattern is not
 | `AGENTLATCH-PY003` | Calls with a literal `verify=False` argument | ASI02 Tool Misuse & Exploitation |
 | `AGENTLATCH-AG001` | CrewAI `Agent(..., allow_delegation=True)` review hint | ASI02 Tool Misuse & Exploitation; ASI03 Identity & Privilege Abuse |
 | `AGENTLATCH-AG002` | LangChain `create_pandas_dataframe_agent(...)` code-execution capability | ASI05 Unexpected Code Execution; ASI02 Tool Misuse & Exploitation |
+| `AGENTLATCH-AG003` | Web-search, web-loader, or HTTP output flowing unfenced into an LLM message (indirect prompt injection) | ASI01 Agent Goal Hijack |
 | `AGENTLATCH-SEC001` | Credential-like quoted assignments; matched value is redacted | ASI03 Identity & Privilege Abuse; ASI04 Agentic Supply Chain Vulnerabilities |
 | `AGENTLATCH-DEP001` | Known advisory for a package in an audited requirements file | ASI04 Agentic Supply Chain Vulnerabilities |
+| `AGENTLATCH-MAN001` | Manifest tool with a high-risk capability and no human-approval gate | ASI02 Tool Misuse & Exploitation; ASI05 / ASI03 |
+| `AGENTLATCH-MAN002` | Manifest tool with wildcard permissions | ASI02 Tool Misuse & Exploitation; ASI03 Identity & Privilege Abuse |
+| `AGENTLATCH-MAN003` | Manifest tool calling a remote endpoint without authentication | ASI03 Identity & Privilege Abuse; ASI02 Tool Misuse & Exploitation |
+| `AGENTLATCH-PRM001` | Prompt-injection signatures in manifest prompts and prompt templates | ASI01 Agent Goal Hijack |
+| `AGENTLATCH-PRM002` | User-input placeholder interpolated into a system prompt | ASI01 Agent Goal Hijack |
 
 Rule behavior and known blind spots are documented in [docs/RULES.md](docs/RULES.md). OWASP mappings are informational references, not an OWASP endorsement or certification.
 
-## Install
-
-Requires Python 3.11 or newer. Install AgentLatch in its own virtual environment; do not install it into the project being scanned.
-
-### macOS and Linux
-
-```sh
-git clone https://github.com/AgentLatch/agent-latch.git
-cd agent-latch
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
-```
-
-### Windows PowerShell
-
-```powershell
-git clone https://github.com/AgentLatch/agent-latch.git
-Set-Location agent-latch
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e .
-```
-
-For development dependencies and tests, install `.[dev]`; for the optional dependency audit, install `.[audit]`.
-
-## Scan an agent project
-
-### Guided interactive mode
-
-```sh
-agent-latch --interactive
-```
-
-The wizard asks for a target directory or file, separately asks whether to run the optional networked dependency audit, displays findings in a severity-colored table, and offers JSON or SARIF export. Dependency auditing defaults to **No**.
-
-### Direct command-line mode
-
-```sh
-# Scan source/configuration patterns only; no network call
-agent-latch /path/to/agent-project
-
-# Include an optional audit of supported requirements*.txt files
-agent-latch /path/to/agent-project --dependencies
-
-# Save a structured JSON report or GitHub-compatible SARIF report
-agent-latch /path/to/agent-project --format json --output report.json
-agent-latch /path/to/agent-project --format sarif --output results.sarif
-
-# Return a non-zero exit code on medium-or-higher findings;
-# findings with unknown severity also fail closed
-agent-latch /path/to/agent-project --fail-on medium
-```
-
-Use `agent-latch --help` to see all options. The existing CLI can run in scripts and CI without interactive prompts.
-
-### Example: scan one agent from a collection
-
-```sh
-agent-latch /path/to/500-AI-Agents-Projects/agents/08-data-analysis-agent
-```
-
-To include dependency auditing, install the optional extra and explicitly enable it:
-
-```sh
-python -m pip install -e ".[audit]"
-agent-latch /path/to/500-AI-Agents-Projects/agents/08-data-analysis-agent --dependencies
-```
-
-## Dependency-audit privacy and coverage
-
-The optional integration uses [pip-audit](https://github.com/pypa/pip-audit) for known Python package advisories. It currently reads `requirements*.txt` files. It does **not** currently audit every dependency format, including `pyproject.toml` project metadata and all lockfile formats.
-
-When enabled, package names and versions from supported manifests are sent to pip-audit's configured vulnerability service (PyPI by default). AgentLatch does not upload the scanned source tree, install target-project packages, or ask pip to resolve dependency trees in this mode; it uses `--no-deps` and `--disable-pip`. Exact-pinned requirements are needed for this no-resolution workflow. Review organizational policy before querying private package names.
-
-The advisory feed supplies advisory IDs and fix versions, but the current pip-audit JSON data does not provide a normalized severity rating. Therefore dependency findings are shown with **unknown severity**, not assigned an invented HIGH or CVSS rating. Duplicate copies of the same package/version/advisory in a manifest are reported once. An advisory match is a reason to investigate; it does not by itself establish exploitability in a particular application. `--fail-on` treats unknown-severity findings as fail-closed when any threshold other than `none` is selected.
-
 ## Reports and data handling
 
-- Source and configuration checks run locally; they do not call an LLM or upload scanned source.
-- The optional dependency audit is the exception: it makes network requests containing package names and versions.
-- Secret-like values detected by the initial rule are not copied into finding evidence. This is not a guarantee that reports contain no sensitive information.
-- Reports include target paths, file paths, line numbers, rule descriptions, and evidence. Review reports before sharing or committing them.
-- The scanner skips common environment/build directories and files larger than 1 MB. Its coverage depends on these explicit limits and implemented rules.
-- SARIF is an output format only. This project does not yet provide a maintained GitHub Action or automatic code-scanning upload workflow.
+- Scans run locally. They do not call an LLM or upload your source code.
+- The one exception is the opt-in dependency audit (`--dependencies`), which sends package names and versions to an advisory service. See [Dependency audit](docs/getting-started.md#dependency-audit).
+- Detected secret values are redacted from evidence, but reports still include paths, line numbers, and code context. Review them before sharing.
+- Common environment/build directories, symlinks, and files over 1 MB are skipped.
 
 ## Important limitations
 
 - Rules are static heuristics: aliases, wrappers, dynamic imports, generated code, non-Python languages, and runtime behavior can be missed.
 - Findings can be false positives. A code-pattern match is not proof that an attacker can exploit it.
-- No findings does not mean the agent is secure. AgentLatch does not inspect prompts, model behavior, deployment configuration, live tool calls, or complete transitive dependency state.
+- No findings does not mean the agent is secure. AgentLatch inspects only prompts declared in an agent manifest and does not inspect model behavior, deployment configuration, live tool calls, or complete transitive dependency state.
 - OWASP category IDs help organize selected findings; the mapping is not a compliance assessment, OWASP affiliation, or certification.
 - AgentLatch currently scans projects; it is **not** a Python runtime library that intercepts agent actions and does not yet enforce policies.
 
 ## Development and tests
 
 ```sh
-python3 -m venv .venv
-source .venv/bin/activate
 python -m pip install -e ".[dev,audit]"
 python -m pytest
 ruff check .
 ```
 
-Tests use synthetic fixtures and mock the dependency-audit subprocess; the normal test suite does not query vulnerability services.
+Tests use synthetic fixtures and mock the dependency-audit subprocess, so they make no network calls. See [CONTRIBUTING.md](CONTRIBUTING.md) for writing new rules.
 
 ## Roadmap
 

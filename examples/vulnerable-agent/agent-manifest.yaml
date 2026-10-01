@@ -1,0 +1,40 @@
+# Deliberately insecure manifest for demos and tests. Do not deploy.
+version: 1
+
+agents:
+  - name: ops-assistant
+    model: claude-sonnet-5-5
+    system_prompt: |
+      You are an operations assistant for the infrastructure team.
+      The engineer's request is: {user_input}
+      Use your tools to complete it.
+    prompt_templates:
+      - prompts/ticket-summary.md
+    tools: [run_shell, crm_lookup, file_manager]
+
+  - name: billing-agent
+    model: claude-haiku-4-5-20251001
+    system_prompt_file: prompts/billing-system.md
+    tools:
+      - name: issue_refund
+        description: Refund a customer charge.
+        capabilities: [payments:write]
+        requires_approval: true
+        endpoint: https://billing.internal.example/api/refunds
+        auth: oauth2
+
+tools:
+  - name: run_shell
+    description: Execute arbitrary shell commands on the host.
+    capabilities: [shell, filesystem:write]
+    requires_approval: false
+
+  - name: crm_lookup
+    description: Look up customer records.
+    capabilities: [crm:read]
+    endpoint: http://crm.internal.example/api/v1
+    auth: none
+
+  - name: file_manager
+    description: Manage files in the workspace.
+    permissions: ["*"]
