@@ -33,6 +33,11 @@ classifiers = [
 ]
 dependencies = ["rich>=13.9,<15"]
 
+[project.urls]
+Homepage = "https://github.com/AgentLatch/agent-latch"
+Repository = "https://github.com/AgentLatch/agent-latch"
+Issues = "https://github.com/AgentLatch/agent-latch/issues"
+
 [project.scripts]
 agent-latch = "agent_latch.cli:main"
 

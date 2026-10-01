@@ -39,7 +39,7 @@ Requires Python 3.11 or newer. Install AgentLatch in its own virtual environment
 ### macOS and Linux
 
 ```sh
-git clone <your-agent-latch-repository-url>
+git clone https://github.com/AgentLatch/agent-latch.git
 cd agent-latch
 python3 -m venv .venv
 source .venv/bin/activate
@@ -50,7 +50,7 @@ python -m pip install -e .
 ### Windows PowerShell
 
 ```powershell
-git clone <your-agent-latch-repository-url>
+git clone https://github.com/AgentLatch/agent-latch.git
 Set-Location agent-latch
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -58,7 +58,7 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-Replace the clone URL with the repository URL after you create it on GitHub. For development dependencies and tests, install `.[dev]`; for the optional dependency audit, install `.[audit]`.
+For development dependencies and tests, install `.[dev]`; for the optional dependency audit, install `.[audit]`.
 
 ## Scan an agent project
 

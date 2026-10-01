@@ -1,6 +1,6 @@
 # GitHub organization profile and discovery copy
 
-Copy and adapt these fields after creating the AgentLatch GitHub organization. Replace `YOUR_ORG` before publishing. Do not imply OWASP affiliation, certification, comprehensive vulnerability coverage, or runtime enforcement that is not implemented.
+Copy and adapt these fields for the AgentLatch GitHub organization. Do not imply OWASP affiliation, certification, comprehensive vulnerability coverage, or runtime enforcement that is not implemented.
 
 ## Organization settings
 
@@ -18,7 +18,7 @@ Practical, transparent security tools for AI-agent developers. Scan selected ris
 
 **Website**
 
-Set this to the public AgentLatch repository or project site after it exists. Prefer a stable project website once one is available.
+https://github.com/AgentLatch/agent-latch
 
 **Location**
 
@@ -46,7 +46,7 @@ Only add topics that accurately describe the code in this repository. Avoid `run
 
 ## Organization profile README draft
 
-GitHub displays an organization profile README from a public repository named `.github`, at `profile/README.md`. Copy this draft there after creating that repository and replacing `YOUR_ORG`.
+GitHub displays an organization profile README from a public repository named `.github`, at `profile/README.md`. Copy this draft there after creating that repository.
 
 ---
 
@@ -60,8 +60,8 @@ AgentLatch is building practical, transparent security tooling for AI agents. Th
 
 ## Start here
 
-- **Scanner:** [YOUR_ORG/agent-latch](https://github.com/YOUR_ORG/agent-latch)
-- **Issues and ideas:** [Open a discussion or issue](https://github.com/YOUR_ORG/agent-latch/issues)
+- **Scanner:** [AgentLatch/agent-latch](https://github.com/AgentLatch/agent-latch)
+- **Issues and ideas:** [Open an issue](https://github.com/AgentLatch/agent-latch/issues)
 - **Contributing:** See the repository's `CONTRIBUTING.md` and `SECURITY.md`.
 
 ## Current and planned layers
