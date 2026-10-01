@@ -2,6 +2,8 @@
 
 **Find selected security risks in AI-agent projects before you run or deploy them.** AgentLatch is an open-source, local-first AI agent security scanner that checks Python source and supported configuration files, optionally audits pinned Python dependencies, and reports evidence in your terminal, JSON, or SARIF.
 
+![Example AgentLatch scan showing detected security findings](docs/assets/gent-latch-scan-example.png)
+
 > **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding.
 
 AgentLatch aims to make AI-agent security checks approachable for developers working with agentic AI. The first version focuses on a small, explainable set of static checks. Framework integrations, runtime authorization, policy enforcement, and evaluations are future layers—not capabilities this scanner currently provides.
