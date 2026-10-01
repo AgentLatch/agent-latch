@@ -1,4 +1,4 @@
-name: tests
+name: CI
 
 on:
   push:
@@ -9,24 +9,33 @@ permissions:
 
 jobs:
   test:
+    name: Unit tests & lint (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest
-      - run: ruff check .
+      - name: Install AgentLatch with dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Run unit tests
+        run: python -m pytest
+      - name: Lint with ruff
+        run: ruff check .
 
   action-smoke-test:
+    name: GitHub Action smoke test (vulnerable demo)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out code
+        uses: actions/checkout@v4
       - name: Scan the deliberately insecure example with the local action
         id: scan
         uses: ./
@@ -41,3 +50,16 @@ jobs:
         run: |
           test "$FINDINGS" -gt 0
           grep -q '"uri": "examples/vulnerable-agent/agent-manifest.yaml"' "$SARIF"
+
+  self-scan:
+    name: Self-scan (AgentLatch on its own code)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Scan this repository, failing on high-severity findings
+        uses: ./
+        with:
+          path: .
+          fail-on: high
+          upload-sarif: "false"
