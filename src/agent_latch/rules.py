@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent_latch.taint import find_untrusted_prompt_flows
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -173,6 +175,27 @@ def scan_python(path: Path, root: Path, source: str) -> list[Finding]:
                     evidence="Agent(..., allow_delegation=True)",
                 )
             )
+
+    for flow in find_untrusted_prompt_flows(tree):
+        findings.append(
+            Finding(
+                rule_id="AGENTLATCH-AG003",
+                title="Untrusted web/tool output inserted into prompt",
+                severity="medium",
+                message=(
+                    "Content fetched from the web or a search/loader tool reaches an LLM message unfenced, "
+                    "so instructions hidden in that content can hijack the agent (indirect prompt injection). "
+                    "Wrap it in delimiters such as <search_results> tags, tell the model to treat it as data, "
+                    "and limit what tools the agent can call afterwards."
+                ),
+                path=_relative(path, root),
+                line=flow.line,
+                column=flow.column,
+                owasp=("ASI01",),
+                confidence="low",
+                evidence=f"web/tool output reaches {flow.sink}",
+            )
+        )
 
     return findings
 

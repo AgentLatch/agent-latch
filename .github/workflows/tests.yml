@@ -22,3 +22,22 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest
       - run: ruff check .
+
+  action-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan the deliberately insecure example with the local action
+        id: scan
+        uses: ./
+        with:
+          path: examples/vulnerable-agent
+          fail-on: none
+          upload-sarif: "false"
+      - name: Check action outputs
+        env:
+          FINDINGS: ${{ steps.scan.outputs.finding-count }}
+          SARIF: ${{ steps.scan.outputs.sarif-file }}
+        run: |
+          test "$FINDINGS" -gt 0
+          grep -q '"uri": "examples/vulnerable-agent/agent-manifest.yaml"' "$SARIF"

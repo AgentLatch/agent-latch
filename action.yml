@@ -1,0 +1,150 @@
+name: AgentLatch scan
+description: Local-first security checks for AI-agent projects, with SARIF upload to GitHub code scanning.
+author: AgentLatch contributors
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  path:
+    description: Directory or file to scan, relative to the repository root.
+    default: "."
+  config:
+    description: Agent manifest to audit. Leave empty to auto-detect agent-manifest.yaml in the scan path.
+    default: ""
+  fail-on:
+    description: Fail the step on findings of this severity or higher (none, low, medium, high, critical).
+    default: high
+  dependencies:
+    description: Also audit requirements*.txt with pip-audit (sends package names and versions to PyPI's advisory service).
+    default: "false"
+  sarif-file:
+    description: Where to write the SARIF report.
+    default: agent-latch.sarif
+  upload-sarif:
+    description: "Upload the SARIF report to GitHub code scanning (needs `security-events: write`)."
+    default: "true"
+  python-version:
+    description: Python version used to run AgentLatch.
+    default: "3.12"
+
+outputs:
+  sarif-file:
+    description: Path to the SARIF report.
+    value: ${{ steps.scan.outputs.sarif-file }}
+  finding-count:
+    description: Number of findings.
+    value: ${{ steps.summary.outputs.finding-count }}
+  exit-code:
+    description: AgentLatch exit code (0 = passed, 1 = findings at or above fail-on, 2 = scan error).
+    value: ${{ steps.scan.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install AgentLatch
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        DEPENDENCIES: ${{ inputs.dependencies }}
+      run: |
+        # Isolated venv so AgentLatch never installs into, or imports from, the scanned project.
+        python -m venv "$RUNNER_TEMP/agent-latch-venv"
+        extra=""
+        if [ "$DEPENDENCIES" = "true" ]; then extra="[audit]"; fi
+        "$RUNNER_TEMP/agent-latch-venv/bin/python" -m pip install --quiet --disable-pip-version-check "${ACTION_PATH}${extra}"
+
+    - name: Run AgentLatch
+      id: scan
+      shell: bash
+      env:
+        SCAN_PATH: ${{ inputs.path }}
+        CONFIG: ${{ inputs.config }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        DEPENDENCIES: ${{ inputs.dependencies }}
+        SARIF_FILE: ${{ inputs.sarif-file }}
+      run: |
+        args=(scan "$SCAN_PATH" --format sarif --output "$SARIF_FILE" --fail-on "$FAIL_ON")
+        if [ -n "$CONFIG" ]; then args+=(--config "$CONFIG"); fi
+        if [ "$DEPENDENCIES" = "true" ]; then args+=(--dependencies); fi
+        set +e
+        "$RUNNER_TEMP/agent-latch-venv/bin/agent-latch" "${args[@]}"
+        code=$?
+        set -e
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "sarif-file=$SARIF_FILE" >> "$GITHUB_OUTPUT"
+
+    - name: Summarize findings
+      id: summary
+      if: steps.scan.outputs.exit-code != '2'
+      shell: bash
+      env:
+        SCAN_PATH: ${{ inputs.path }}
+        SARIF_FILE: ${{ inputs.sarif-file }}
+      run: |
+        "$RUNNER_TEMP/agent-latch-venv/bin/python" - <<'PY'
+        import json, os
+        from pathlib import Path
+
+        sarif_path = Path(os.environ["SARIF_FILE"])
+        sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+        run = sarif["runs"][0]
+
+        # AgentLatch reports paths relative to the scan target; code scanning needs repo-relative URIs.
+        workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+        target = Path(os.environ["SCAN_PATH"]).resolve()
+        base = target if target.is_dir() else target.parent
+        prefix = base.relative_to(workspace).as_posix() if base.is_relative_to(workspace) else ""
+        for result in run["results"]:
+            for location in result["locations"]:
+                artifact = location["physicalLocation"]["artifactLocation"]
+                if prefix not in ("", ".") and not artifact["uri"].startswith("/"):
+                    artifact["uri"] = f"{prefix}/{artifact['uri']}"
+        run.pop("artifacts", None)
+        sarif_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
+
+        results = run["results"]
+        rows = []
+        for result in results:
+            region = result["locations"][0]["physicalLocation"]
+            location = f"{region['artifactLocation']['uri']}:{region['region']['startLine']}"
+            severity = result["properties"]["severity"].upper()
+            rows.append((severity, result["ruleId"], location, result["message"]["text"]))
+            print(f"[{severity}] {result['ruleId']} {location}\n  {result['message']['text']}")
+
+        lines = ["## AgentLatch scan", ""]
+        if rows:
+            lines += [f"**{len(rows)} finding(s)**", "", "| Severity | Rule | Location | Finding |", "|---|---|---|---|"]
+            lines += [f"| {s} | `{r}` | `{loc}` | {m.replace('|', '/')} |" for s, r, loc, m in rows]
+        else:
+            lines.append("No findings from the enabled checks. This does not mean the project is secure.")
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+            summary.write("\n".join(lines) + "\n")
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.write(f"finding-count={len(rows)}\n")
+        PY
+
+    - name: Upload SARIF to code scanning
+      if: inputs.upload-sarif == 'true' && steps.scan.outputs.exit-code != '2'
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: agent-latch
+
+    - name: Enforce fail-on threshold
+      shell: bash
+      env:
+        EXIT_CODE: ${{ steps.scan.outputs.exit-code }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        if [ "$EXIT_CODE" = "2" ]; then
+          echo "::error::AgentLatch could not complete the scan (see the Run AgentLatch step)."
+          exit 2
+        elif [ "$EXIT_CODE" != "0" ]; then
+          echo "::error::AgentLatch found issues at or above '$FAIL_ON' severity."
+          exit 1
+        fi
