@@ -88,7 +88,7 @@ The `scan` verb is optional: `agent-latch ~/projects/my-agent` does the same thi
 agent-latch --interactive
 ```
 
-The wizard asks for a target, asks whether to run the networked dependency audit (default **No**), shows findings in a table, and offers JSON or SARIF export.
+The wizard asks for a target, asks whether to run the networked dependency audit (default **No**), shows findings in a table, and offers JSON or SARIF export. It uses `agent-manifest.yaml` and `.agent-latch-ignore` from the target automatically; for a manifest elsewhere, use `--config` on the command line instead.
 
 ### Scan many agents at once
 
@@ -102,10 +102,10 @@ for d in ~/projects/agents/*/; do agent-latch scan "$d"; done
 |---|---|
 | `*.py` | Source rules (`PY*`, `AG*`) and secrets (`SEC001`) |
 | `*.yaml`, `*.yml`, `*.toml`, `*.txt`, `.env*` | Secrets (`SEC001`) |
-| `agent-manifest.yaml` and prompt files it references | Manifest and prompt rules (`MAN*`, `PRM*`) |
+| `agent-manifest.yaml` in the target directory, and prompt files it references | Manifest and prompt rules (`MAN*`, `PRM*`); referenced prompt files are also checked for secrets |
 | `requirements*.txt` | Dependency advisories (`DEP001`), only with `--dependencies` |
 
-Skipped: `.git`, `.venv`, `venv`, `node_modules`, `__pycache__`, `.tox`, symlinks, and files over 1 MB. See [RULES.md](RULES.md) for what each rule detects and misses.
+Other file types, such as Markdown, JSON, and JavaScript, are not scanned unless a manifest references them as prompt files. Skipped: `.git`, `.venv`, `venv`, `node_modules`, `__pycache__`, `.tox`, symlinks, and files over 1 MB. See [RULES.md](RULES.md) for what each rule detects and misses.
 
 ## Command reference
 
@@ -116,9 +116,9 @@ agent-latch [scan] [path] [options]
 | Option | Description |
 |---|---|
 | `path` | Directory or file to scan. Default: current directory. |
-| `--config MANIFEST` | Agent manifest to audit. Default: `agent-manifest.yaml` in the target, if present. |
+| `--config MANIFEST` | Agent manifest to audit. Default: `agent-manifest.yaml` in the target directory (or, for a file target, its folder), if present. |
 | `--exclude PATH` | Skip findings under a path or glob, relative to the target. Repeatable. See [Ignoring false positives](#ignoring-false-positives-and-known-findings). |
-| `--ignore-file FILE` | File of accepted findings. Default: `.agent-latch-ignore` in the target, if present. |
+| `--ignore-file FILE` | File of accepted findings. Default: `.agent-latch-ignore` in the target directory (or, for a file target, its folder), if present. |
 | `--dependencies` | Audit `requirements*.txt` with pip-audit. Contacts an advisory service. |
 | `-i`, `--interactive` | Guided terminal scanner. |
 | `--format {text,json,sarif}` | Report format. Default: `text`. |
@@ -228,7 +228,7 @@ Each finding includes a rule ID, severity, confidence, file, line, column, OWASP
 |---|---|
 | `0` | Scan completed and nothing met the `--fail-on` threshold. |
 | `1` | At least one finding at or above `--fail-on`. Unknown-severity dependency findings also count. |
-| `2` | Scan error: missing target, missing or invalid manifest, or dependency audit failure. |
+| `2` | Scan error: missing target, missing or invalid manifest, invalid `.agent-latch-ignore` or `[tool.agent-latch]` settings, or dependency audit failure. |
 
 ## Dependency audit
 

@@ -5,19 +5,27 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-latch"
 version = "0.1.0"
-description = "Local-first AI agent security scanner for selected source and dependency risks."
+description = "Local-first AI agent security scanner: checks agent code, tool manifests, and prompts for prompt injection, over-privileged tools, and secrets."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "AgentLatch contributors" }]
 keywords = [
   "AI agent security",
-  "AI security scanner",
+  "AI agent security scanner",
   "agentic AI security",
+  "LLM security",
+  "prompt injection",
+  "indirect prompt injection",
+  "LangChain",
+  "LangGraph",
+  "CrewAI",
   "static analysis",
   "OWASP Agentic Top 10",
   "dependency audit",
   "SARIF",
+  "GitHub Action",
+  "pre-commit",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",

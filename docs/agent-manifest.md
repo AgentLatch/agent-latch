@@ -6,7 +6,7 @@ An agent manifest is a YAML file that declares what your agents are allowed to d
 agent-latch scan --config agent-manifest.yaml
 ```
 
-If the scan target contains a file named `agent-manifest.yaml` (or `.yml`), it is used automatically, so `agent-latch scan` is enough.
+If the scan target directory contains a file named `agent-manifest.yaml` (or `.yml`), it is used automatically, so `agent-latch scan` is enough. Only the top level of the target is checked: for a manifest in a subfolder, scan that folder or pass `--config path/to/agent-manifest.yaml`. One manifest is audited per scan.
 
 ## Example
 

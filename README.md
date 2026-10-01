@@ -1,12 +1,16 @@
 # AgentLatch — Local-First AI Agent Security Scanner
 
-**Find selected security risks in AI-agent projects before you run or deploy them.** AgentLatch is an open-source, local-first AI agent security scanner that checks Python source and supported configuration files, optionally audits pinned Python dependencies, and reports evidence in your terminal, JSON, or SARIF.
+[![CI](https://github.com/AgentLatch/agent-latch/actions/workflows/tests.yml/badge.svg)](https://github.com/AgentLatch/agent-latch/actions/workflows/tests.yml)
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-AgentLatch%20scan-blue?logo=github)](https://github.com/marketplace/actions/agentlatch-scan)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+**Find selected security risks in AI-agent projects before you run or deploy them.** AgentLatch is an open-source, local-first AI agent security scanner. It checks Python agent code, agent manifests (tools, permissions, and authentication), and prompt templates; optionally audits pinned Python dependencies; and reports evidence in your terminal, JSON, or SARIF. Run it from the command line, as a pre-commit hook, or as a GitHub Action.
 
 ![Example AgentLatch scan showing detected security findings](docs/assets/gent-latch-scan-example.png)
 
 > **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding.
 
-AgentLatch aims to make AI-agent security checks approachable for developers working with agentic AI. The first version focuses on a small, explainable set of static checks. Framework integrations, runtime authorization, policy enforcement, and evaluations are future layers—not capabilities this scanner currently provides.
+AgentLatch aims to make AI-agent security checks approachable for developers working with agentic AI. The first version focuses on a small, explainable set of static checks. A few rules recognise specific frameworks (CrewAI, LangChain, LangGraph), but AgentLatch does not plug into or run your agent. Framework adapters, runtime authorization, policy enforcement, and behavioural evaluations are future layers—not capabilities this scanner currently provides.
 
 ## Quick start
 
@@ -43,7 +47,7 @@ agent-latch scan . --format sarif --output results.sarif
 agent-latch --interactive                            # guided mode
 ```
 
-Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-commit-hook) or the [GitHub Action](docs/ci.md#github-actions):
+Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-commit-hook) or the GitHub Action ([setup guide](docs/ci.md#github-actions), [Marketplace listing](https://github.com/marketplace/actions/agentlatch-scan)):
 
 ```yaml
 - uses: AgentLatch/agent-latch@v0.1.0
@@ -67,7 +71,7 @@ AI agents combine model-generated decisions with tools, credentials, code execut
 
 The goal is to grow in layers:
 
-1. **Now — local scanner:** focused source-pattern checks, optional Python dependency advisories, and portable reports.
+1. **Now — local scanner:** focused checks of Python source, agent manifests, and prompt templates; optional Python dependency advisories; portable reports; and pre-commit and GitHub Action integrations.
 2. **Next — broader static and evaluation checks:** more tested rules, framework adapters, and reproducible security test cases.
 3. **Later — runtime controls:** a separate policy and audit layer for agent actions, with explicit adapters and enforcement boundaries.
 
@@ -98,15 +102,50 @@ Rule behavior and known blind spots are documented in [docs/RULES.md](docs/RULES
 - Scans run locally. They do not call an LLM or upload your source code.
 - The one exception is the opt-in dependency audit (`--dependencies`), which sends package names and versions to an advisory service. See [Dependency audit](docs/getting-started.md#dependency-audit).
 - Detected secret values are redacted from evidence, but reports still include paths, line numbers, and code context. Review them before sharing.
-- Common environment/build directories, symlinks, and files over 1 MB are skipped.
+- Only Python, YAML, TOML, text, and `.env` files are scanned, plus prompt files an agent manifest references. Common environment/build directories, symlinks, files over 1 MB, and paths in [`.agent-latch-ignore`](docs/getting-started.md#ignoring-false-positives-and-known-findings) are skipped.
 
 ## Important limitations
 
 - Rules are static heuristics: aliases, wrappers, dynamic imports, generated code, non-Python languages, and runtime behavior can be missed.
 - Findings can be false positives. A code-pattern match is not proof that an attacker can exploit it.
-- No findings does not mean the agent is secure. AgentLatch inspects only prompts declared in an agent manifest and does not inspect model behavior, deployment configuration, live tool calls, or complete transitive dependency state.
+- No findings does not mean the agent is secure. Prompt checks cover only prompts declared in an agent manifest and web/tool content flowing into LLM messages in Python code. AgentLatch does not inspect model behavior, deployment configuration, live tool calls, or complete transitive dependency state.
+- Manifest checks read what the manifest declares; they do not verify that your code enforces it.
 - OWASP category IDs help organize selected findings; the mapping is not a compliance assessment, OWASP affiliation, or certification.
 - AgentLatch currently scans projects; it is **not** a Python runtime library that intercepts agent actions and does not yet enforce policies.
+
+## FAQ
+
+### How do I scan an AI agent project for security vulnerabilities?
+
+Install AgentLatch and run `agent-latch scan /path/to/agent`. It checks Python agent code, an `agent-manifest.yaml` describing the agent's tools and prompts, and the prompt templates it references, then reports each finding with file, line, evidence, and an OWASP Agentic Top 10 mapping. Add `--dependencies` to check pinned Python packages for known advisories.
+
+### Can AgentLatch detect prompt injection?
+
+It detects three static signals: instruction-override phrases such as "ignore all previous instructions" in prompt templates (`PRM001`), user input interpolated into system prompts (`PRM002`), and **indirect prompt injection** paths where web-search, web-page, or HTTP content flows into an LLM message without delimiters (`AG003`). It does not test model behavior at runtime, so it cannot prove an agent resists prompt injection.
+
+### Which AI agent frameworks does it support?
+
+The source rules work on any Python code. Framework-specific checks cover CrewAI delegation, LangChain's dataframe agent and web/search tools (Tavily, DuckDuckGo, WebBaseLoader, and others), and data flowing through LangGraph state. Manifest and prompt checks are framework-agnostic. JavaScript and TypeScript agents are not scanned yet.
+
+### How do I check AI agent security in CI or GitHub Actions?
+
+Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) (`uses: AgentLatch/agent-latch@v0.1.0`) to scan every push and pull request and show findings in GitHub code scanning, or the [pre-commit hook](docs/ci.md#pre-commit-hook) to block risky commits. Any other CI can run `agent-latch scan --fail-on high`, which exits with code 1 when high-severity findings exist.
+
+### Does AgentLatch upload my code or call an LLM?
+
+No. Scanning runs locally and does not call any model. The only network use is the opt-in dependency audit, which sends package names and versions to an advisory service, and the GitHub Action's optional upload of the findings report to GitHub code scanning.
+
+### How does it map to the OWASP Top 10 for Agentic Applications?
+
+Each finding lists the related categories, for example ASI01 Agent Goal Hijack for prompt injection, ASI02 Tool Misuse for over-privileged tools, and ASI05 Unexpected Code Execution for `eval` or `shell=True`. The mapping is informational, not a compliance assessment or OWASP endorsement.
+
+### How do I handle false positives?
+
+List accepted findings in a [`.agent-latch-ignore`](docs/getting-started.md#ignoring-false-positives-and-known-findings) file, by path, rule, or exact line, or add an inline `# agent-latch: ignore[RULE]` comment. Every report states how many findings were suppressed.
+
+### Does a clean scan mean my agent is secure?
+
+No. AgentLatch runs a focused set of static checks. A clean scan means only that those checks found nothing; it is not a security certification.
 
 ## Development and tests
 
@@ -125,7 +164,7 @@ The longer-term direction is a layered AI-agent security toolkit. Each layer sho
 - **Scanner (current):** expand well-scoped rules, language support, dependency manifest support, and SARIF quality.
 - **Evaluation (planned):** reproducible test cases for selected agent security behaviors, with transparent methodology and no single opaque “safe” score.
 - **Runtime policy and audit (planned, separate component):** authorize, deny, or require approval for tool actions through explicit, framework-specific adapters. Controls only protect execution paths that cannot bypass enforcement.
-- **Marketplace and hosted scanning (future, not implemented):** require explicit consent, minimal repository access, retention/deletion policy, tenant isolation, and security review before accepting private source code.
+- **Hosted scanning service (future, not implemented):** require explicit consent, minimal repository access, retention/deletion policy, tenant isolation, and security review before accepting private source code.
 
 The project will not claim to be an industry standard or a universal security guarantee. Interoperability, independent review, transparent tests, and community adoption must come before such claims.
 

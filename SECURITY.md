@@ -9,6 +9,7 @@ Please do not disclose exploitable vulnerabilities publicly before maintainers c
 ## Scanner safety boundaries
 
 - Scanning is local by default; the scanner does not upload targets.
+- Exceptions: the opt-in dependency audit (`--dependencies`) sends package names and versions to an advisory service, and the GitHub Action uploads the SARIF findings report (not source code) to GitHub code scanning unless `upload-sarif` is `"false"`.
 - Treat scanned repositories and generated reports as sensitive.
 - Findings are heuristic and may have false positives or miss issues.
 - Do not use this tool to scan repositories or systems without authorization.

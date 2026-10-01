@@ -1,0 +1,30 @@
+# AgentLatch
+
+> AgentLatch is an open-source, local-first AI agent security scanner. It checks Python agent code, agent manifests (tools, permissions, authentication), and prompt templates for risks such as prompt injection, indirect prompt injection, over-privileged tools, unauthenticated tool endpoints, code execution, and hardcoded secrets. Findings map to the OWASP Top 10 for Agentic Applications. It runs as a CLI (`agent-latch scan`), a pre-commit hook, or a GitHub Action, and outputs text, JSON, or SARIF. MIT licensed; early proof of concept.
+
+Key facts:
+
+- Install: clone https://github.com/AgentLatch/agent-latch, then `python -m pip install -e .` (Python 3.11+).
+- Scan: `agent-latch scan /path/to/agent`; audit a manifest with `--config agent-manifest.yaml`; fail CI with `--fail-on high`.
+- GitHub Action: `uses: AgentLatch/agent-latch@v0.1.0` (https://github.com/marketplace/actions/agentlatch-scan).
+- Frameworks with specific checks: CrewAI, LangChain, LangGraph. Generic rules apply to any Python code. JavaScript/TypeScript are not scanned.
+- Privacy: scans run locally and never call an LLM. Only the opt-in `--dependencies` audit sends package names and versions to an advisory service.
+- Limits: static heuristics only; no runtime enforcement or model-behavior testing. A clean scan is not a security guarantee.
+
+## Docs
+
+- [README](https://github.com/AgentLatch/agent-latch/blob/main/README.md): overview, quick start, FAQ
+- [Getting started](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md): install, command reference, output formats, exit codes, ignoring false positives
+- [Agent manifests](https://github.com/AgentLatch/agent-latch/blob/main/docs/agent-manifest.md): `agent-manifest.yaml` format and the checks it enables
+- [pre-commit and CI](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md): pre-commit hook, GitHub Action inputs and outputs, other CI systems
+- [Detection rules](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md): every rule, its OWASP mapping, and known blind spots
+
+## Examples
+
+- [Vulnerable agent demo](https://github.com/AgentLatch/agent-latch/tree/main/examples/vulnerable-agent): a deliberately insecure project and the findings it produces
+
+## Optional
+
+- [Security policy](https://github.com/AgentLatch/agent-latch/blob/main/SECURITY.md)
+- [Contributing](https://github.com/AgentLatch/agent-latch/blob/main/CONTRIBUTING.md)
+- [v0.1.0 release notes](https://github.com/AgentLatch/agent-latch/blob/main/docs/release-notes/v0.1.0.md)
