@@ -230,6 +230,15 @@ Each finding includes a rule ID, severity, confidence, file, line, column, OWASP
 | `1` | At least one finding at or above `--fail-on`. Unknown-severity dependency findings also count. |
 | `2` | Scan error: missing target, missing or invalid manifest, invalid `.agent-latch-ignore` or `[tool.agent-latch]` settings, or dependency audit failure. |
 
+When the scan exits `1`, it prints the findings that caused the failure (severity, rule, `path:line`, and title) to stderr, so JSON or SARIF on stdout stays valid:
+
+```text
+✗ Failing (exit 1): 3 finding(s) at or above --fail-on high
+  HIGH     AGENTLATCH-MAN001  agent-manifest.yaml:29  High-risk tool without human approval
+  HIGH     AGENTLATCH-MAN002  agent-manifest.yaml:40  Tool grants wildcard permissions
+  HIGH     AGENTLATCH-PY002   tools.py:10             Subprocess uses shell=True
+```
+
 ## Dependency audit
 
 ```sh
