@@ -10,7 +10,7 @@
 [![CI](https://github.com/AgentLatch/agent-latch/actions/workflows/tests.yml/badge.svg)](https://github.com/AgentLatch/agent-latch/actions/workflows/tests.yml)
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-AgentLatch%20scan-blue?logo=github)](https://github.com/marketplace/actions/agentlatch-scan)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Demo video](https://img.shields.io/badge/Demo-YouTube-red?logo=youtube)](https://youtu.be/nGhC5EwO1u0)
+[![Demo video](https://img.shields.io/badge/Demo-YouTube-red?logo=youtube)](https://youtu.be/4FrRWlApDpo)
 
 **Find selected security risks in AI-agent projects before you run or deploy them.** AgentLatch is an open-source, local-first AI agent security scanner. It checks Python agent code, agent manifests (tools, permissions, and authentication), and prompt templates; optionally audits pinned Python dependencies; and reports evidence in your terminal, JSON, or SARIF. Run it from the command line, as a pre-commit hook, or as a GitHub Action.
 
@@ -46,7 +46,7 @@ agent-latch scan --config agent-manifest.yaml
 
 Watch the demo: scanning the example and failing CI with `--fail-on high`.
 
-[![AgentLatch demo video: scanning a vulnerable AI agent](docs/assets/demo-video-thumbnail.png)](https://youtu.be/nGhC5EwO1u0)
+[![AgentLatch demo video: scanning a vulnerable AI agent](docs/assets/demo-video-thumbnail.png)](https://youtu.be/4FrRWlApDpo)
 
 More ways to run it:
 

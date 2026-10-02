@@ -22,7 +22,7 @@ Key facts:
 ## Examples
 
 - [Vulnerable agent demo](https://github.com/AgentLatch/agent-latch/tree/main/examples/vulnerable-agent): a deliberately insecure project and the findings it produces
-- [Demo video](https://youtu.be/nGhC5EwO1u0): scanning the vulnerable example and failing CI with `--fail-on high`
+- [Demo video](https://youtu.be/4FrRWlApDpo): scanning the vulnerable example and failing CI with `--fail-on high`
 
 ## Optional
 
