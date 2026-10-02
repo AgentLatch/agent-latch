@@ -296,10 +296,29 @@ def test_scan_subcommand_uses_config_and_fail_on(tmp_path: Path, monkeypatch, ca
 
     exit_code = cli.main(["scan", "--config", str(manifest), "--fail-on", "high"])
 
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
     assert exit_code == 1
-    assert "AGENTLATCH-MAN001" in output
-    assert f"Manifest: {manifest}" in output
+    assert "AGENTLATCH-MAN001" in captured.out
+    assert f"Manifest: {manifest}" in captured.out
+    assert "Failing (exit 1): 1 finding(s) at or above --fail-on high" in captured.err
+    assert f"AGENTLATCH-MAN001  {manifest.name}:" in captured.err
+
+
+def test_fail_on_summary_goes_to_stderr_when_writing_sarif(tmp_path: Path, capsys) -> None:
+    manifest = _write_manifest(tmp_path, "tools:\n  - name: sh\n    capabilities: [shell]\n")
+    output = tmp_path / "out.sarif"
+
+    exit_code = cli.main(
+        [str(tmp_path), "--config", str(manifest), "--format", "sarif",
+         "--output", str(output), "--fail-on", "high"]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert f"to {output}" in captured.err
+    assert "AGENTLATCH-MAN001" in captured.err
+    json.loads(output.read_text(encoding="utf-8"))
 
 
 def test_scan_auto_discovers_manifest_in_target(tmp_path: Path, capsys) -> None:

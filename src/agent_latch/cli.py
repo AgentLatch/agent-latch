@@ -36,6 +36,16 @@ _EPILOG = """\
 """
 
 
+SEVERITY_STYLES = {
+    "critical": "bold white on red",
+    "high": "bold red",
+    "medium": "yellow",
+    "low": "blue",
+    "info": "dim",
+    "unknown": "dim",
+}
+
+
 def build_parser() -> argparse.ArgumentParser:
     RawDescriptionRichHelpFormatter.styles.update(
         {"argparse.groups": "bold bright_cyan", "argparse.prog": "bold bright_cyan"}
@@ -121,16 +131,8 @@ def _render_findings(console: Console, findings: list[Finding]) -> None:
     table.add_column("OWASP")
     table.add_column("Finding")
 
-    severity_styles = {
-        "critical": "bold white on red",
-        "high": "bold red",
-        "medium": "yellow",
-        "low": "blue",
-        "info": "dim",
-        "unknown": "dim",
-    }
     for finding in sorted(findings, key=severity_sort_key):
-        style = severity_styles.get(finding.severity, "white")
+        style = SEVERITY_STYLES.get(finding.severity, "white")
         detail = Text(finding.title, style="bold")
         detail.append("\n" + finding.message)
         detail.append("\nEvidence: " + finding.evidence, style="dim")
@@ -143,6 +145,28 @@ def _render_findings(console: Console, findings: list[Finding]) -> None:
         )
     console.print(table)
     console.print("[dim]Findings need human review; they are not a security certification.[/dim]")
+
+
+def _print_fail_summary(blocking: list[Finding], fail_on: str) -> None:
+    # stderr keeps machine-readable stdout (json/sarif) intact; color only on a terminal.
+    console = Console(stderr=True, highlight=False, soft_wrap=True)
+    rule_width = max(len(finding.rule_id) for finding in blocking)
+    locations = [f"{finding.path}:{finding.line}" for finding in blocking]
+    location_width = max(len(location) for location in locations)
+    console.print(
+        f"\n[bold red]✗ Failing (exit 1):[/] {len(blocking)} finding(s) at or above "
+        f"[bold]--fail-on {fail_on}[/]"
+    )
+    for finding, location in zip(blocking, locations):
+        line = Text("  ")
+        line.append(f"{finding.severity.upper():<8}", style=SEVERITY_STYLES.get(finding.severity, "white"))
+        line.append(f" {finding.rule_id:<{rule_width}}  ")
+        line.append(f"{location:<{location_width}}", style="cyan")
+        line.append(f"  {finding.title}")
+        console.print(line)
+    console.print(
+        "[dim]Fix these, ignore known ones in .agent-latch-ignore, or raise --fail-on.[/]"
+    )
 
 
 def _render_scan(
@@ -333,18 +357,23 @@ def main(argv: list[str] | None = None) -> int:
         output = Path(args.output).expanduser()
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(report + "\n", encoding="utf-8")
+        print(f"Wrote {args.format} report with {len(findings)} finding(s) to {output}", file=sys.stderr)
     else:
         print(report)
 
-    severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "none": 99}
+    if args.fail_on == "none":
+        return 0
+    severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     threshold = severity_rank[args.fail_on]
-    if args.fail_on != "none" and any(
-        finding.severity == "unknown"
-        or severity_rank.get(finding.severity, 99) <= threshold
-        for finding in findings
-    ):
-        return 1
-    return 0
+    blocking = [
+        finding
+        for finding in sorted(findings, key=severity_sort_key)
+        if finding.severity == "unknown" or severity_rank.get(finding.severity, 99) <= threshold
+    ]
+    if not blocking:
+        return 0
+    _print_fail_summary(blocking, args.fail_on)
+    return 1
 
 
 if __name__ == "__main__":

@@ -11,3 +11,4 @@ build/
 !.env.example
 .scan-results/
 .DS_Store
+*.sarif
