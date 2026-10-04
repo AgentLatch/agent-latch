@@ -159,6 +159,7 @@ List accepted findings in a [`.agent-latch-ignore`](docs/getting-started.md#igno
 
 No. AgentLatch runs a focused set of static checks. A clean scan means only that those checks found nothing; it is not a security certification.
 
+
 ## Development and tests
 
 ```sh
