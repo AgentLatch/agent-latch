@@ -61,7 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=_EPILOG,
         formatter_class=RawDescriptionRichHelpFormatter,
     )
-    parser.add_argument("path", nargs="?", default=".", help="Project directory or file (default: current directory)")
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Project directory or file (default: current directory)",
+    )
     parser.add_argument("-V", "--version", action="version", version=f"agent-latch {__version__}")
 
     checks = parser.add_argument_group("Checks")
@@ -95,7 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     output = parser.add_argument_group("Output")
-    output.add_argument("--format", choices=("text", "json", "sarif"), default="text", help="Report format (default: text)")
+    output.add_argument(
+        "--format",
+        choices=("text", "json", "sarif"),
+        default="text",
+        help="Report format (default: text)",
+    )
     output.add_argument("--output", metavar="FILE", help="Write report to a file instead of stdout")
     output.add_argument(
         "--plain",
@@ -117,7 +127,9 @@ def _render_findings(console: Console, findings: list[Finding]) -> None:
     if not findings:
         console.print(
             Panel(
-                Text("No findings from the enabled checks. This does not mean the project is secure."),
+                Text(
+                    "No findings from the enabled checks. This does not mean the project is secure."
+                ),
                 title="[green]Scan complete[/green]",
                 border_style="green",
             )
@@ -159,7 +171,9 @@ def _print_fail_summary(blocking: list[Finding], fail_on: str) -> None:
     )
     for finding, location in zip(blocking, locations):
         line = Text("  ")
-        line.append(f"{finding.severity.upper():<8}", style=SEVERITY_STYLES.get(finding.severity, "white"))
+        line.append(
+            f"{finding.severity.upper():<8}", style=SEVERITY_STYLES.get(finding.severity, "white")
+        )
         line.append(f" {finding.rule_id:<{rule_width}}  ")
         line.append(f"{location:<{location_width}}", style="cyan")
         line.append(f"  {finding.title}")
@@ -194,7 +208,9 @@ def _render_scan(
                 "[yellow]No supported requirements*.txt files found; dependency audit had no coverage.[/yellow]"
             )
     if suppressed:
-        console.print(f"[dim]{suppressed} finding(s) suppressed by ignore rules or inline comments.[/dim]")
+        console.print(
+            f"[dim]{suppressed} finding(s) suppressed by ignore rules or inline comments.[/dim]"
+        )
     _render_findings(console, findings)
 
 
@@ -357,7 +373,10 @@ def main(argv: list[str] | None = None) -> int:
         output = Path(args.output).expanduser()
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(report + "\n", encoding="utf-8")
-        print(f"Wrote {args.format} report with {len(findings)} finding(s) to {output}", file=sys.stderr)
+        print(
+            f"Wrote {args.format} report with {len(findings)} finding(s) to {output}",
+            file=sys.stderr,
+        )
     else:
         print(report)
 

@@ -49,7 +49,7 @@ A deliberately insecure version is in [examples/vulnerable-agent](../examples/vu
 ### Agents (`agents:`)
 
 | Field | Type | Checked for |
-|---|---|---|
+| --- | --- | --- |
 | `name` | string | Used in finding messages. |
 | `system_prompt` | string | Injection phrases (`PRM001`) and user-input placeholders (`PRM002`). |
 | `prompt` | string | Injection phrases (`PRM001`). |
@@ -62,7 +62,7 @@ Prompt file paths are resolved relative to the manifest. A referenced file that 
 ### Tools (`tools:`)
 
 | Field | Type | Checked for |
-|---|---|---|
+| --- | --- | --- |
 | `name` | string | Used in finding messages. |
 | `capabilities`, `permissions`, or `scopes` | list | High-risk capabilities (`MAN001`) and wildcards (`MAN002`). |
 | `requires_approval`, `human_in_the_loop`, or `require_confirmation` | boolean | A true value satisfies `MAN001`. |
@@ -76,7 +76,7 @@ Wildcards: `*`, `all`, `any`, or anything ending in `:*`.
 ## Rules
 
 | Rule | Severity | Triggered by | Fix |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `MAN001` | high | High-risk capability without an approval flag | Require human approval, or narrow the capability. |
 | `MAN002` | high | Wildcard permissions | List only the actions the tool needs. |
 | `MAN003` | medium | Remote endpoint with missing or disabled auth | Authenticate the tool with a credential scoped to it. |

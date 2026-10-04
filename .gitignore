@@ -12,3 +12,4 @@ build/
 .scan-results/
 .DS_Store
 *.sarif
+node_modules/

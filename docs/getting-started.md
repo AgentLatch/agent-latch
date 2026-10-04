@@ -42,7 +42,7 @@ python -m pip install -e .
 ### Optional extras
 
 | Extra | Install | Adds |
-|---|---|---|
+| --- | --- | --- |
 | `audit` | `python -m pip install -e ".[audit]"` | `pip-audit`, needed for `--dependencies` |
 | `dev` | `python -m pip install -e ".[dev]"` | `pytest` and `ruff` for contributing |
 
@@ -99,7 +99,7 @@ for d in ~/projects/agents/*/; do agent-latch scan "$d"; done
 ### What gets scanned
 
 | Files | Checks |
-|---|---|
+| --- | --- |
 | `*.py` | Source rules (`PY*`, `AG*`) and secrets (`SEC001`) |
 | `*.yaml`, `*.yml`, `*.toml`, `*.txt`, `.env*` | Secrets (`SEC001`) |
 | `agent-manifest.yaml` in the target directory, and prompt files it references | Manifest and prompt rules (`MAN*`, `PRM*`); referenced prompt files are also checked for secrets |
@@ -114,7 +114,7 @@ agent-latch [scan] [path] [options]
 ```
 
 | Option | Description |
-|---|---|
+| --- | --- |
 | `path` | Directory or file to scan. Default: current directory. |
 | `--config MANIFEST` | Agent manifest to audit. Default: `agent-manifest.yaml` in the target directory (or, for a file target, its folder), if present. |
 | `--exclude PATH` | Skip findings under a path or glob, relative to the target. Repeatable. See [Ignoring false positives](#ignoring-false-positives-and-known-findings). |
@@ -132,7 +132,7 @@ agent-latch [scan] [path] [options]
 Test fixtures, demos, and vendored code often contain risky patterns on purpose, and heuristics sometimes flag safe code. Record accepted findings instead of turning rules off everywhere. Every report states how many findings were suppressed, so nothing disappears silently.
 
 | Method | Best for |
-|---|---|
+| --- | --- |
 | [`.agent-latch-ignore` file](#the-agent-latch-ignore-file) | The project's list of known findings and false positives, reviewed like code. **Recommended.** |
 | [Inline comment](#inline-ignore-comments) | A single accepted line, documented right next to the code. |
 | [`--exclude` / `pyproject.toml`](#excluding-paths-from-the-command-line-or-pyprojecttoml) | Quick path exclusions for one run, or projects that already centralise settings in `pyproject.toml`. |
@@ -157,11 +157,11 @@ AG003 agents/summarizer/*.py             # output is rendered to the user, never
 PY002 scripts/deploy.py:42               # fixed command string, no user input
 ```
 
-| Entry | Suppresses |
-|---|---|
-| `PATH` | All findings in that file, or under that directory. |
-| `RULE PATH` | Only that rule's findings in matching files. |
-| `RULE PATH:LINE` | Only that rule's finding on that exact line. |
+| Entry            | Suppresses                                          |
+| ---------------- | --------------------------------------------------- |
+| `PATH`           | All findings in that file, or under that directory. |
+| `RULE PATH`      | Only that rule's findings in matching files.        |
+| `RULE PATH:LINE` | Only that rule's finding on that exact line.        |
 
 Format rules:
 
@@ -209,7 +209,7 @@ All sources apply together: the ignore file, `pyproject.toml` excludes, `--exclu
 ## Output formats
 
 | Format | When to use it |
-|---|---|
+| --- | --- |
 | `text` in a terminal | Colour table, sorted by severity. The default when you run it yourself. |
 | `text` when piped, with `--output`, or with `--plain` | Plain text for logs and scripts. |
 | `json` | Machine-readable report for your own tooling. |
@@ -225,7 +225,7 @@ Each finding includes a rule ID, severity, confidence, file, line, column, OWASP
 ## Exit codes
 
 | Code | Meaning |
-|---|---|
+| --- | --- |
 | `0` | Scan completed and nothing met the `--fail-on` threshold. |
 | `1` | At least one finding at or above `--fail-on`. Unknown-severity dependency findings also count. |
 | `2` | Scan error: missing target, missing or invalid manifest, invalid `.agent-latch-ignore` or `[tool.agent-latch]` settings, or dependency audit failure. |
@@ -255,7 +255,7 @@ The audit uses [pip-audit](https://github.com/pypa/pip-audit) on `requirements*.
 ## Troubleshooting
 
 | Problem | Fix |
-|---|---|
+| --- | --- |
 | `agent-latch: command not found` | Activate the virtual environment or use the alias above. |
 | `unrecognized arguments: --config-manifest.yaml` | Put a space after `--config`: `--config agent-manifest.yaml`. |
 | No colour table | Output is piped or redirected. Run it directly in a terminal without `--output` or `--plain`. |

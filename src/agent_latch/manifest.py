@@ -35,7 +35,14 @@ _HIGH_RISK_CAPABILITIES = {
     "sudo",
     "admin",
 }
-_CODE_EXECUTION_CAPABILITIES = {"shell", "exec", "code_exec", "code_execution", "python", "subprocess"}
+_CODE_EXECUTION_CAPABILITIES = {
+    "shell",
+    "exec",
+    "code_exec",
+    "code_execution",
+    "python",
+    "subprocess",
+}
 _WILDCARDS = {"*", "all", "any"}
 _APPROVAL_KEYS = ("requires_approval", "human_in_the_loop", "require_confirmation")
 _CAPABILITY_KEYS = ("capabilities", "permissions", "scopes")
@@ -43,10 +50,18 @@ _ENDPOINT_KEYS = ("endpoint", "url", "base_url", "server")
 _NO_AUTH_VALUES = {"none", "false", "anonymous", "no", "off", ""}
 
 _INJECTION_SIGNATURES = (
-    re.compile(r"(?i)\bignore\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|prompts|rules)"),
-    re.compile(r"(?i)\bdisregard\s+(?:all\s+)?(?:the\s+|your\s+)?(?:previous|prior|above|system)\s+(?:instructions|prompts|rules)"),
-    re.compile(r"(?i)\byou\s+are\s+now\s+(?:in\s+)?(?:developer\s+mode|dan\b|jailbroken|unrestricted)"),
-    re.compile(r"(?i)\b(?:reveal|print|output)\s+(?:your|the)\s+(?:system\s+prompt|hidden\s+instructions)"),
+    re.compile(
+        r"(?i)\bignore\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|prompts|rules)"
+    ),
+    re.compile(
+        r"(?i)\bdisregard\s+(?:all\s+)?(?:the\s+|your\s+)?(?:previous|prior|above|system)\s+(?:instructions|prompts|rules)"
+    ),
+    re.compile(
+        r"(?i)\byou\s+are\s+now\s+(?:in\s+)?(?:developer\s+mode|dan\b|jailbroken|unrestricted)"
+    ),
+    re.compile(
+        r"(?i)\b(?:reveal|print|output)\s+(?:your|the)\s+(?:system\s+prompt|hidden\s+instructions)"
+    ),
     re.compile(r"(?i)\bwithout\s+(?:telling|informing|notifying)\s+the\s+user\b"),
 )
 _UNTRUSTED_PLACEHOLDER = re.compile(
@@ -95,7 +110,9 @@ def find_manifest(target: Path) -> Path | None:
 
 def load_manifest(manifest: Path) -> _LineDict:
     try:
-        data = yaml.load(manifest.read_text(encoding="utf-8"), Loader=_LineLoader)  # SafeLoader subclass
+        data = yaml.load(
+            manifest.read_text(encoding="utf-8"), Loader=_LineLoader
+        )  # SafeLoader subclass
     except OSError as exc:
         raise ManifestError(f"could not read {manifest}: {exc.strerror or exc}") from exc
     except yaml.YAMLError as exc:
@@ -134,7 +151,9 @@ def _iter_tools(manifest: _LineDict) -> list[_LineDict]:
     tools = [tool for tool in _as_list(manifest.get("tools")) if isinstance(tool, _LineDict)]
     for agent in _as_list(manifest.get("agents")):
         if isinstance(agent, _LineDict):
-            tools.extend(tool for tool in _as_list(agent.get("tools")) if isinstance(tool, _LineDict))
+            tools.extend(
+                tool for tool in _as_list(agent.get("tools")) if isinstance(tool, _LineDict)
+            )
     return tools
 
 
@@ -142,7 +161,11 @@ def _check_tool(tool: _LineDict, path: str) -> list[Finding]:
     findings: list[Finding] = []
     name = str(tool.get("name", "<unnamed>"))
     capability_key = next((key for key in _CAPABILITY_KEYS if key in tool), None)
-    capabilities = [str(item).strip().lower() for item in _as_list(tool.get(capability_key))] if capability_key else []
+    capabilities = (
+        [str(item).strip().lower() for item in _as_list(tool.get(capability_key))]
+        if capability_key
+        else []
+    )
     approved = any(_truthy(tool.get(key)) for key in _APPROVAL_KEYS)
 
     wildcards = [cap for cap in capabilities if cap in _WILDCARDS or cap.endswith(":*")]
@@ -164,7 +187,11 @@ def _check_tool(tool: _LineDict, path: str) -> list[Finding]:
 
     risky = [cap for cap in capabilities if cap in _HIGH_RISK_CAPABILITIES]
     if risky and not approved:
-        owasp = ("ASI02", "ASI05") if any(cap in _CODE_EXECUTION_CAPABILITIES for cap in risky) else ("ASI02", "ASI03")
+        owasp = (
+            ("ASI02", "ASI05")
+            if any(cap in _CODE_EXECUTION_CAPABILITIES for cap in risky)
+            else ("ASI02", "ASI03")
+        )
         findings.append(
             Finding(
                 rule_id="AGENTLATCH-MAN001",
@@ -192,7 +219,11 @@ def _check_tool(tool: _LineDict, path: str) -> list[Finding]:
         else:
             explicit = True
             auth = tool.get("auth")
-            missing = auth is None or auth is False or (isinstance(auth, str) and auth.strip().lower() in _NO_AUTH_VALUES)
+            missing = (
+                auth is None
+                or auth is False
+                or (isinstance(auth, str) and auth.strip().lower() in _NO_AUTH_VALUES)
+            )
         if missing:
             findings.append(
                 Finding(
@@ -201,7 +232,11 @@ def _check_tool(tool: _LineDict, path: str) -> list[Finding]:
                     severity="medium",
                     message=(
                         f"Tool '{name}' calls a remote endpoint "
-                        + ("with authentication explicitly disabled. " if explicit else "with no auth declared. ")
+                        + (
+                            "with authentication explicitly disabled. "
+                            if explicit
+                            else "with no auth declared. "
+                        )
                         + "Authenticate tool calls and scope credentials to this tool."
                     ),
                     path=path,
@@ -215,7 +250,9 @@ def _check_tool(tool: _LineDict, path: str) -> list[Finding]:
     return findings
 
 
-def _check_prompt_text(text: str, path: str, base_line: int, label: str, is_system: bool) -> list[Finding]:
+def _check_prompt_text(
+    text: str, path: str, base_line: int, label: str, is_system: bool
+) -> list[Finding]:
     findings: list[Finding] = []
     for offset, line in enumerate(text.splitlines()):
         for signature in _INJECTION_SIGNATURES:
@@ -323,7 +360,9 @@ def _check_agent_prompts(
     return findings
 
 
-def scan_manifest(manifest_path: Path, root: Path, max_file_bytes: int = 1_000_000) -> list[Finding]:
+def scan_manifest(
+    manifest_path: Path, root: Path, max_file_bytes: int = 1_000_000
+) -> list[Finding]:
     """Audit tool definitions and prompts declared in an AgentLatch agent manifest."""
     manifest_path = manifest_path.resolve()
     root = root.resolve() if root.is_dir() else root.resolve().parent
@@ -335,7 +374,9 @@ def scan_manifest(manifest_path: Path, root: Path, max_file_bytes: int = 1_000_0
         findings.extend(_check_tool(tool, display))
     for agent in _as_list(manifest.get("agents")):
         if isinstance(agent, _LineDict):
-            findings.extend(_check_agent_prompts(agent, manifest_path, display, root, max_file_bytes))
+            findings.extend(
+                _check_agent_prompts(agent, manifest_path, display, root, max_file_bytes)
+            )
 
     # A template shared by several agents would otherwise be reported once per agent.
     return sorted(set(findings), key=lambda finding: (finding.path, finding.line, finding.rule_id))

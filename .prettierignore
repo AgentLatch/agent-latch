@@ -1,0 +1,5 @@
+# Prettier also skips everything in .gitignore.
+package-lock.json
+
+# Deliberately insecure demo fixtures: reformatting would shift the lines findings point at.
+examples/

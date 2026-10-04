@@ -71,7 +71,7 @@ The action:
 ### Inputs
 
 | Input | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `path` | `.` | Directory or file to scan, relative to the repository root. |
 | `config` | empty | Agent manifest. Empty means auto-detect `agent-manifest.yaml` in `path`. |
 | `fail-on` | `high` | `none`, `low`, `medium`, `high`, or `critical`. |
@@ -83,7 +83,7 @@ The action:
 ### Outputs
 
 | Output | Description |
-|---|---|
+| --- | --- |
 | `finding-count` | Number of findings. |
 | `sarif-file` | Path to the SARIF report. |
 | `exit-code` | `0` passed, `1` findings at or above `fail-on`, `2` scan error. |
@@ -146,7 +146,7 @@ Treat changes to that file as security decisions and review them in pull request
 ## Choosing a threshold
 
 | `--fail-on` | Good for |
-|---|---|
+| --- | --- |
 | `none` | Trying AgentLatch out; reporting only. |
 | `high` | Recommended starting point. Blocks shell/code execution, wildcard permissions, unapproved high-risk tools, and hardcoded secrets. |
 | `medium` | Stricter. Also blocks prompt-injection signals and unauthenticated remote tools, which are lower-confidence heuristics. |

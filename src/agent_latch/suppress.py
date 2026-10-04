@@ -85,7 +85,9 @@ def parse_ignore_file(text: str, source: str = IGNORE_FILE) -> list[IgnoreRule]:
         if sep and tail.isdigit():
             pattern, line = head, int(tail)
         if line is not None and rule is None:
-            raise ConfigError(f"{source}:{number}: a line number needs a rule, e.g. 'SEC001 {tokens[-1]}'")
+            raise ConfigError(
+                f"{source}:{number}: a line number needs a rule, e.g. 'SEC001 {tokens[-1]}'"
+            )
         rules.append(IgnoreRule(pattern, rule, line))
     return rules
 
@@ -144,9 +146,9 @@ def filter_findings(
             continue
         if finding.path not in lines_by_file:
             try:
-                lines_by_file[finding.path] = (base / finding.path).read_text(
-                    encoding="utf-8", errors="replace"
-                ).splitlines()
+                lines_by_file[finding.path] = (
+                    (base / finding.path).read_text(encoding="utf-8", errors="replace").splitlines()
+                )
             except OSError:
                 lines_by_file[finding.path] = []
         lines = lines_by_file[finding.path]

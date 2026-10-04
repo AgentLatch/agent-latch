@@ -164,7 +164,10 @@ class _Analysis:
     def _propagate(self, scope: _Scope) -> bool:
         changed = False
         for node in _scope_nodes(scope):
-            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and node.value is not None:
+            if (
+                isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+                and node.value is not None
+            ):
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 value = node.value
                 if isinstance(value, ast.Call) and _dotted(value.func) in SOURCE_CLASSES:
@@ -206,7 +209,9 @@ class _Analysis:
         tainted: list[str] = [
             params[index]
             for index, arg in enumerate(call.args)
-            if index < len(params) and not isinstance(arg, ast.Starred) and self.is_tainted(arg, scope)
+            if index < len(params)
+            and not isinstance(arg, ast.Starred)
+            and self.is_tainted(arg, scope)
         ]
         tainted.extend(
             keyword.arg
@@ -237,8 +242,11 @@ class _Analysis:
                             node.args[0] if node.args else None,
                         )
                 elif isinstance(node, ast.Dict):
-                    keys = {key.value: value for key, value in zip(node.keys, node.values, strict=True)
-                            if isinstance(key, ast.Constant)}
+                    keys = {
+                        key.value: value
+                        for key, value in zip(node.keys, node.values, strict=True)
+                        if isinstance(key, ast.Constant)
+                    }
                     if "role" in keys and "content" in keys:
                         sink, content = "chat message content", keys["content"]
                 if content is None or not self.is_tainted(content, scope):
@@ -250,7 +258,10 @@ class _Analysis:
                 )
                 if _MITIGATION.search(literal_text):
                     continue
-                flows.setdefault((node.lineno, node.col_offset), PromptFlow(node.lineno, node.col_offset + 1, sink))
+                flows.setdefault(
+                    (node.lineno, node.col_offset),
+                    PromptFlow(node.lineno, node.col_offset + 1, sink),
+                )
         return sorted(flows.values(), key=lambda flow: (flow.line, flow.column))
 
 

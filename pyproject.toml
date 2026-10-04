@@ -50,7 +50,7 @@ Issues = "https://github.com/AgentLatch/agent-latch/issues"
 agent-latch = "agent_latch.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9", "ruff>=0.8,<1"]
+dev = ["pytest>=9.0.3,<10", "ruff>=0.8,<1"]
 audit = ["pip-audit>=2.10,<3"]
 
 [tool.setuptools.packages.find]

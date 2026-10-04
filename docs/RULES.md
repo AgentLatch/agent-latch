@@ -3,7 +3,7 @@
 AgentLatch v0.1.0 contains a few deterministic source-pattern and agent-manifest checks. A hit means “review this code,” not “this code is exploitable.” A clean result means only that these patterns were not found in the scanned files.
 
 | Rule | Detection | OWASP Agentic Top 10 mapping | Limitations |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | AGENTLATCH-PY001 | Python direct calls to `eval()` or `exec()` | ASI05 Unexpected Code Execution; ASI02 Tool Misuse & Exploitation | Does not establish whether the argument is attacker-controlled; misses indirect invocation and aliases. |
 | AGENTLATCH-PY002 | `subprocess.*(..., shell=True)` | ASI05 Unexpected Code Execution; ASI02 Tool Misuse & Exploitation | Does not prove command injection; misses wrappers and aliases. |
 | AGENTLATCH-PY003 | A call with literal `verify=False` | ASI02 Tool Misuse & Exploitation | Heuristic; does not resolve the called library or runtime context. |

@@ -64,8 +64,7 @@ def scan_python(path: Path, root: Path, source: str) -> list[Finding]:
         called = node.func.id if isinstance(node.func, ast.Name) else None
         qualified_call = (
             f"{node.func.value.id}.{node.func.attr}"
-            if isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
+            if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
             else None
         )
         if called in {"eval", "exec"}:
@@ -84,12 +83,8 @@ def scan_python(path: Path, root: Path, source: str) -> list[Finding]:
                 )
             )
 
-        if (
-            called in dataframe_agent_names
-            or (
-                qualified_call is not None
-                and qualified_call.endswith(".create_pandas_dataframe_agent")
-            )
+        if called in dataframe_agent_names or (
+            qualified_call is not None and qualified_call.endswith(".create_pandas_dataframe_agent")
         ):
             findings.append(
                 Finding(
@@ -283,11 +278,14 @@ def audit_requirements(target: Path) -> tuple[list[Finding], int]:
     else:
         base = root
         manifests = sorted(
-            path for path in root.rglob("requirements*.txt")
+            path
+            for path in root.rglob("requirements*.txt")
             if path.is_file()
             and not path.is_symlink()
-            and not any(part in {".git", ".venv", "venv", "node_modules", "__pycache__"}
-                        for part in path.relative_to(root).parts)
+            and not any(
+                part in {".git", ".venv", "venv", "node_modules", "__pycache__"}
+                for part in path.relative_to(root).parts
+            )
         )
 
     if not manifests:
@@ -358,7 +356,9 @@ def audit_requirements(target: Path) -> tuple[list[Finding], int]:
                 aliases = vulnerability.get("aliases") or []
                 fixes = vulnerability.get("fix_versions") or []
                 alias_text = ", ".join(sorted({str(alias) for alias in aliases})[:5])
-                fix_text = ", ".join(sorted({str(fix) for fix in fixes})[:5]) or "no fix version listed"
+                fix_text = (
+                    ", ".join(sorted({str(fix) for fix in fixes})[:5]) or "no fix version listed"
+                )
                 message = (
                     f"{package} {version} has known advisory {advisory}; "
                     f"suggested fix: {fix_text}. Advisory severity was not provided by pip-audit."

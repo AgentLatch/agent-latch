@@ -7,17 +7,30 @@ Thanks for helping improve AgentLatch. This is an early proof of concept; keep c
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,audit]"
 python -m pytest
 ruff check .
+ruff format --check .        # `ruff format .` to fix
+pip-audit --skip-editable
 ```
+
+Markdown, YAML, and JSON are formatted with Prettier, and any JavaScript is linted with ESLint (Node.js 24):
+
+```sh
+npm ci
+npm run format:check         # `npm run format` to fix
+npm run lint
+npm audit
+```
+
+CI runs each of these as a separate check: the **Code quality (Python)** and **Code quality (Node)** workflows.
 
 ## Adding a rule
 
 Where rules live:
 
 | Kind of rule | File |
-|---|---|
+| --- | --- |
 | Python source patterns (`PY*`, `AG001`, `AG002`) and secrets (`SEC001`) | `src/agent_latch/rules.py` |
 | Data flow into prompts (`AG003`) | `src/agent_latch/taint.py` |
 | Agent manifests and prompt templates (`MAN*`, `PRM*`) | `src/agent_latch/manifest.py` |

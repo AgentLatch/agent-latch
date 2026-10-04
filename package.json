@@ -1,0 +1,18 @@
+{
+  "name": "agent-latch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node tooling for AgentLatch code quality checks (Prettier, ESLint). AgentLatch itself is a Python package; see pyproject.toml.",
+  "license": "MIT",
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9"
+  }
+}

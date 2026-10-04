@@ -129,9 +129,7 @@ def test_dependency_audit_maps_advisories_without_installing_packages(
     assert findings[0].severity == "unknown"
 
 
-def test_dependency_audit_deduplicates_same_package_advisory(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_dependency_audit_deduplicates_same_package_advisory(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "requirements.txt").write_text("langchain==0.3.0\n", encoding="utf-8")
     duplicate_advisory = {
         "id": "PYSEC-2026-2192",
@@ -174,9 +172,7 @@ def test_dependency_audit_accepts_current_pip_audit_object_schema(
             returncode=0,
             stdout=json.dumps(
                 {
-                    "dependencies": [
-                        {"name": "requests", "version": "2.32.0", "vulns": []}
-                    ],
+                    "dependencies": [{"name": "requests", "version": "2.32.0", "vulns": []}],
                     "fixes": [],
                 }
             ),
@@ -309,8 +305,17 @@ def test_fail_on_summary_goes_to_stderr_when_writing_sarif(tmp_path: Path, capsy
     output = tmp_path / "out.sarif"
 
     exit_code = cli.main(
-        [str(tmp_path), "--config", str(manifest), "--format", "sarif",
-         "--output", str(output), "--fail-on", "high"]
+        [
+            str(tmp_path),
+            "--config",
+            str(manifest),
+            "--format",
+            "sarif",
+            "--output",
+            str(output),
+            "--fail-on",
+            "high",
+        ]
     )
 
     captured = capsys.readouterr()
@@ -363,10 +368,7 @@ def test_ignore_file_supports_paths_rules_and_lines(tmp_path: Path, capsys) -> N
     (tmp_path / "vendor").mkdir()
     (tmp_path / "vendor" / "lib.py").write_text("eval('x')\n", encoding="utf-8")
     (tmp_path / "app.py").write_text(
-        "import subprocess\n"
-        "eval('a')\n"
-        "eval('b')\n"
-        "subprocess.run('ls', shell=True)\n",
+        "import subprocess\neval('a')\neval('b')\nsubprocess.run('ls', shell=True)\n",
         encoding="utf-8",
     )
     (tmp_path / ".agent-latch-ignore").write_text(
@@ -381,7 +383,9 @@ def test_ignore_file_supports_paths_rules_and_lines(tmp_path: Path, capsys) -> N
     cli.main([str(tmp_path), "--format", "json"])
 
     report = json.loads(capsys.readouterr().out)
-    assert [(item["rule_id"], item["line"]) for item in report["findings"]] == [("AGENTLATCH-PY001", 3)]
+    assert [(item["rule_id"], item["line"]) for item in report["findings"]] == [
+        ("AGENTLATCH-PY001", 3)
+    ]
     assert report["suppressed_count"] == 3
 
 
@@ -402,7 +406,9 @@ def test_ignore_file_option_and_parse_errors(tmp_path: Path) -> None:
 
 
 def test_invalid_pyproject_exclude_is_a_configuration_error(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text('[tool.agent-latch]\nexclude = "tests"\n', encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.agent-latch]\nexclude = "tests"\n', encoding="utf-8"
+    )
 
     assert cli.main([str(tmp_path)]) == 2
 
