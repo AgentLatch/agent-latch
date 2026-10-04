@@ -7,3 +7,9 @@ examples/
 
 # Fake credential that tests secret redaction; not a real key.
 SEC001 tests/test_scanner.py
+
+
+
+   
+
+
