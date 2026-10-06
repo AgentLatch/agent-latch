@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: the remote source argument to `instinct-cli.py import`. The fetched file supplies its own id, confidence, and free-text action, so a guardrail should require a pinned revision or content hash and ignore source-declared confidence; the host uses the reserved .invalid TLD and never resolves.",
+  "input_parameter": "https://instincts.example.invalid/<PLACEHOLDER_BRANCH>/<PLACEHOLDER_PATH>/instincts.yaml"
+}

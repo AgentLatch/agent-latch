@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: a shell command the agent proposes that matches the pre-approved `pip install *` rule. A guardrail should require explicit approval, an allow-listed package set, or a hash-pinned requirements file instead of accepting an arbitrary package name.",
+  "input_parameter": "pip install <PLACEHOLDER_PACKAGE_NAME>"
+}

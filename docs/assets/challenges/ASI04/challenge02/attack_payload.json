@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: the remote MCP endpoint argument passed to an unpinned `mcp-remote` bridge. The tool descriptors (name, description, inputSchema) served from this endpoint are what a guardrail should pin and diff before the agent sees them; the host uses the reserved .invalid TLD and never resolves.",
+  "input_parameter": "https://mcp.example.invalid/<PLACEHOLDER_PATH>/mcp"
+}

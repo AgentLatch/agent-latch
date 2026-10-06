@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: a plugin-cache candidate directory as the ECC root resolver sees it. Any <org>/<version> folder containing the probe file is accepted, so a guardrail should validate the publisher, version, and file hashes of this path before any code under it is required.",
+  "input_parameter": "~/.claude/plugins/cache/everything-claude-code/<PLACEHOLDER_ORG>/<PLACEHOLDER_VERSION>/scripts/lib/utils.js"
+}
