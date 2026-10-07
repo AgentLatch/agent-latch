@@ -6,7 +6,7 @@ Key facts:
 
 - Install: clone https://github.com/AgentLatch/agent-latch, then `python -m pip install -e .` (Python 3.11+).
 - Scan: `agent-latch scan /path/to/agent`; audit a manifest with `--config agent-manifest.yaml`; fail CI with `--fail-on high`; a manifest is optional, and every folder and text file is scanned. Suppressions inside the scanned project (`.agent-latch-ignore`, inline ignore comments) apply only with `--project-ignores`.
-- GitHub Action: `uses: AgentLatch/agent-latch@v0.2.0` (https://github.com/marketplace/actions/agentlatch-scan).
+- GitHub Action: `uses: AgentLatch/agent-latch@v0.2.1` (https://github.com/marketplace/actions/agentlatch-scan).
 - Frameworks with specific checks: CrewAI, LangChain, LangGraph. Generic rules apply to any Python code. JavaScript/TypeScript are not scanned.
 - Privacy: scans run locally and never call an LLM. Only the opt-in `--dependencies` audit sends package names and versions to an advisory service.
 - Limits: static heuristics only; no runtime enforcement or model-behavior testing. A clean scan is not a security guarantee.
@@ -28,5 +28,6 @@ Key facts:
 
 - [Security policy](https://github.com/AgentLatch/agent-latch/blob/main/SECURITY.md)
 - [Contributing](https://github.com/AgentLatch/agent-latch/blob/main/CONTRIBUTING.md)
+- [v0.2.1 release notes](https://github.com/AgentLatch/agent-latch/blob/main/docs/release-notes/v0.2.1.md)
 - [v0.2.0 release notes](https://github.com/AgentLatch/agent-latch/blob/main/docs/release-notes/v0.2.0.md)
 - [v0.1.0 release notes](https://github.com/AgentLatch/agent-latch/blob/main/docs/release-notes/v0.1.0.md)

@@ -733,3 +733,67 @@ def test_oversight_findings_in_test_files_are_low_severity(tmp_path: Path) -> No
     [finding] = [item for item in scan_project(tmp_path) if item.rule_id == "AGENTLATCH-AG006"]
 
     assert (finding.severity, finding.path) == ("low", "tests/test_approval.py")
+
+
+def test_code_execution_and_tool_findings_in_test_files_are_low_severity(tmp_path: Path) -> None:
+    source = "import os\n@tool\ndef calc(expr: str) -> str:\n    return str(eval(expr))\n"
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_calc.py").write_text(source, encoding="utf-8")
+    (tmp_path / "calc.py").write_text(source, encoding="utf-8")
+
+    severities = {
+        (item.path, item.rule_id): item.severity
+        for item in scan_project(tmp_path)
+        if item.rule_id in {"AGENTLATCH-PY001", "AGENTLATCH-AG004"}
+    }
+
+    assert severities == {
+        ("calc.py", "AGENTLATCH-AG004"): "high",
+        ("calc.py", "AGENTLATCH-PY001"): "high",
+        ("tests/test_calc.py", "AGENTLATCH-AG004"): "low",
+        ("tests/test_calc.py", "AGENTLATCH-PY001"): "low",
+    }
+
+
+def test_min_severity_hides_and_counts_lower_findings(tmp_path: Path, capsys) -> None:
+    (tmp_path / "agent.py").write_text(
+        "eval(x)\nAgent(role='r', allow_delegation=True)\n", encoding="utf-8"
+    )
+
+    assert cli.main([str(tmp_path), "--format", "json", "--min-severity", "medium"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert [item["rule_id"] for item in report["findings"]] == ["AGENTLATCH-PY001"]
+    assert (report["min_severity"], report["hidden_below_min_severity"]) == ("medium", 1)
+
+    sarif = json.loads(sarif_report([], str(tmp_path), min_severity="medium", hidden=1))
+    assert sarif["runs"][0]["properties"]["hiddenBelowMinSeverityCount"] == 1
+
+
+def test_min_severity_cannot_hide_what_fail_on_fails_on(tmp_path: Path, capsys) -> None:
+    (tmp_path / "agent.py").write_text("eval(x)\n", encoding="utf-8")
+
+    assert cli.main([str(tmp_path), "--min-severity", "critical", "--fail-on", "high"]) == 2
+    assert "would hide high findings" in capsys.readouterr().err
+
+
+def test_action_summary_has_totals_and_escapes_untrusted_text(tmp_path: Path) -> None:
+    from agent_latch.action_summary import render_summary
+
+    (tmp_path / "a.py").write_text("eval(x)\nAgent(role='r', allow_delegation=True)\n", encoding="utf-8")
+    evil = tmp_path / "[click](https:" / "evil.com)<img src=x>.py"
+    evil.parent.mkdir()
+    evil.write_text("exec(y)\n", encoding="utf-8")
+    run = json.loads(sarif_report(scan_project(tmp_path), str(tmp_path), suppressed=2))["runs"][0]
+
+    summary = render_summary(run, "high", "1")
+
+    assert summary.startswith("## ❌ AgentLatch: 2 finding(s) at or above `high`")
+    assert "| 0 | 2 | 0 | 1 | **3** |" in summary
+    assert "### Findings by rule" in summary and "| `PY001` |" in summary
+    assert "ASI06 | Memory & Context Poisoning | _no checks yet_" in summary
+    assert "### Blocking findings (2)" in summary
+    assert "<summary>Other findings (1)</summary>" in summary
+    assert "2 finding(s) suppressed by `project-ignores`" in summary
+    # A crafted path may only appear inside an inline code span, which GitHub renders literally.
+    assert summary.count("<img") == 1
+    assert "`[click](https:/evil.com)<img src=x>.py:1`" in summary

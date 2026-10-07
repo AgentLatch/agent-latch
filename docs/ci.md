@@ -15,7 +15,7 @@ Run AgentLatch automatically: locally before each commit, and on every push or p
    ```yaml
    repos:
      - repo: https://github.com/AgentLatch/agent-latch
-       rev: v0.2.0
+       rev: v0.2.1
        hooks:
          - id: agent-latch
    ```
@@ -23,7 +23,7 @@ Run AgentLatch automatically: locally before each commit, and on every push or p
 3. Enable it: `pre-commit install`.
 4. Try it on all files: `pre-commit run agent-latch --all-files`.
 
-Examples in this guide pin release `v0.2.0`. Check the [releases page](https://github.com/AgentLatch/agent-latch/releases) for the latest version; `pre-commit autoupdate` bumps `rev` for you.
+Examples in this guide pin release `v0.2.1`. Check the [releases page](https://github.com/AgentLatch/agent-latch/releases) for the latest version; `pre-commit autoupdate` bumps `rev` for you.
 
 The hook runs `agent-latch scan --fail-on high --project-ignores` and blocks the commit when a high or critical finding exists. It runs when Python, YAML, Markdown, or text files change, and scans the whole repository, not only staged files.
 
@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: AgentLatch/agent-latch@v0.2.0
+      - uses: AgentLatch/agent-latch@v0.2.1
         with:
           fail-on: high
 ```
@@ -75,6 +75,7 @@ The action:
 | `path` | `.` | Directory or file to scan, relative to the repository root. |
 | `config` | empty | Agent manifest. Empty means auto-detect `agent-manifest.yaml` in `path`. |
 | `fail-on` | `high` | `none`, `low`, `medium`, `high`, or `critical`. |
+| `min-severity` | `info` | Report only findings at or above `info`, `low`, `medium`, `high`, or `critical`. Hidden findings are counted in the job summary. Must not be above `fail-on`. |
 | `project-ignores` | `"false"` | `"true"` applies the repository's own `.agent-latch-ignore`, `pyproject.toml` excludes, and inline ignore comments. A pull request can edit these, so enable it only where you trust the authors, or protect those files with CODEOWNERS. |
 | `dependencies` | `"false"` | `"true"` also audits `requirements*.txt`; sends package names and versions to PyPI's advisory service. |
 | `sarif-file` | `agent-latch.sarif` | Where to write the SARIF report. |
@@ -89,12 +90,14 @@ The action:
 | `sarif-file` | Path to the SARIF report. |
 | `exit-code` | `0` passed, `1` findings at or above `fail-on`, `2` scan error. |
 
+The job summary starts with a pass/fail headline and finding counts by severity, rule, and OWASP ASI category, then lists the blocking findings, with the rest collapsed. The step log stays short; the full list is in the SARIF report.
+
 ### Examples
 
 Scan one agent folder with its manifest and audit dependencies:
 
 ```yaml
-      - uses: AgentLatch/agent-latch@v0.2.0
+      - uses: AgentLatch/agent-latch@v0.2.1
         with:
           path: agents/support-bot
           config: agents/support-bot/agent-manifest.yaml
@@ -104,7 +107,7 @@ Scan one agent folder with its manifest and audit dependencies:
 Report without failing the build, then act on the result:
 
 ```yaml
-      - uses: AgentLatch/agent-latch@v0.2.0
+      - uses: AgentLatch/agent-latch@v0.2.1
         id: agentlatch
         with:
           fail-on: none
@@ -125,7 +128,7 @@ AgentLatch is a normal command-line tool, so any CI system can run it. Fail on t
 agent-latch:
   image: python:3.12
   script:
-    - pip install "git+https://github.com/AgentLatch/agent-latch.git@v0.2.0"
+    - pip install "git+https://github.com/AgentLatch/agent-latch.git@v0.2.1"
     - agent-latch scan --fail-on high --plain --project-ignores
     - agent-latch scan --format sarif --output agent-latch.sarif
   artifacts:

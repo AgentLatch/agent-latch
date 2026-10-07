@@ -13,7 +13,7 @@ Guidance for AI coding agents (and humans) working in this repository.
 
 It reports findings as a terminal table / plain text, JSON, or SARIF, and runs as a CLI, a pre-commit hook, or a composite GitHub Action. Findings map to the OWASP Top 10 for Agentic Applications (informational only).
 
-Status: **early proof of concept (v0.2.0)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
+Status: **early proof of concept (v0.2.1)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
 
 ## Design principle: the scanned project is untrusted
 
@@ -69,6 +69,7 @@ src/agent_latch/
   owasp.py        # ASI01–ASI10 category IDs/names, rule→category map, coverage summary
   suppress.py     # .agent-latch-ignore, inline ignores, pyproject excludes
   report.py       # text, JSON, and SARIF renderers; severity ordering
+  action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
 tests/test_scanner.py          # all unit tests (synthetic fixtures via tmp_path)
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
@@ -105,7 +106,7 @@ agent-latch scan --format sarif --output agent-latch.sarif
 ```
 agent-latch [scan] [path] [--config MANIFEST] [--exclude PATH]... [--ignore-file FILE]
             [--project-ignores] [--dependencies] [-i/--interactive]
-            [--format text|json|sarif] [--output FILE] [--plain]
+            [--format text|json|sarif] [--output FILE] [--plain] [--min-severity LEVEL]
             [--fail-on none|low|medium|high|critical] [-V]
 ```
 
@@ -152,7 +153,8 @@ Full behavior and blind spots: `docs/RULES.md`.
 - Use `from __future__ import annotations`, type hints, and `pathlib.Path` throughout. Use frozen dataclasses for value types.
 - Rules are static heuristics. Parse with `ast` and never import or execute scanned code. Load YAML only with `yaml.SafeLoader` (see `manifest._LineLoader`).
 - The project walker (`rules.iter_project_files` / `scan_project`) visits every folder and every text file (see the design principle above). By file type: `.py` gets source, agent, and prompt rules; `.yaml`/`.yml` (except manifests, which `manifest.py` handles) gets YAML prompt checks; prompt templates (`rules.PROMPT_SUFFIXES`, and `.md`/`.txt` under a `prompts/` folder) get prompt rules; every text file gets `SEC001`. Keep these limits intentional and documented in `docs/getting-started.md`.
-- Noisy rules report findings in test files (`findings.is_test_path`) at low severity instead of dropping them, so real problems in tests stay visible (`SEC001`, `AG006`, `AG007`).
+- Noisy rules report findings in test files at low severity instead of dropping them, so real problems in tests stay visible: `SEC001` itself, and `findings.TEST_DEMOTED_RULES` (`PY001`, `AG004`, `AG006`, `AG007`) through `demote_test_findings`.
+- `--min-severity` filters what is reported, never what fails: the CLI rejects a `--min-severity` above `--fail-on`, keeps unknown severity, and every report counts hidden findings.
 - Use `astutil.walk` instead of `ast.walk` for whole-file or whole-function traversals; every rule walks the same tree.
 - Sort findings deterministically (path, line, rule ID) so reports and SARIF stay stable.
 - Suppressions are handled in `suppress.py`: `.agent-latch-ignore` (path / rule / `path:line`), inline `# agent-latch: ignore[RULE]`, and `[tool.agent-latch] exclude` in `pyproject.toml`, all applied only with `--project-ignores`, plus `--exclude` and `--ignore-file`, which always apply. Reports must state how many findings were suppressed. This repo's own self-scan, pre-commit hook, and CI job pass `--project-ignores`.
@@ -168,7 +170,8 @@ Full behavior and blind spots: `docs/RULES.md`.
 
 ## GitHub Action and pre-commit
 
-- `action.yml` installs AgentLatch into an isolated venv under `$RUNNER_TEMP`, runs a SARIF scan, rewrites SARIF URIs to be repo-relative, writes a step summary, optionally uploads to code scanning, and then enforces `fail-on`.
+- `action.yml` installs AgentLatch into an isolated venv under `$RUNNER_TEMP`, runs a SARIF scan, rewrites SARIF URIs to be repo-relative and writes the job summary (`agent_latch.action_summary`), optionally uploads to code scanning, and then enforces `fail-on`.
+- The Action's working directory is the scanned (untrusted) repository. Always run Python there with `-I` (isolated mode), so it cannot import modules planted in the repo, and never use `python -` or `python -c` without `-I`. Escape all scanned-project text (paths, evidence, messages) before writing it into the Markdown job summary.
 - Outputs: `sarif-file`, `finding-count`, `exit-code`. The CI `action-smoke-test` job asserts on these outputs and on the SARIF URI for `examples/vulnerable-agent/agent-manifest.yaml`.
 - `.pre-commit-hooks.yaml` exposes hook id `agent-latch` and passes `--fail-on high --project-ignores` (pre-commit runs on the user's own repo).
 - The Action's `project-ignores` input defaults to `"false"`, because pull requests can edit ignore files. The self-scan job sets it to `"true"`.

@@ -18,6 +18,9 @@ inputs:
   project-ignores:
     description: Apply the scanned project's own .agent-latch-ignore, pyproject excludes, and inline ignore comments. Leave "false" when scanning pull requests or code you do not control, since their authors can edit these.
     default: "false"
+  min-severity:
+    description: Report only findings at or above this severity (info, low, medium, high, critical). Default reports everything. Must not be above fail-on; hidden findings are counted in the summary.
+    default: "info"
   dependencies:
     description: Also audit requirements*.txt with pip-audit (sends package names and versions to PyPI's advisory service).
     default: "false"
@@ -56,10 +59,12 @@ runs:
         DEPENDENCIES: ${{ inputs.dependencies }}
       run: |
         # Isolated venv so AgentLatch never installs into, or imports from, the scanned project.
-        python -m venv "$RUNNER_TEMP/agent-latch-venv"
+        # -I (isolated mode): the working directory is the scanned repository, so Python must not
+        # import a venv/, pip/, or other module planted there.
+        python -I -m venv "$RUNNER_TEMP/agent-latch-venv"
         extra=""
         if [ "$DEPENDENCIES" = "true" ]; then extra="[audit]"; fi
-        "$RUNNER_TEMP/agent-latch-venv/bin/python" -m pip install --quiet --disable-pip-version-check "${ACTION_PATH}${extra}"
+        "$RUNNER_TEMP/agent-latch-venv/bin/python" -I -m pip install --quiet --disable-pip-version-check "${ACTION_PATH}${extra}"
 
     - name: Run AgentLatch
       id: scan
@@ -70,9 +75,11 @@ runs:
         FAIL_ON: ${{ inputs.fail-on }}
         DEPENDENCIES: ${{ inputs.dependencies }}
         PROJECT_IGNORES: ${{ inputs.project-ignores }}
+        MIN_SEVERITY: ${{ inputs.min-severity }}
         SARIF_FILE: ${{ inputs.sarif-file }}
       run: |
         args=(scan "$SCAN_PATH" --format sarif --output "$SARIF_FILE" --fail-on "$FAIL_ON")
+        if [ -n "$MIN_SEVERITY" ]; then args+=(--min-severity "$MIN_SEVERITY"); fi
         if [ -n "$CONFIG" ]; then args+=(--config "$CONFIG"); fi
         if [ "$DEPENDENCIES" = "true" ]; then args+=(--dependencies); fi
         if [ "$PROJECT_IGNORES" = "true" ]; then args+=(--project-ignores); fi
@@ -90,48 +97,10 @@ runs:
       env:
         SCAN_PATH: ${{ inputs.path }}
         SARIF_FILE: ${{ inputs.sarif-file }}
-      run: |
-        "$RUNNER_TEMP/agent-latch-venv/bin/python" - <<'PY'
-        import json, os
-        from pathlib import Path
-
-        sarif_path = Path(os.environ["SARIF_FILE"])
-        sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
-        run = sarif["runs"][0]
-
-        # AgentLatch reports paths relative to the scan target; code scanning needs repo-relative URIs.
-        workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
-        target = Path(os.environ["SCAN_PATH"]).resolve()
-        base = target if target.is_dir() else target.parent
-        prefix = base.relative_to(workspace).as_posix() if base.is_relative_to(workspace) else ""
-        for result in run["results"]:
-            for location in result["locations"]:
-                artifact = location["physicalLocation"]["artifactLocation"]
-                if prefix not in ("", ".") and not artifact["uri"].startswith("/"):
-                    artifact["uri"] = f"{prefix}/{artifact['uri']}"
-        run.pop("artifacts", None)
-        sarif_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
-
-        results = run["results"]
-        rows = []
-        for result in results:
-            region = result["locations"][0]["physicalLocation"]
-            location = f"{region['artifactLocation']['uri']}:{region['region']['startLine']}"
-            severity = result["properties"]["severity"].upper()
-            rows.append((severity, result["ruleId"], location, result["message"]["text"]))
-            print(f"[{severity}] {result['ruleId']} {location}\n  {result['message']['text']}")
-
-        lines = ["## AgentLatch scan", ""]
-        if rows:
-            lines += [f"**{len(rows)} finding(s)**", "", "| Severity | Rule | Location | Finding |", "|---|---|---|---|"]
-            lines += [f"| {s} | `{r}` | `{loc}` | {m.replace('|', '/')} |" for s, r, loc, m in rows]
-        else:
-            lines.append("No findings from the enabled checks. This does not mean the project is secure.")
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-            summary.write("\n".join(lines) + "\n")
-        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-            output.write(f"finding-count={len(rows)}\n")
-        PY
+        FAIL_ON: ${{ inputs.fail-on }}
+        EXIT_CODE: ${{ steps.scan.outputs.exit-code }}
+      # -I (isolated mode) keeps Python from importing modules out of the scanned repository.
+      run: '"$RUNNER_TEMP/agent-latch-venv/bin/python" -I -m agent_latch.action_summary'
 
     - name: Upload SARIF to code scanning
       if: inputs.upload-sarif == 'true' && steps.scan.outputs.exit-code != '2'
