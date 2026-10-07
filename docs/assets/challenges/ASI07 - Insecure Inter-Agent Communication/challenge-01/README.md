@@ -2,8 +2,7 @@
 
 ## 1. Upstream source repository
 - GitHub Link: https://github.com/THU-MAIC/OpenMAIC
-- Version analyzed: v1.2.0-rc.1 (package.json, no .git metadata in the provided archive —
-  pin to a specific commit hash before running this in CI; see Automation Pointer note)
+- Version analyzed: v1.2.0-rc.1
 - Target vulnerable file(s):
   - app/api/pbl/v2/evaluate/route.ts (lines 47, 56-58)
   - lib/pbl/v2/operations/runtime/eval-prompts.ts (lines 99-116, 224-316)
