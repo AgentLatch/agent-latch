@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from agent_latch.agent_code import scan_agent_code, scan_prompt_yaml
-from agent_latch.findings import Finding
+from agent_latch.astutil import walk
+from agent_latch.findings import Finding, is_test_path
 from agent_latch.prompts import check_prompt_text
 from agent_latch.taint import find_untrusted_prompt_flows
 
@@ -45,9 +46,6 @@ _PLACEHOLDER_PREFIXES = (
 _PLACEHOLDER_PARTS = ("...", "xxxx", "****", "redacted", "placeholder", "\\u")
 # UI translation folders map keys like "password" to words; letter-only values there are labels.
 _I18N_DIRS = {"translations", "locales", "locale", "i18n", "l10n", "lang", "langs"}
-# Test files use fake credentials on purpose; their findings are still reported, at low severity.
-_TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs", "testing", "fixtures"}
-_TEST_FILE = re.compile(r"(?i)^(?:test_.*|.*_test\.\w+|.*\.(?:test|spec)\.\w+|conftest\.py)$")
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -62,13 +60,13 @@ def scan_python(path: Path, root: Path, source: str) -> list[Finding]:
         return findings
 
     dataframe_agent_names = {"create_pandas_dataframe_agent"}
-    for node in ast.walk(tree):
+    for node in walk(tree):
         if isinstance(node, ast.ImportFrom):
             for imported in node.names:
                 if imported.name == "create_pandas_dataframe_agent":
                     dataframe_agent_names.add(imported.asname or imported.name)
 
-    for node in ast.walk(tree):
+    for node in walk(tree):
         if not isinstance(node, ast.Call):
             continue
         called = node.func.id if isinstance(node.func, ast.Name) else None
@@ -240,11 +238,6 @@ def is_placeholder_secret(value: str, key: str = "", relative_path: str = "") ->
         return True
     in_i18n = any(part.lower() in _I18N_DIRS for part in relative_path.split("/")[:-1])
     return in_i18n and value.isalpha()
-
-
-def is_test_path(relative_path: str) -> bool:
-    parts = relative_path.split("/")
-    return bool(_TEST_FILE.match(parts[-1])) or any(part.lower() in _TEST_DIRS for part in parts[:-1])
 
 
 def scan_secrets(path: Path, root: Path, source: str) -> list[Finding]:

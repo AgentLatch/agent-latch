@@ -253,7 +253,7 @@ def test_manifest_flags_risky_tools_with_line_numbers(tmp_path: Path) -> None:
     by_rule = {finding.rule_id: finding for finding in findings}
     assert set(by_rule) == {"AGENTLATCH-MAN001", "AGENTLATCH-MAN002", "AGENTLATCH-MAN003"}
     assert by_rule["AGENTLATCH-MAN001"].line == 3
-    assert by_rule["AGENTLATCH-MAN001"].owasp == ("ASI02", "ASI05")
+    assert by_rule["AGENTLATCH-MAN001"].owasp == ("ASI02", "ASI05", "ASI09")
     assert by_rule["AGENTLATCH-MAN002"].line == 5
     assert by_rule["AGENTLATCH-MAN003"].line == 8
     assert all(finding.path == "agent-manifest.yaml" for finding in findings)
@@ -470,7 +470,7 @@ def test_every_rule_maps_only_to_known_owasp_categories() -> None:
 
     source_dir = Path(__file__).resolve().parents[1] / "src" / "agent_latch"
     emitted: dict[str, set[str]] = {}
-    for module in ("rules.py", "manifest.py", "agent_code.py", "prompts.py"):
+    for module in ("rules.py", "manifest.py", "agent_code.py", "prompts.py", "oversight.py"):
         tree = ast.parse((source_dir / module).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Finding"):
@@ -482,7 +482,7 @@ def test_every_rule_maps_only_to_known_owasp_categories() -> None:
             if isinstance(owasp, ast.Tuple):
                 categories.update(ast.literal_eval(owasp))
 
-    # MAN001, AG004, and AG005 compute their mapping at runtime; its options are checked through scan_manifest tests.
+    # MAN001 and AG004-AG006 compute their mapping at runtime; its options are checked through scan_manifest tests.
     assert set(emitted) == set(RULE_CATEGORIES)
     for rule_id, categories in emitted.items():
         assert categories <= set(RULE_CATEGORIES[rule_id]), rule_id
@@ -683,3 +683,53 @@ def test_numeric_placeholders_are_not_reported_as_user_input(tmp_path: Path) -> 
     ]
 
     assert found == [(2, "placeholder {user_topic}")]
+
+
+def test_disabled_human_approval_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text(
+        "from autogen import UserProxyAgent\n"
+        "proxy = UserProxyAgent('ops', human_input_mode='NEVER', code_execution_config={'work_dir': '.'})\n"
+        "chat = UserProxyAgent('chat', human_input_mode='NEVER', code_execution_config=False)\n"
+        "options = ClaudeAgentOptions(permission_mode='bypassPermissions')\n"
+        "tool = HostedMCPTool(tool_config={}, require_approval='never')\n"
+        "agent = Agent(tools=tools, auto_approve=True)\n"
+        "safe = Agent(tools=tools, auto_approve=False, approval_mode='always')\n",
+        encoding="utf-8",
+    )
+
+    found = {
+        item.line: item.owasp for item in scan_project(tmp_path) if item.rule_id == "AGENTLATCH-AG006"
+    }
+
+    assert found == {2: ("ASI09", "ASI05"), 4: ("ASI09", "ASI02"), 5: ("ASI09", "ASI02"), 6: ("ASI09", "ASI02")}
+
+
+def test_unbounded_agent_loops_are_reported(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text(
+        "executor = AgentExecutor(agent=agent, tools=tools, max_iterations=None)\n"
+        "graph.invoke(state, config={'recursion_limit': 10000})\n"
+        "crew = Agent(role='r', max_iter=20)\n"
+        "while True:\n"
+        "    result = crew.kickoff()\n"
+        "while True:\n"
+        "    if agent.invoke(x) == 'done':\n"
+        "        break\n"
+        "while True:\n"
+        "    subprocess.run(['ls'])\n",
+        encoding="utf-8",
+    )
+
+    found = sorted(item.line for item in scan_project(tmp_path) if item.rule_id == "AGENTLATCH-AG007")
+
+    assert found == [1, 2, 4]
+
+
+def test_oversight_findings_in_test_files_are_low_severity(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_approval.py").write_text(
+        "config = RuntimeConfig(approval_mode='auto')\n", encoding="utf-8"
+    )
+
+    [finding] = [item for item in scan_project(tmp_path) if item.rule_id == "AGENTLATCH-AG006"]
+
+    assert (finding.severity, finding.path) == ("low", "tests/test_approval.py")

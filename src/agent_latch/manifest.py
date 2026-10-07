@@ -123,7 +123,8 @@ def _check_tool(tool: _LineDict, path: str) -> list[Finding]:
 
     risky = [cap for cap in capabilities if cap in _HIGH_RISK_CAPABILITIES]
     if risky and not approved:
-        owasp = ("ASI02", "ASI05") if any(cap in _CODE_EXECUTION_CAPABILITIES for cap in risky) else ("ASI02", "ASI03")
+        executes_code = any(cap in _CODE_EXECUTION_CAPABILITIES for cap in risky)
+        owasp = ("ASI02", "ASI05", "ASI09") if executes_code else ("ASI02", "ASI03", "ASI09")
         findings.append(
             Finding(
                 rule_id="AGENTLATCH-MAN001",

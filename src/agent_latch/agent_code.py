@@ -6,6 +6,7 @@
 - AG004: a function exposed to the model as a tool runs shell commands, writes or deletes files,
   sends email, writes to a database, or sends HTTP writes, and no approval gate is visible.
 - AG005: an agent is given an unrestricted built-in tool (shell, Python REPL, file system).
+- AG006 / AG007 (human approval disabled, unbounded agent loops) live in oversight.py.
                                                      (ASI02 Tool Misuse and Exploitation; ASI05/ASI03)
 
 All checks are single-file, name-based heuristics over the AST. Nothing is imported or executed.
@@ -20,7 +21,9 @@ from typing import Any
 
 import yaml
 
+from agent_latch.astutil import walk
 from agent_latch.findings import Finding
+from agent_latch.oversight import scan_oversight
 from agent_latch.prompts import check_prompt_text
 from agent_latch.yamlload import LineDict, line_of, load_yaml
 
@@ -113,7 +116,7 @@ class _PromptCollector:
         )
 
     def visit(self, tree: ast.Module) -> list[Finding]:
-        for node in ast.walk(tree):
+        for node in walk(tree):
             if isinstance(node, ast.Call):
                 self._call(node)
             elif isinstance(node, ast.Tuple) and len(node.elts) == 2:
@@ -305,7 +308,7 @@ class _ToolAnalysis:
         }
 
     def file_has_approval_gate(self) -> bool:
-        for node in ast.walk(self.tree):
+        for node in walk(self.tree):
             if (
                 isinstance(node, ast.keyword)
                 and node.arg in _FILE_APPROVAL_KWARGS
@@ -321,7 +324,7 @@ class _ToolAnalysis:
     def tools(self) -> list[tuple[str, ast.AST, list[_FunctionNode], bool]]:
         """(tool name, report node, bodies to inspect, declares approval)."""
         found: dict[str, tuple[str, ast.AST, list[_FunctionNode], bool]] = {}
-        for node in ast.walk(self.tree):
+        for node in walk(self.tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 flags = [_decorator_tool(decorator) for decorator in node.decorator_list]
                 if any(is_tool for is_tool, _ in flags):
@@ -344,7 +347,7 @@ class _ToolAnalysis:
 
     def _referenced_tool_functions(self) -> set[str]:
         names: set[str] = set()
-        for node in ast.walk(self.tree):
+        for node in walk(self.tree):
             if not isinstance(node, ast.Call):
                 continue
             callee = _last(_dotted(node.func))
@@ -372,7 +375,7 @@ class _ToolAnalysis:
             if id(function) in visited:
                 continue
             visited.add(id(function))
-            for node in ast.walk(function):
+            for node in walk(function):
                 if not isinstance(node, ast.Call):
                     continue
                 if _approval_call(node):
@@ -409,7 +412,8 @@ class _ToolAnalysis:
                     path=self.path,
                     line=node.lineno,
                     column=node.col_offset + 1,
-                    owasp=("ASI02", "ASI05") if executes_code else ("ASI02", "ASI03"),
+                    # ASI09: the PDF lists missing confirmation for sensitive actions as an example.
+                    owasp=("ASI02", "ASI05", "ASI09") if executes_code else ("ASI02", "ASI03", "ASI09"),
                     confidence="medium",
                     evidence=f"tool '{name}' calls {', '.join(ev for _, ev in operations[:3])}; no approval gate",
                 )
@@ -443,7 +447,7 @@ def _builtin_tool_findings(tree: ast.Module, path: str) -> list[Finding]:
             )
         )
 
-    for node in ast.walk(tree):
+    for node in walk(tree):
         if not isinstance(node, ast.Call):
             continue
         name = _last(_dotted(node.func))
@@ -479,4 +483,5 @@ def scan_agent_code(tree: ast.Module, path: str) -> list[Finding]:
         *_PromptCollector(path).visit(tree),
         *_ToolAnalysis(tree, path).findings(),
         *_builtin_tool_findings(tree, path),
+        *scan_oversight(tree, path),
     ]

@@ -13,7 +13,7 @@ Guidance for AI coding agents (and humans) working in this repository.
 
 It reports findings as a terminal table / plain text, JSON, or SARIF, and runs as a CLI, a pre-commit hook, or a composite GitHub Action. Findings map to the OWASP Top 10 for Agentic Applications (informational only).
 
-Status: **early proof of concept (v0.1.0)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
+Status: **early proof of concept (v0.2.0)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
 
 ## Design principle: the scanned project is untrusted
 
@@ -32,21 +32,21 @@ AgentLatch is often run on agents someone else wrote, so nothing inside the scan
 - The shared category list is `ASI_CATEGORIES` in `src/agent_latch/owasp.py`. It is the single source of IDs and names, taken from the PDF's table of contents. Rules emit only IDs in `Finding.owasp`, and reports look up names from `owasp.py`. Never hard-code category names anywhere else in code.
 - When you add a rule, also add its categories to `RULE_CATEGORIES` in `owasp.py`. A test checks every `Finding(...)` against that table and fails on any unknown ID.
 - Every report (terminal, text, JSON `owasp_agentic`, SARIF `owaspAgenticCoverage`) shows an ASI01–ASI10 summary. Categories without rules appear as `no checks yet`, so they are never mistaken for clean results.
-- Prefer filling uncovered categories (ASI06–ASI10) over adding more rules to categories that are already covered.
+- Prefer filling uncovered categories (ASI06, ASI07, ASI10, then deepening ASI08 and ASI09) over adding more rules to categories that are already covered.
 - The mapping is informational. Never claim OWASP compliance, certification, or endorsement.
 - The PDF is an OWASP publication. Don't copy large passages into code or docs. Paraphrase it and link to https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/.
 
 | ID | Category | Current rules |
 |---|---|---|
 | ASI01 | Agent Goal Hijack | `AG003`, `PRM001`, `PRM002` |
-| ASI02 | Tool Misuse and Exploitation | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `MAN001`, `MAN002`, `MAN003` |
+| ASI02 | Tool Misuse and Exploitation | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003` |
 | ASI03 | Identity and Privilege Abuse | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003` |
 | ASI04 | Agentic Supply Chain Vulnerabilities | `SEC001`, `DEP001` |
-| ASI05 | Unexpected Code Execution (RCE) | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `MAN001` |
+| ASI05 | Unexpected Code Execution (RCE) | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001` |
 | ASI06 | Memory & Context Poisoning | none yet |
 | ASI07 | Insecure Inter-Agent Communication | none yet |
-| ASI08 | Cascading Failures | none yet |
-| ASI09 | Human-Agent Trust Exploitation | none yet |
+| ASI08 | Cascading Failures | `AG007` (partial) |
+| ASI09 | Human-Agent Trust Exploitation | `AG004`, `AG006`, `MAN001` (partial) |
 | ASI10 | Rogue Agents | none yet |
 
 Keep this table up to date whenever a rule is added or its OWASP mapping changes.
@@ -57,9 +57,11 @@ Keep this table up to date whenever a rule is added or its OWASP mapping changes
 src/agent_latch/
   __init__.py     # __version__ (keep in sync with pyproject.toml)
   cli.py          # argparse + rich CLI, interactive mode, exit codes, report dispatch
-  findings.py     # Finding dataclass; dedupe() for merging manifest and walker findings
+  findings.py     # Finding dataclass; dedupe() for merging findings; is_test_path() for test-file severity
   rules.py        # PY*/AG001/AG002/SEC001 rules, project walker, prompt-file scan, pip-audit integration
   agent_code.py   # manifest-free agent checks: prompts in code/YAML (PRM*), AG004, AG005
+  oversight.py    # AG006 human approval disabled (ASI09), AG007 unbounded agent loops (ASI08)
+  astutil.py      # cached ast.walk shared by the rule modules
   taint.py        # AG003: untrusted web/HTTP/tool output flowing into LLM messages
   prompts.py      # PRM001/PRM002 text checks shared by code, YAML, prompt files, and manifests
   yamlload.py     # line-aware YAML loading (SafeLoader subclass)
@@ -121,6 +123,8 @@ Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown
 | `AGENTLATCH-AG003` | `taint.py` | web/HTTP/tool output flowing unfenced into LLM messages |
 | `AGENTLATCH-AG004` | `agent_code.py` | model-exposed tool that runs commands, writes files/DB, sends email or HTTP writes, with no approval gate |
 | `AGENTLATCH-AG005` | `agent_code.py` | unrestricted built-in tool (`ShellTool`, `PythonREPLTool`, unscoped `FileManagementToolkit`, ...) |
+| `AGENTLATCH-AG006` | `oversight.py` | human approval disabled (`human_input_mode="NEVER"` with code execution, `auto_approve=True`, ...) |
+| `AGENTLATCH-AG007` | `oversight.py` | agent loop without an effective limit (`max_iterations=None`, huge limits, endless `while True`) |
 | `AGENTLATCH-SEC001` | `rules.py` | credential-like quoted assignments (value redacted) |
 | `AGENTLATCH-DEP001` | `rules.py` | `pip-audit` advisories in `requirements*.txt` |
 | `AGENTLATCH-MAN001` | `manifest.py` | high-risk tool capability without an approval gate |
@@ -148,6 +152,8 @@ Full behavior and blind spots: `docs/RULES.md`.
 - Use `from __future__ import annotations`, type hints, and `pathlib.Path` throughout. Use frozen dataclasses for value types.
 - Rules are static heuristics. Parse with `ast` and never import or execute scanned code. Load YAML only with `yaml.SafeLoader` (see `manifest._LineLoader`).
 - The project walker (`rules.iter_project_files` / `scan_project`) visits every folder and every text file (see the design principle above). By file type: `.py` gets source, agent, and prompt rules; `.yaml`/`.yml` (except manifests, which `manifest.py` handles) gets YAML prompt checks; prompt templates (`rules.PROMPT_SUFFIXES`, and `.md`/`.txt` under a `prompts/` folder) get prompt rules; every text file gets `SEC001`. Keep these limits intentional and documented in `docs/getting-started.md`.
+- Noisy rules report findings in test files (`findings.is_test_path`) at low severity instead of dropping them, so real problems in tests stay visible (`SEC001`, `AG006`, `AG007`).
+- Use `astutil.walk` instead of `ast.walk` for whole-file or whole-function traversals; every rule walks the same tree.
 - Sort findings deterministically (path, line, rule ID) so reports and SARIF stay stable.
 - Suppressions are handled in `suppress.py`: `.agent-latch-ignore` (path / rule / `path:line`), inline `# agent-latch: ignore[RULE]`, and `[tool.agent-latch] exclude` in `pyproject.toml`, all applied only with `--project-ignores`, plus `--exclude` and `--ignore-file`, which always apply. Reports must state how many findings were suppressed. This repo's own self-scan, pre-commit hook, and CI job pass `--project-ignores`.
 - When the CLI writes a report to a file or stdout, send human-facing summaries to stderr so machine-readable output stays clean.

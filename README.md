@@ -37,11 +37,12 @@ Scan an agent project:
 agent-latch scan /path/to/my-agent
 ```
 
+No configuration or agent manifest is needed: every folder and text file is scanned. Suppressions inside the scanned project (`.agent-latch-ignore`, inline ignore comments) are not applied unless you add `--project-ignores`, so a project you scan cannot hide its own findings.
+
 Try it on the bundled, deliberately insecure example:
 
 ```sh
-cd examples/vulnerable-agent
-agent-latch scan --config agent-manifest.yaml
+agent-latch scan examples/vulnerable-agent
 ```
 
 Watch the demo: scanning the example and failing CI with `--fail-on high`.
@@ -51,7 +52,8 @@ Watch the demo: scanning the example and failing CI with `--fail-on high`.
 More ways to run it:
 
 ```sh
-agent-latch scan --config agent-manifest.yaml        # audit declared tools and prompts
+agent-latch scan --config agent-manifest.yaml        # also audit a manifest's declared tools (optional)
+agent-latch scan . --project-ignores                 # your own repo: apply its .agent-latch-ignore
 agent-latch scan . --dependencies                    # add known-vulnerability checks (sends package names to PyPI)
 agent-latch scan . --fail-on high                    # exit 1 on high-severity findings, for CI
 agent-latch scan . --exclude tests/                  # skip a path for one run
@@ -62,10 +64,13 @@ agent-latch --interactive                            # guided mode
 Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-commit-hook) or the GitHub Action ([setup guide](docs/ci.md#github-actions), [Marketplace listing](https://github.com/marketplace/actions/agentlatch-scan)):
 
 ```yaml
-- uses: AgentLatch/agent-latch@v0.1.0
+- uses: AgentLatch/agent-latch@v0.2.0
   with:
     fail-on: high
+    # project-ignores: "true"   # apply your repo's .agent-latch-ignore (see the note below)
 ```
+
+> **Upgrading from v0.1.0:** the project's own `.agent-latch-ignore`, `pyproject.toml` excludes, and inline ignore comments are no longer applied by default. If your repository relies on them, add `project-ignores: "true"` to the Action or `--project-ignores` on the command line. See the [v0.2.0 release notes](docs/release-notes/v0.2.0.md).
 
 ## Documentation
 
@@ -99,17 +104,19 @@ These layers will remain clearly distinguished: detecting a risky pattern is not
 | `AGENTLATCH-AG001` | CrewAI `Agent(..., allow_delegation=True)` review hint | ASI02 Tool Misuse and Exploitation; ASI03 Identity and Privilege Abuse |
 | `AGENTLATCH-AG002` | LangChain `create_pandas_dataframe_agent(...)` code-execution capability | ASI05 Unexpected Code Execution (RCE); ASI02 Tool Misuse and Exploitation |
 | `AGENTLATCH-AG003` | Web-search, web-loader, or HTTP output flowing unfenced into an LLM message (indirect prompt injection) | ASI01 Agent Goal Hijack |
-| `AGENTLATCH-AG004` | Function exposed to the model as a tool that runs commands, writes files, sends email, or writes data, with no human-approval gate | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03 |
+| `AGENTLATCH-AG004` | Function exposed to the model as a tool that runs commands, writes files, sends email, or writes data, with no human-approval gate | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03; ASI09 |
 | `AGENTLATCH-AG005` | Agent given an unrestricted built-in tool (shell, Python REPL, unscoped file access) | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03 |
+| `AGENTLATCH-AG006` | Human approval turned off for agent actions (`human_input_mode="NEVER"` with code execution, `auto_approve=True`, `permission_mode="bypassPermissions"`) | ASI09 Human-Agent Trust Exploitation; ASI05 / ASI02 |
+| `AGENTLATCH-AG007` | Agent loop with no effective limit (`max_iterations=None`, very high limits, `while True` around an agent call) | ASI08 Cascading Failures |
 | `AGENTLATCH-SEC001` | Credential-like quoted assignments; matched value is redacted | ASI03 Identity and Privilege Abuse; ASI04 Agentic Supply Chain Vulnerabilities |
 | `AGENTLATCH-DEP001` | Known advisory for a package in an audited requirements file | ASI04 Agentic Supply Chain Vulnerabilities |
-| `AGENTLATCH-MAN001` | Manifest tool with a high-risk capability and no human-approval gate | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03 |
+| `AGENTLATCH-MAN001` | Manifest tool with a high-risk capability and no human-approval gate | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03; ASI09 |
 | `AGENTLATCH-MAN002` | Manifest tool with wildcard permissions | ASI02 Tool Misuse and Exploitation; ASI03 Identity and Privilege Abuse |
 | `AGENTLATCH-MAN003` | Manifest tool calling a remote endpoint without authentication | ASI03 Identity and Privilege Abuse; ASI02 Tool Misuse and Exploitation |
 | `AGENTLATCH-PRM001` | Prompt-injection signatures in prompts in code, YAML, prompt template files, and manifests | ASI01 Agent Goal Hijack |
 | `AGENTLATCH-PRM002` | User-input placeholder interpolated into a system prompt | ASI01 Agent Goal Hijack |
 
-AgentLatch has no checks yet for ASI06 Memory & Context Poisoning, ASI07 Insecure Inter-Agent Communication, ASI08 Cascading Failures, ASI09 Human-Agent Trust Exploitation, or ASI10 Rogue Agents. Every report ends with an ASI01–ASI10 summary showing finding counts and marking these categories as `no checks yet`, so they aren't mistaken for clean results.
+ASI08 and ASI09 have their first, partial checks (`AG007`, `AG006`, and `AG004`/`MAN001` for missing confirmation). AgentLatch has no checks yet for ASI06 Memory & Context Poisoning, ASI07 Insecure Inter-Agent Communication, or ASI10 Rogue Agents. Every report ends with an ASI01–ASI10 summary showing finding counts and marking these categories as `no checks yet`, so they aren't mistaken for clean results.
 
 Rule behavior and known blind spots are documented in [docs/RULES.md](docs/RULES.md). OWASP mappings are informational references, not an OWASP endorsement or certification.
 
@@ -146,7 +153,7 @@ The source rules work on any Python code. Framework-specific checks cover CrewAI
 
 ### How do I check AI agent security in CI or GitHub Actions?
 
-Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) (`uses: AgentLatch/agent-latch@v0.1.0`) to scan every push and pull request and show findings in GitHub code scanning, or the [pre-commit hook](docs/ci.md#pre-commit-hook) to block risky commits. Any other CI can run `agent-latch scan --fail-on high`, which exits with code 1 when high-severity findings exist.
+Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) (`uses: AgentLatch/agent-latch@v0.2.0`) to scan every push and pull request and show findings in GitHub code scanning, or the [pre-commit hook](docs/ci.md#pre-commit-hook) to block risky commits. Any other CI can run `agent-latch scan --fail-on high`, which exits with code 1 when high-severity findings exist.
 
 ### Does AgentLatch upload my code or call an LLM?
 

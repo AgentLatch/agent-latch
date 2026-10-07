@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-latch"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first AI agent security scanner: checks agent code, tool manifests, and prompts for prompt injection, over-privileged tools, and secrets."
 readme = "README.md"
 requires-python = ">=3.11"
