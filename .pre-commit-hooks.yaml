@@ -2,7 +2,7 @@
   name: AgentLatch security scan
   description: Local-first security checks for AI-agent source, manifests, and prompt templates.
   entry: agent-latch scan
-  args: [--fail-on, high]
+  args: [--fail-on, high, --project-ignores]
   language: python
   pass_filenames: false
   types_or: [python, yaml, markdown, text]

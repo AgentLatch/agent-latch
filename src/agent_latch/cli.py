@@ -14,7 +14,9 @@ from rich.text import Text
 from rich_argparse import RawDescriptionRichHelpFormatter
 
 from agent_latch import __version__
+from agent_latch.findings import dedupe
 from agent_latch.manifest import ManifestError, find_manifest, scan_manifest
+from agent_latch.owasp import OWASP_AGENTIC_TITLE, category_label, coverage, coverage_status
 from agent_latch.report import json_report, sarif_report, severity_sort_key, text_report
 from agent_latch.rules import (
     DependencyAuditError,
@@ -22,13 +24,14 @@ from agent_latch.rules import (
     audit_requirements,
     scan_project,
 )
-from agent_latch.suppress import ConfigError, filter_findings, load_ignore_rules
+from agent_latch.suppress import IGNORE_FILE, ConfigError, filter_findings, load_ignore_rules
 
 _EPILOG = """\
 [bold bright_cyan]EXAMPLES:[/bold bright_cyan]
   [cyan]agent-latch scan[/cyan]                                   scan the current directory
   [cyan]agent-latch scan --config agent-manifest.yaml[/cyan]      audit tools and prompts in a manifest
   [cyan]agent-latch scan ./my-agent --fail-on high[/cyan]         fail CI on high-severity findings
+  [cyan]agent-latch scan . --project-ignores[/cyan]               your own repo: apply its .agent-latch-ignore
   [cyan]agent-latch scan --format sarif --output results.sarif[/cyan]
   [cyan]agent-latch --interactive[/cyan]                          guided scan
 
@@ -83,6 +86,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ignore file of accepted findings (default: .agent-latch-ignore in the target, if present)",
     )
     checks.add_argument(
+        "--project-ignores",
+        action="store_true",
+        help=(
+            "Apply suppressions from the scanned project itself (.agent-latch-ignore, pyproject excludes, "
+            "inline ignore comments). Off by default, because the project's author controls them; "
+            "use only for code you trust. --exclude and --ignore-file always apply"
+        ),
+    )
+    checks.add_argument(
         "--dependencies",
         action="store_true",
         help="Audit requirements*.txt with pip-audit (contacts advisory service; no package install)",
@@ -113,6 +125,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _render_coverage(console: Console, findings: list[Finding]) -> None:
+    table = Table(
+        title=f"{OWASP_AGENTIC_TITLE} · informational mapping",
+        title_style="bold",
+        show_edge=False,
+    )
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Category")
+    table.add_column("Status")
+    for entry in coverage(findings):
+        if not entry["has_checks"]:
+            style = "dim"
+        elif entry["finding_count"]:
+            style = "bold red"
+        else:
+            style = "green"
+        table.add_row(entry["id"], entry["name"], Text(coverage_status(entry), style=style))
+    console.print(table)
+
+
 def _render_findings(console: Console, findings: list[Finding]) -> None:
     if not findings:
         console.print(
@@ -122,13 +154,14 @@ def _render_findings(console: Console, findings: list[Finding]) -> None:
                 border_style="green",
             )
         )
+        _render_coverage(console, findings)
         return
 
     table = Table(title=f"Security findings · {len(findings)}", show_lines=True)
     table.add_column("Severity", no_wrap=True)
     table.add_column("Rule", style="cyan", no_wrap=True)
     table.add_column("Location", style="dim")
-    table.add_column("OWASP")
+    table.add_column("OWASP Agentic")
     table.add_column("Finding")
 
     for finding in sorted(findings, key=severity_sort_key):
@@ -140,10 +173,11 @@ def _render_findings(console: Console, findings: list[Finding]) -> None:
             Text(finding.severity.upper(), style=style),
             Text(finding.rule_id),
             Text(f"{finding.path}:{finding.line}:{finding.column}"),
-            Text(", ".join(finding.owasp) or "—"),
+            Text("\n".join(category_label(cid) for cid in finding.owasp) or "—"),
             detail,
         )
     console.print(table)
+    _render_coverage(console, findings)
     console.print("[dim]Findings need human review; they are not a security certification.[/dim]")
 
 
@@ -165,7 +199,8 @@ def _print_fail_summary(blocking: list[Finding], fail_on: str) -> None:
         line.append(f"  {finding.title}")
         console.print(line)
     console.print(
-        "[dim]Fix these, ignore known ones in .agent-latch-ignore, or raise --fail-on.[/]"
+        "[dim]Fix these, list accepted ones in .agent-latch-ignore (applied with --project-ignores), "
+        "or raise --fail-on.[/]"
     )
 
 
@@ -251,6 +286,10 @@ def interactive_main() -> int:
             console.print(Text(f"Path not found: {target}", style="bold red"))
             return 2
 
+        project_ignores = Confirm.ask(
+            "Apply this project's own ignore file and inline ignore comments? Choose yes only for code you trust.",
+            default=False,
+        )
         include_dependencies = Confirm.ask(
             "Run optional Python dependency audit? It contacts the advisory service with package names and versions.",
             default=False,
@@ -260,7 +299,7 @@ def interactive_main() -> int:
         with console.status("[bold cyan]Scanning source and configuration files…"):
             findings = scan_project(target)
             if manifest is not None:
-                findings.extend(scan_manifest(manifest, target))
+                findings = dedupe([*scan_manifest(manifest, target), *findings])
 
         dependency_manifests: int | None = None
         if include_dependencies:
@@ -269,7 +308,12 @@ def interactive_main() -> int:
             findings.extend(dependency_findings)
 
         base = target if target.is_dir() else target.parent
-        findings, suppressed = filter_findings(findings, base, load_ignore_rules(target))
+        findings, suppressed = filter_findings(
+            findings,
+            base,
+            load_ignore_rules(target, project_config=project_ignores),
+            inline=project_ignores,
+        )
 
         console.print()
         _render_scan(console, findings, target, manifest, dependency_manifests, suppressed)
@@ -317,10 +361,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         manifest = find_manifest(target)
 
+    # Source checks always run; a manifest only adds findings and can never hide them.
     findings = scan_project(target)
     if manifest is not None:
         try:
-            findings.extend(scan_manifest(manifest, target))
+            findings = dedupe([*scan_manifest(manifest, target), *findings])
         except ManifestError as exc:
             print(f"Manifest error: {exc}", file=sys.stderr)
             return 2
@@ -337,12 +382,20 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         ignore_file = Path(args.ignore_file).expanduser() if args.ignore_file else None
-        ignore_rules = load_ignore_rules(target, args.exclude, ignore_file)
+        ignore_rules = load_ignore_rules(
+            target, args.exclude, ignore_file, project_config=args.project_ignores
+        )
     except ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
     base = target if target.is_dir() else target.parent
-    findings, suppressed = filter_findings(findings, base, ignore_rules)
+    findings, suppressed = filter_findings(findings, base, ignore_rules, inline=args.project_ignores)
+    if not args.project_ignores and ignore_file is None and (base / IGNORE_FILE).is_file():
+        print(
+            f"Note: {IGNORE_FILE} in the scanned project was not applied. "
+            "Add --project-ignores if you trust this project.",
+            file=sys.stderr,
+        )
 
     if args.format == "json":
         report = json_report(findings, str(target), dependency_manifests, manifest_text, suppressed)

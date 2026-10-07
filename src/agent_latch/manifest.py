@@ -6,15 +6,17 @@ observe what the agent actually does at runtime.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from agent_latch.rules import Finding, scan_secrets
-
-MANIFEST_NAMES = ("agent-manifest.yaml", "agent-manifest.yml")
+from agent_latch.findings import Finding
+from agent_latch.prompts import check_prompt_text
+from agent_latch.rules import MANIFEST_NAMES, scan_secrets
+from agent_latch.yamlload import LineDict as _LineDict
+from agent_latch.yamlload import LineLoader as _LineLoader
+from agent_latch.yamlload import line_of as _line_of
 
 _HIGH_RISK_CAPABILITIES = {
     "shell",
@@ -42,46 +44,9 @@ _CAPABILITY_KEYS = ("capabilities", "permissions", "scopes")
 _ENDPOINT_KEYS = ("endpoint", "url", "base_url", "server")
 _NO_AUTH_VALUES = {"none", "false", "anonymous", "no", "off", ""}
 
-_INJECTION_SIGNATURES = (
-    re.compile(r"(?i)\bignore\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|prompts|rules)"),
-    re.compile(r"(?i)\bdisregard\s+(?:all\s+)?(?:the\s+|your\s+)?(?:previous|prior|above|system)\s+(?:instructions|prompts|rules)"),
-    re.compile(r"(?i)\byou\s+are\s+now\s+(?:in\s+)?(?:developer\s+mode|dan\b|jailbroken|unrestricted)"),
-    re.compile(r"(?i)\b(?:reveal|print|output)\s+(?:your|the)\s+(?:system\s+prompt|hidden\s+instructions)"),
-    re.compile(r"(?i)\bwithout\s+(?:telling|informing|notifying)\s+the\s+user\b"),
-)
-_UNTRUSTED_PLACEHOLDER = re.compile(
-    r"(\{\{\s*|\$\{|\{)\s*(\w*(?:user|input|query|message|request|question)\w*)\s*(?:\}\}|\})",
-    re.IGNORECASE,
-)
-
 
 class ManifestError(ValueError):
     """Raised when a manifest cannot be read or parsed."""
-
-
-class _LineDict(dict):
-    """Mapping that remembers the source line of itself and of each key."""
-
-    line: int = 1
-    key_lines: dict[str, int]
-
-
-class _LineLoader(yaml.SafeLoader):
-    pass
-
-
-def _construct_mapping(loader: _LineLoader, node: yaml.MappingNode) -> _LineDict:
-    mapping = _LineDict(loader.construct_mapping(node, deep=True))
-    mapping.line = node.start_mark.line + 1
-    mapping.key_lines = {
-        str(key.value): key.start_mark.line + 1
-        for key, _ in node.value
-        if isinstance(key, yaml.ScalarNode)
-    }
-    return mapping
-
-
-_LineLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping)
 
 
 def find_manifest(target: Path) -> Path | None:
@@ -110,12 +75,6 @@ def _display_path(path: Path, root: Path) -> str:
         return path.resolve().relative_to(root).as_posix()
     except ValueError:
         return path.as_posix()
-
-
-def _line_of(mapping: Any, key: str) -> int:
-    if isinstance(mapping, _LineDict):
-        return mapping.key_lines.get(key, mapping.line)
-    return 1
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -164,7 +123,8 @@ def _check_tool(tool: _LineDict, path: str) -> list[Finding]:
 
     risky = [cap for cap in capabilities if cap in _HIGH_RISK_CAPABILITIES]
     if risky and not approved:
-        owasp = ("ASI02", "ASI05") if any(cap in _CODE_EXECUTION_CAPABILITIES for cap in risky) else ("ASI02", "ASI03")
+        executes_code = any(cap in _CODE_EXECUTION_CAPABILITIES for cap in risky)
+        owasp = ("ASI02", "ASI05", "ASI09") if executes_code else ("ASI02", "ASI03", "ASI09")
         findings.append(
             Finding(
                 rule_id="AGENTLATCH-MAN001",
@@ -215,51 +175,7 @@ def _check_tool(tool: _LineDict, path: str) -> list[Finding]:
     return findings
 
 
-def _check_prompt_text(text: str, path: str, base_line: int, label: str, is_system: bool) -> list[Finding]:
-    findings: list[Finding] = []
-    for offset, line in enumerate(text.splitlines()):
-        for signature in _INJECTION_SIGNATURES:
-            match = signature.search(line)
-            if match:
-                findings.append(
-                    Finding(
-                        rule_id="AGENTLATCH-PRM001",
-                        title="Prompt-injection signature in prompt",
-                        severity="medium",
-                        message=(
-                            f"{label} contains an instruction-override phrase commonly used in prompt injection. "
-                            "Check whether this text came from an untrusted source."
-                        ),
-                        path=path,
-                        line=base_line + offset,
-                        column=match.start() + 1,
-                        owasp=("ASI01",),
-                        confidence="medium",
-                        evidence=f'"{match.group(0)[:80]}"',
-                    )
-                )
-                break
-        if is_system:
-            match = _UNTRUSTED_PLACEHOLDER.search(line)
-            if match:
-                findings.append(
-                    Finding(
-                        rule_id="AGENTLATCH-PRM002",
-                        title="Untrusted input interpolated into system prompt",
-                        severity="medium",
-                        message=(
-                            f"{label} inserts a user-controlled variable into system-level instructions. "
-                            "Pass user input in the user turn, delimited and labeled as data."
-                        ),
-                        path=path,
-                        line=base_line + offset,
-                        column=match.start() + 1,
-                        owasp=("ASI01",),
-                        confidence="low",
-                        evidence=f"placeholder {match.group(0)}",
-                    )
-                )
-    return findings
+_check_prompt_text = check_prompt_text
 
 
 def _block_offset(agent: _LineDict, key: str) -> int:
@@ -316,10 +232,9 @@ def _check_agent_prompts(
             continue
         label = f"Prompt template for agent '{name}'"
         findings.extend(_check_prompt_text(text, template_display, 1, label, is_system))
-        if template.suffix.lower() not in {".py", ".env", ".txt", ".toml", ".yaml", ".yml"}:
-            # scan_project skips these suffixes, so check referenced templates for secrets here.
-            secrets_root = root if template.is_relative_to(root) else template.parent
-            findings.extend(scan_secrets(template, secrets_root, text))
+        if not template.is_relative_to(root):
+            # scan_project covers every file inside the target; templates outside it are checked here.
+            findings.extend(scan_secrets(template, template.parent, text))
     return findings
 
 

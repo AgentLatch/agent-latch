@@ -62,4 +62,5 @@ jobs:
         with:
           path: .
           fail-on: high
+          project-ignores: "true"
           upload-sarif: "false"

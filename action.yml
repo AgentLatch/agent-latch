@@ -15,6 +15,9 @@ inputs:
   fail-on:
     description: Fail the step on findings of this severity or higher (none, low, medium, high, critical).
     default: high
+  project-ignores:
+    description: Apply the scanned project's own .agent-latch-ignore, pyproject excludes, and inline ignore comments. Leave "false" when scanning pull requests or code you do not control, since their authors can edit these.
+    default: "false"
   dependencies:
     description: Also audit requirements*.txt with pip-audit (sends package names and versions to PyPI's advisory service).
     default: "false"
@@ -66,11 +69,13 @@ runs:
         CONFIG: ${{ inputs.config }}
         FAIL_ON: ${{ inputs.fail-on }}
         DEPENDENCIES: ${{ inputs.dependencies }}
+        PROJECT_IGNORES: ${{ inputs.project-ignores }}
         SARIF_FILE: ${{ inputs.sarif-file }}
       run: |
         args=(scan "$SCAN_PATH" --format sarif --output "$SARIF_FILE" --fail-on "$FAIL_ON")
         if [ -n "$CONFIG" ]; then args+=(--config "$CONFIG"); fi
         if [ "$DEPENDENCIES" = "true" ]; then args+=(--dependencies); fi
+        if [ "$PROJECT_IGNORES" = "true" ]; then args+=(--project-ignores); fi
         set +e
         "$RUNNER_TEMP/agent-latch-venv/bin/agent-latch" "${args[@]}"
         code=$?
