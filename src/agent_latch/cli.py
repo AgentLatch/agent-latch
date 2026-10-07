@@ -32,12 +32,15 @@ _EPILOG = """\
   [cyan]agent-latch scan --config agent-manifest.yaml[/cyan]      audit tools and prompts in a manifest
   [cyan]agent-latch scan ./my-agent --fail-on high[/cyan]         fail CI on high-severity findings
   [cyan]agent-latch scan . --project-ignores[/cyan]               your own repo: apply its .agent-latch-ignore
+  [cyan]agent-latch scan . --min-severity medium[/cyan]           hide low and info findings
   [cyan]agent-latch scan --format sarif --output results.sarif[/cyan]
   [cyan]agent-latch --interactive[/cyan]                          guided scan
 
 [dim]Scans run locally. Findings are heuristics, not a security certification.[/dim]
 """
 
+
+_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 SEVERITY_STYLES = {
     "critical": "bold white on red",
@@ -113,6 +116,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--plain",
         action="store_true",
         help="Plain-text report even in a terminal (the table is used only when stdout is a terminal)",
+    )
+
+    output.add_argument(
+        "--min-severity",
+        choices=("info", "low", "medium", "high", "critical"),
+        default="info",
+        help=(
+            "Report only findings at or above this severity (default: info, i.e. all). Hidden findings are "
+            "counted in the report; unknown-severity findings are always shown"
+        ),
     )
 
     ci = parser.add_argument_group("CI")
@@ -204,6 +217,17 @@ def _print_fail_summary(blocking: list[Finding], fail_on: str) -> None:
     )
 
 
+def filter_min_severity(findings: list[Finding], min_severity: str) -> tuple[list[Finding], int]:
+    """Drop findings below min_severity. Unknown severity is kept, so it can still fail closed."""
+    threshold = _SEVERITY_RANK[min_severity]
+    kept = [
+        finding
+        for finding in findings
+        if finding.severity not in _SEVERITY_RANK or _SEVERITY_RANK[finding.severity] <= threshold
+    ]
+    return kept, len(findings) - len(kept)
+
+
 def _render_scan(
     console: Console,
     findings: list[Finding],
@@ -211,6 +235,8 @@ def _render_scan(
     manifest: Path | None,
     dependency_manifests: int | None,
     suppressed: int = 0,
+    min_severity: str = "info",
+    hidden: int = 0,
 ) -> None:
     target_message = Text("Target: ", style="bold")
     target_message.append(str(target))
@@ -230,6 +256,8 @@ def _render_scan(
             )
     if suppressed:
         console.print(f"[dim]{suppressed} finding(s) suppressed by ignore rules or inline comments.[/dim]")
+    if hidden:
+        console.print(f"[dim]{hidden} finding(s) below --min-severity {min_severity} not shown.[/dim]")
     _render_findings(console, findings)
 
 
@@ -348,6 +376,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.interactive:
         return interactive_main()
 
+    if args.fail_on != "none" and _SEVERITY_RANK[args.min_severity] < _SEVERITY_RANK[args.fail_on]:
+        print(
+            f"Error: --min-severity {args.min_severity} would hide {args.fail_on} findings that "
+            f"--fail-on {args.fail_on} fails on. Use a --min-severity at or below --fail-on.",
+            file=sys.stderr,
+        )
+        return 2
+
     target = Path(args.path).expanduser().resolve()
     if not target.exists():
         print(f"Error: scan target does not exist: {target}", file=sys.stderr)
@@ -390,6 +426,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     base = target if target.is_dir() else target.parent
     findings, suppressed = filter_findings(findings, base, ignore_rules, inline=args.project_ignores)
+    findings, hidden = filter_min_severity(findings, args.min_severity)
+    shown_min = args.min_severity if args.min_severity != "info" else None
     if not args.project_ignores and ignore_file is None and (base / IGNORE_FILE).is_file():
         print(
             f"Note: {IGNORE_FILE} in the scanned project was not applied. "
@@ -398,14 +436,22 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.format == "json":
-        report = json_report(findings, str(target), dependency_manifests, manifest_text, suppressed)
+        report = json_report(
+            findings, str(target), dependency_manifests, manifest_text, suppressed, shown_min, hidden
+        )
     elif args.format == "sarif":
-        report = sarif_report(findings, str(target), dependency_manifests, manifest_text)
+        report = sarif_report(
+            findings, str(target), dependency_manifests, manifest_text, suppressed, shown_min, hidden
+        )
     else:
-        report = text_report(findings, str(target), dependency_manifests, manifest_text, suppressed)
+        report = text_report(
+            findings, str(target), dependency_manifests, manifest_text, suppressed, shown_min, hidden
+        )
 
     if args.format == "text" and not args.output and not args.plain and sys.stdout.isatty():
-        _render_scan(Console(), findings, target, manifest, dependency_manifests, suppressed)
+        _render_scan(
+            Console(), findings, target, manifest, dependency_manifests, suppressed, args.min_severity, hidden
+        )
     elif args.output:
         output = Path(args.output).expanduser()
         output.parent.mkdir(parents=True, exist_ok=True)

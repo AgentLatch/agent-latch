@@ -54,6 +54,7 @@ More ways to run it:
 ```sh
 agent-latch scan --config agent-manifest.yaml        # also audit a manifest's declared tools (optional)
 agent-latch scan . --project-ignores                 # your own repo: apply its .agent-latch-ignore
+agent-latch scan . --min-severity medium             # hide low and info findings (still counted)
 agent-latch scan . --dependencies                    # add known-vulnerability checks (sends package names to PyPI)
 agent-latch scan . --fail-on high                    # exit 1 on high-severity findings, for CI
 agent-latch scan . --exclude tests/                  # skip a path for one run
@@ -64,9 +65,10 @@ agent-latch --interactive                            # guided mode
 Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-commit-hook) or the GitHub Action ([setup guide](docs/ci.md#github-actions), [Marketplace listing](https://github.com/marketplace/actions/agentlatch-scan)):
 
 ```yaml
-- uses: AgentLatch/agent-latch@v0.2.0
+- uses: AgentLatch/agent-latch@v0.2.1
   with:
     fail-on: high
+    # min-severity: medium      # optional: hide low and info findings
     # project-ignores: "true"   # apply your repo's .agent-latch-ignore (see the note below)
 ```
 
@@ -153,7 +155,7 @@ The source rules work on any Python code. Framework-specific checks cover CrewAI
 
 ### How do I check AI agent security in CI or GitHub Actions?
 
-Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) (`uses: AgentLatch/agent-latch@v0.2.0`) to scan every push and pull request and show findings in GitHub code scanning, or the [pre-commit hook](docs/ci.md#pre-commit-hook) to block risky commits. Any other CI can run `agent-latch scan --fail-on high`, which exits with code 1 when high-severity findings exist.
+Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) (`uses: AgentLatch/agent-latch@v0.2.1`) to scan every push and pull request and show findings in GitHub code scanning, or the [pre-commit hook](docs/ci.md#pre-commit-hook) to block risky commits. Any other CI can run `agent-latch scan --fail-on high`, which exits with code 1 when high-severity findings exist.
 
 ### Does AgentLatch upload my code or call an LLM?
 

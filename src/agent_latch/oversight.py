@@ -14,10 +14,9 @@ Single-file, name-based heuristics over the AST. Nothing is imported or executed
 from __future__ import annotations
 
 import ast
-from dataclasses import replace
 
 from agent_latch.astutil import walk
-from agent_latch.findings import Finding, is_test_path
+from agent_latch.findings import Finding
 
 # ---------------------------------------------------------------- shared helpers
 
@@ -222,16 +221,5 @@ def _loop_finding(node: ast.AST, path: str, evidence: str, why: str) -> Finding:
 
 
 def scan_oversight(tree: ast.Module, path: str) -> list[Finding]:
-    """AG006 and AG007 for one parsed Python file. Test files report at low severity."""
-    findings = [*_approval_findings(tree, path), *_loop_findings(tree, path)]
-    if not is_test_path(path):
-        return findings
-    return [
-        replace(
-            finding,
-            severity="low",
-            confidence="low",
-            message=finding.message + " This is a test file, so it is reported at low severity.",
-        )
-        for finding in findings
-    ]
+    """AG006 and AG007 for one parsed Python file. scan_python lowers test-file severity."""
+    return [*_approval_findings(tree, path), *_loop_findings(tree, path)]

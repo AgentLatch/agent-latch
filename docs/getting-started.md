@@ -125,6 +125,7 @@ agent-latch [scan] [path] [options]
 | `--dependencies` | Audit `requirements*.txt` with pip-audit. Contacts an advisory service. |
 | `-i`, `--interactive` | Guided terminal scanner. |
 | `--format {text,json,sarif}` | Report format. Default: `text`. |
+| `--min-severity {info,low,medium,high,critical}` | Report only findings at or above this severity. Default: `info` (everything). Hidden findings are counted in the report, and unknown-severity findings are always shown. It cannot be above `--fail-on`, so it never hides a finding that would fail the scan. |
 | `--output FILE` | Write the report to a file instead of the terminal. |
 | `--plain` | Plain-text report even in a terminal. |
 | `--fail-on {none,low,medium,high,critical}` | Exit 1 when a finding at or above this severity exists. Default: `none`. |

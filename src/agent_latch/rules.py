@@ -14,7 +14,7 @@ from typing import Any
 
 from agent_latch.agent_code import scan_agent_code, scan_prompt_yaml
 from agent_latch.astutil import walk
-from agent_latch.findings import Finding, is_test_path
+from agent_latch.findings import Finding, demote_test_findings, is_test_path
 from agent_latch.prompts import check_prompt_text
 from agent_latch.taint import find_untrusted_prompt_flows
 
@@ -206,7 +206,7 @@ def scan_python(path: Path, root: Path, source: str) -> list[Finding]:
         )
 
     findings.extend(scan_agent_code(tree, _relative(path, root)))
-    return findings
+    return demote_test_findings(findings, _relative(path, root))
 
 
 def is_prompt_file(relative_parts: tuple[str, ...]) -> bool:

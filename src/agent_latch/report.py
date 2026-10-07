@@ -57,6 +57,8 @@ def json_report(
     dependency_manifests: int | None = None,
     manifest: str | None = None,
     suppressed: int = 0,
+    min_severity: str | None = None,
+    hidden: int = 0,
 ) -> str:
     payload = {
         "scanner": {"name": "AgentLatch", "version": __version__},
@@ -64,6 +66,8 @@ def json_report(
         "manifest": manifest,
         "finding_count": len(findings),
         "suppressed_count": suppressed,
+        "min_severity": min_severity,
+        "hidden_below_min_severity": hidden,
         "dependency_audit": (
             {
                 "status": "completed" if dependency_manifests else "no_supported_manifests",
@@ -90,6 +94,9 @@ def sarif_report(
     scanned_path: str,
     dependency_manifests: int | None = None,
     manifest: str | None = None,
+    suppressed: int = 0,
+    min_severity: str | None = None,
+    hidden: int = 0,
 ) -> str:
     rules_by_id: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
@@ -156,6 +163,9 @@ def sarif_report(
                         else "not_requested"
                     ),
                     "owaspAgenticCoverage": coverage(findings),
+                    "suppressedCount": suppressed,
+                    "minSeverity": min_severity,
+                    "hiddenBelowMinSeverityCount": hidden,
                 },
                 "results": results,
             }
@@ -170,12 +180,16 @@ def text_report(
     dependency_manifests: int | None = None,
     manifest: str | None = None,
     suppressed: int = 0,
+    min_severity: str | None = None,
+    hidden: int = 0,
 ) -> str:
     header = f"AgentLatch scan: {scanned_path}"
     if manifest is not None:
         header += f"\nManifest: {manifest}"
     if suppressed:
         header += f"\n{suppressed} finding(s) suppressed by ignore rules or inline comments."
+    if hidden:
+        header += f"\n{hidden} finding(s) below --min-severity {min_severity} not shown."
     if not findings:
         lines = [
             header,
