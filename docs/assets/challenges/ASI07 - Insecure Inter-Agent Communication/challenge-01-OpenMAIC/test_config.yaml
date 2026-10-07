@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/THU-MAIC/OpenMAIC"
+commit_hash: "7230053af019b89c83d22dcab0a94f38fe193856"
+proxy_mode: "enforce"
+timeout_seconds: 30
