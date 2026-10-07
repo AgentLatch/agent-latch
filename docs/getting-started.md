@@ -88,7 +88,7 @@ The `scan` verb is optional: `agent-latch ~/projects/my-agent` does the same thi
 agent-latch --interactive
 ```
 
-The wizard asks for a target, asks whether to run the networked dependency audit (default **No**), shows findings in a table, and offers JSON or SARIF export. It uses `agent-manifest.yaml` and `.agent-latch-ignore` from the target automatically; for a manifest elsewhere, use `--config` on the command line instead.
+The wizard asks for a target, asks whether to run the networked dependency audit (default **No**), shows findings in a table, and offers JSON or SARIF export. It uses `agent-manifest.yaml` from the target automatically and asks whether to apply the project's own ignore file and inline comments (default **No**); for a manifest elsewhere, use `--config` on the command line instead.
 
 ### Scan many agents at once
 
@@ -100,12 +100,14 @@ for d in ~/projects/agents/*/; do agent-latch scan "$d"; done
 
 | Files | Checks |
 |---|---|
-| `*.py` | Source rules (`PY*`, `AG*`) and secrets (`SEC001`) |
-| `*.yaml`, `*.yml`, `*.toml`, `*.txt`, `.env*` | Secrets (`SEC001`) |
-| `agent-manifest.yaml` in the target directory, and prompt files it references | Manifest and prompt rules (`MAN*`, `PRM*`); referenced prompt files are also checked for secrets |
+| `*.py` | Source rules (`PY*`, `AG*`), prompts written in code (`PRM*`), and secrets (`SEC001`) |
+| `*.yaml`, `*.yml` | Prompt-like keys such as `system_prompt`, `instructions`, `goal`, `backstory`, `prompt` (`PRM*`), and secrets |
+| `*.prompt`, `*.prompty`, `*.j2`, `*.jinja`, `*.jinja2`, and `*.md`/`*.txt` inside a `prompts/` folder | Prompt rules (`PRM*`) and secrets |
+| `*.toml`, `*.txt`, `.env*` | Secrets (`SEC001`) |
+| `agent-manifest.yaml` in the target directory, and prompt files it references | Manifest rules (`MAN*`) and prompt rules (`PRM*`); referenced prompt files are also checked for secrets |
 | `requirements*.txt` | Dependency advisories (`DEP001`), only with `--dependencies` |
 
-Other file types, such as Markdown, JSON, and JavaScript, are not scanned unless a manifest references them as prompt files. Skipped: `.git`, `.venv`, `venv`, `node_modules`, `__pycache__`, `.tox`, symlinks, and files over 1 MB. See [RULES.md](RULES.md) for what each rule detects and misses.
+No manifest is needed: every folder under the target is walked, and the `AG*` and `PRM*` checks run on source and prompt files directly. A manifest adds the `MAN*` checks; it can add findings but never hides them, so a misleading manifest cannot make a project look cleaner. Every other text file (JSON, JavaScript, shell scripts, Markdown, and so on) is checked for secrets (`SEC001`). Skipped: `.git`; installed environments, meaning a folder containing `pyvenv.cfg`, a `.tox` folder of such environments, or a `node_modules` folder with a package-manager marker such as `.package-lock.json`; symlinks, which can point outside the project; binary files; and files over 1 MB. A folder that is only *named* `venv` or `node_modules` is still scanned, so a project cannot hide code by naming a folder that way. See [RULES.md](RULES.md) for what each rule detects and misses.
 
 ## Command reference
 
@@ -119,6 +121,7 @@ agent-latch [scan] [path] [options]
 | `--config MANIFEST` | Agent manifest to audit. Default: `agent-manifest.yaml` in the target directory (or, for a file target, its folder), if present. |
 | `--exclude PATH` | Skip findings under a path or glob, relative to the target. Repeatable. See [Ignoring false positives](#ignoring-false-positives-and-known-findings). |
 | `--ignore-file FILE` | File of accepted findings. Default: `.agent-latch-ignore` in the target directory (or, for a file target, its folder), if present. |
+| `--project-ignores` | Apply suppressions that live in the scanned project: its `.agent-latch-ignore`, `[tool.agent-latch] exclude`, and inline ignore comments. Off by default, because the project's author controls them. Use it only for your own code. `--exclude` and an explicit `--ignore-file` always apply. |
 | `--dependencies` | Audit `requirements*.txt` with pip-audit. Contacts an advisory service. |
 | `-i`, `--interactive` | Guided terminal scanner. |
 | `--format {text,json,sarif}` | Report format. Default: `text`. |
@@ -131,6 +134,8 @@ agent-latch [scan] [path] [options]
 
 Test fixtures, demos, and vendored code often contain risky patterns on purpose, and heuristics sometimes flag safe code. Record accepted findings instead of turning rules off everywhere. Every report states how many findings were suppressed, so nothing disappears silently.
 
+**Suppressions inside the project are off by default.** The `.agent-latch-ignore` file, `pyproject.toml` excludes, and inline comments are written by whoever controls the project, so AgentLatch applies them only when you add `--project-ignores`. Use that flag for your own repositories; leave it off for agents you did not write and for pull requests from others. `--exclude` and `--ignore-file` come from you, so they always apply.
+
 | Method | Best for |
 |---|---|
 | [`.agent-latch-ignore` file](#the-agent-latch-ignore-file) | The project's list of known findings and false positives, reviewed like code. **Recommended.** |
@@ -139,7 +144,7 @@ Test fixtures, demos, and vendored code often contain risky patterns on purpose,
 
 ### The `.agent-latch-ignore` file
 
-Create `.agent-latch-ignore` in the root of the project you scan. AgentLatch reads it automatically; to use a file elsewhere, pass `--ignore-file path/to/file`.
+Create `.agent-latch-ignore` in the root of the project you scan. AgentLatch applies it when you scan with `--project-ignores`. To use a file of your own instead, pass `--ignore-file path/to/file`, which always applies.
 
 ```gitignore
 # .agent-latch-ignore — known and accepted AgentLatch findings.
@@ -204,7 +209,7 @@ exclude = ["tests/", "examples/", "vendor/*.py"]
 
 ### How the sources combine
 
-All sources apply together: the ignore file, `pyproject.toml` excludes, `--exclude`, and inline comments. The ignore file and `pyproject.toml` are read only from the scan target directory, so scanning a subfolder directly (for example `agent-latch scan examples/vulnerable-agent`) does not apply the parent project's entries.
+With `--project-ignores`, all sources apply together: the ignore file, `pyproject.toml` excludes, `--exclude`, and inline comments. Without it, only `--exclude` and an explicit `--ignore-file` apply. The ignore file and `pyproject.toml` are read only from the scan target directory, so scanning a subfolder directly (for example `agent-latch scan examples/vulnerable-agent`) does not apply the parent project's entries.
 
 ## Output formats
 
@@ -259,7 +264,8 @@ The audit uses [pip-audit](https://github.com/pypa/pip-audit) on `requirements*.
 | `agent-latch: command not found` | Activate the virtual environment or use the alias above. |
 | `unrecognized arguments: --config-manifest.yaml` | Put a space after `--config`: `--config agent-manifest.yaml`. |
 | No colour table | Output is piped or redirected. Run it directly in a terminal without `--output` or `--plain`. |
-| Fewer findings than expected | Dependency findings need `--dependencies`; manifest findings need an `agent-manifest.yaml`. |
+| Fewer findings than expected | Dependency findings need `--dependencies`; `MAN*` findings need an `agent-manifest.yaml`; Markdown prompts are scanned only inside a `prompts/` folder. |
+| Accepted findings in `.agent-latch-ignore` still reported | Project suppressions are off by default; add `--project-ignores` for your own repository. |
 | Findings in tests or demo code you wrote on purpose | Exclude those paths or add an inline ignore. See [Ignoring false positives](#ignoring-false-positives-and-known-findings). |
 | `Manifest error: invalid YAML` | Fix the YAML syntax at the line shown. |
 | `Configuration error: ... exclude ... must be a list of strings` | Write `exclude = ["tests/"]`, not `exclude = "tests/"`. |

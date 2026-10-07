@@ -7,6 +7,10 @@ Sources, all applied after scanning:
 - Inline comments on the finding's line:
 
     eval(expr)  # agent-latch: ignore[PY001] -- sandboxed calculator input
+
+The `.agent-latch-ignore` file, pyproject.toml, and inline comments live in the scanned project, so
+whoever wrote the project controls them. They apply only with `--project-ignores`; --exclude and an
+explicit --ignore-file always apply.
 """
 
 from __future__ import annotations
@@ -91,18 +95,24 @@ def parse_ignore_file(text: str, source: str = IGNORE_FILE) -> list[IgnoreRule]:
 
 
 def load_ignore_rules(
-    target: Path, excludes: Iterable[str] = (), ignore_file: Path | None = None
+    target: Path,
+    excludes: Iterable[str] = (),
+    ignore_file: Path | None = None,
+    project_config: bool = False,
 ) -> list[IgnoreRule]:
-    """Collect suppressions from the ignore file, pyproject.toml, and --exclude."""
+    """Collect suppressions from --exclude, an explicit ignore file, and, if project_config,
+    the target's own .agent-latch-ignore and pyproject.toml.
+    """
     path = ignore_file if ignore_file is not None else _base(target) / IGNORE_FILE
     rules: list[IgnoreRule] = []
-    if ignore_file is not None or path.is_file():
+    if ignore_file is not None or (project_config and path.is_file()):
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as exc:
             raise ConfigError(f"could not read ignore file {path}: {exc.strerror or exc}") from exc
         rules.extend(parse_ignore_file(text, str(path)))
-    rules.extend(IgnoreRule(pattern) for pattern in [*load_excludes(target), *excludes])
+    project_excludes = load_excludes(target) if project_config else []
+    rules.extend(IgnoreRule(pattern) for pattern in [*project_excludes, *excludes])
     return rules
 
 
@@ -133,14 +143,17 @@ def _inline_ignored(finding: Finding, line_text: str) -> bool:
 
 
 def filter_findings(
-    findings: list[Finding], base: Path, rules: Iterable[IgnoreRule]
+    findings: list[Finding], base: Path, rules: Iterable[IgnoreRule], inline: bool = False
 ) -> tuple[list[Finding], int]:
-    """Drop findings matched by an ignore rule or an agent-latch ignore comment on their line."""
+    """Drop findings matched by an ignore rule or (if inline) an ignore comment on their line."""
     rules = list(rules)
     lines_by_file: dict[str, list[str]] = {}
     kept: list[Finding] = []
     for finding in findings:
         if any(rule.matches(finding) for rule in rules):
+            continue
+        if not inline:
+            kept.append(finding)
             continue
         if finding.path not in lines_by_file:
             try:

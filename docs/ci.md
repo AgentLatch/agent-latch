@@ -25,15 +25,15 @@ Run AgentLatch automatically: locally before each commit, and on every push or p
 
 Examples in this guide pin release `v0.1.0`. Check the [releases page](https://github.com/AgentLatch/agent-latch/releases) for the latest version; `pre-commit autoupdate` bumps `rev` for you.
 
-The hook runs `agent-latch scan --fail-on high` and blocks the commit when a high or critical finding exists. It runs when Python, YAML, Markdown, or text files change, and scans the whole repository, not only staged files.
+The hook runs `agent-latch scan --fail-on high --project-ignores` and blocks the commit when a high or critical finding exists. It runs when Python, YAML, Markdown, or text files change, and scans the whole repository, not only staged files.
 
 ### Customise
 
-Setting `args` replaces the defaults, so always include `--fail-on`:
+Setting `args` replaces the defaults, so always include `--fail-on`, and `--project-ignores` if you keep an `.agent-latch-ignore`:
 
 ```yaml
       - id: agent-latch
-        args: [--fail-on, medium, --config, agent/agent-manifest.yaml]
+        args: [--fail-on, medium, --project-ignores, --config, agent/agent-manifest.yaml]
 ```
 
 To bypass the hook for one commit: `git commit --no-verify`. Use it sparingly.
@@ -75,6 +75,7 @@ The action:
 | `path` | `.` | Directory or file to scan, relative to the repository root. |
 | `config` | empty | Agent manifest. Empty means auto-detect `agent-manifest.yaml` in `path`. |
 | `fail-on` | `high` | `none`, `low`, `medium`, `high`, or `critical`. |
+| `project-ignores` | `"false"` | `"true"` applies the repository's own `.agent-latch-ignore`, `pyproject.toml` excludes, and inline ignore comments. A pull request can edit these, so enable it only where you trust the authors, or protect those files with CODEOWNERS. |
 | `dependencies` | `"false"` | `"true"` also audits `requirements*.txt`; sends package names and versions to PyPI's advisory service. |
 | `sarif-file` | `agent-latch.sarif` | Where to write the SARIF report. |
 | `upload-sarif` | `"true"` | `"false"` skips the code scanning upload. |
@@ -125,7 +126,7 @@ agent-latch:
   image: python:3.12
   script:
     - pip install "git+https://github.com/AgentLatch/agent-latch.git@v0.1.0"
-    - agent-latch scan --fail-on high --plain
+    - agent-latch scan --fail-on high --plain --project-ignores
     - agent-latch scan --format sarif --output agent-latch.sarif
   artifacts:
     when: always
@@ -134,14 +135,14 @@ agent-latch:
 
 ## Known findings and false positives
 
-The pre-commit hook and the GitHub Action both read `.agent-latch-ignore` from the scanned directory, so one committed file keeps local and CI results consistent:
+The pre-commit hook always reads `.agent-latch-ignore` from the scanned directory. The GitHub Action reads it only with `project-ignores: "true"`, and other CI needs `--project-ignores`. With those set, one committed file keeps local and CI results consistent:
 
 ```gitignore
 examples/                          # deliberately insecure demo
 SEC001 tests/test_redaction.py     # fake keys used by tests
 ```
 
-Treat changes to that file as security decisions and review them in pull requests. See [Ignoring false positives](getting-started.md#ignoring-false-positives-and-known-findings) for the full format and the other options.
+Treat changes to that file as security decisions and review them in pull requests. Anyone who can edit it, or add an inline `# agent-latch: ignore` comment, can hide a finding, which is why it is off by default. See [Ignoring false positives](getting-started.md#ignoring-false-positives-and-known-findings) for the full format and the other options.
 
 ## Choosing a threshold
 
