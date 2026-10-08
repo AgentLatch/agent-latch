@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/omnigent-ai/omnigent.git"
+commit_hash: "6893bcd6e8cdfbd73f288a50020c0056a15cddf0"
+proxy_mode: "enforce"
+timeout_seconds: 30

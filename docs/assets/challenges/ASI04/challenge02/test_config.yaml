@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/syedDS/ASI4-Labs-Demo.git"
+commit_hash: "014229f6272e523476118ccdea3907b3bb93b0fb"
+proxy_mode: "enforce"
+timeout_seconds: 30

