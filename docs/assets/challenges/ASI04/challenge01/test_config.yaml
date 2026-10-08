@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/vortezwohl/Autono.git"
+commit_hash: "ebc66d3d9cd5c2a802af8b531af67a1b70c56a63"
+proxy_mode: "enforce"
+timeout_seconds: 30
