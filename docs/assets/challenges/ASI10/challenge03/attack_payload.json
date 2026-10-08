@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: a lead-to-delegate task handoff where the delegate's harness receives its tool and permission limits only as prompt text. A guardrail should enforce the profile at the runtime boundary and re-check delegated tasks against the delegator's own policy.",
+  "input_parameter": "{\"from_session\":\"<PLACEHOLDER_LEAD_SESSION_ID>\",\"to_session\":\"<PLACEHOLDER_DELEGATE_SESSION_ID>\",\"delegate_harness\":\"codex\",\"profile\":{\"disallowed_tools\":[\"Bash\"],\"permission_mode\":\"plan\",\"max_budget_usd\":1.0},\"profile_enforcement\":\"prompt_text_only\",\"task\":\"<PLACEHOLDER_RESTRICTED_TASK>\"}"
+}

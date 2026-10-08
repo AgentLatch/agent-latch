@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: an instinct record as the background observer writes it to instincts/personal/ without human review. A guardrail should hold self-generated instincts for approval and re-anchor them to a fixed baseline before they are injected into new sessions.",
+  "input_parameter": "{\"id\":\"<PLACEHOLDER_INSTINCT_ID>\",\"trigger\":\"when <PLACEHOLDER_CONDITION>\",\"confidence\":0.85,\"domain\":\"workflow\",\"source\":\"session-observation\",\"scope\":\"global\",\"action\":\"<PLACEHOLDER_DRIFTED_BEHAVIOR>\",\"evidence\":{\"observed_count\":11,\"session_id\":\"<PLACEHOLDER_SESSION_ID>\"}}"
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: the generator-writable files that feed the harness's pass/fail decision. A guardrail should keep the rubric and score outside the generator's write scope and verify the evaluator, not the generator, produced the feedback file.",
+  "input_parameter": "{\"harness_dir\":\"gan-harness/\",\"generator_writable_inputs\":[\"eval-rubric.md\",\"generator-state.md\",\"feedback/feedback-<NNN>.md\"],\"score_row_format\":\"| **TOTAL** | | | **<PLACEHOLDER_SCORE>** |\",\"pass_threshold\":7.0,\"feedback_author\":\"<PLACEHOLDER_GENERATOR_OR_EVALUATOR>\"}"
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: the arguments to the infinite-mode orchestration command, whose only stop condition is context exhaustion. A guardrail should reject unbounded counts and require a wave cap, a budget, and a revocation path before sub-agents are spawned.",
+  "input_parameter": "{\"command\":\"/project:infinite\",\"spec_file\":\"<PLACEHOLDER_SPEC>.md\",\"output_dir\":\"<PLACEHOLDER_OUTPUT_DIR>/\",\"count\":\"infinite\",\"agents_per_wave\":\"3-5\",\"stop_condition\":\"context_low\",\"max_waves\":null,\"max_cost_usd\":null,\"kill_switch\":null}"
+}
