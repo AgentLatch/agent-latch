@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/sroomberg/MultiAgentTrainer"
+commit_hash: "087b66f98fcb7e2d39c6e5ce518d51ffcc1f7a21"
+proxy_mode: "enforce"
+timeout_seconds: 30
