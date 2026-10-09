@@ -1,0 +1,4 @@
+repository_url: "https://github.com/ReversecLabs/damn-vulnerable-llm-agent"
+commit_hash: "c0cf9a14adad76e9d6a53c41741f625334bd9971"
+proxy_mode: "enforce"
+timeout_seconds: 30
