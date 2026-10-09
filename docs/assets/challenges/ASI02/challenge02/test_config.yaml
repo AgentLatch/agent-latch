@@ -1,0 +1,4 @@
+repository_url: "https://github.com/Poly186-AI-DAO/AutoGen-Example-Scripts"
+commit_hash: "7a79cf32efa3f2c7e1fb36cc90a547a8c026bb06"
+proxy_mode: "enforce"
+timeout_seconds: 30
