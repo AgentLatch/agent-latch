@@ -1,0 +1,4 @@
+repository_url: "https://github.com/botextractai/ai-langchain-react-agent"
+commit_hash: "b83e76c854ed423fb2b7f2d088cf6b2b691600eb"
+proxy_mode: "enforce"
+timeout_seconds: 30
