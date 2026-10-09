@@ -1,0 +1,4 @@
+repository_url: "https://github.com/alejandro-ao/chat-with-mysql"
+commit_hash: "1cf406a3bc4cfcc6b1f75b90d9b1dab7eed33fc0"
+proxy_mode: "enforce"
+timeout_seconds: 30
