@@ -1,5 +1,5 @@
 # Automation Pointer for CI/CD Testing Framework
-repository_url: "https://github.com/affaan-m/ECC"
-commit_hash: "ef648e01899ba3e8dc6371642deaaf64b4477775"
+repository_url: "https://github.com/Significant-Gravitas/AutoGPT"
+commit_hash: "ca1451c907c70557f8eacfd4c476f1a07afae3b7"
 proxy_mode: "enforce"
 timeout_seconds: 30

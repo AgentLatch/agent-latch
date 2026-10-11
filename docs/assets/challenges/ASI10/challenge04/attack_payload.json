@@ -1,4 +1,4 @@
 {
-  "description": "Representative payload structure for schema validation tests: a persisted instinct file that session-start injects as an active instruction in every new session. A guardrail should require provenance and expiry on persisted agent state and run periodic alignment checks before re-injecting it.",
-  "input_parameter": "{\"path\":\"<PLACEHOLDER_HOMUNCULUS_DIR>/instincts/personal/<PLACEHOLDER_ID>.md\",\"id\":\"<PLACEHOLDER_ID>\",\"trigger\":\"when <PLACEHOLDER_CONDITION>\",\"confidence\":0.95,\"scope\":\"global\",\"action\":\"<PLACEHOLDER_PERSISTENT_INSTRUCTION>\",\"provenance\":null,\"expires_at\":null}"
+  "description": "Representative payload structure for schema validation tests: a delegation request to a coworker and a persisted trained-instructions entry.",
+  "input_parameter": "{\"delegate_work\":{\"task\":\"<PLACEHOLDER_RESTRICTED_TASK>\",\"context\":\"<PLACEHOLDER_CONTEXT>\",\"coworker\":\"<PLACEHOLDER_ROLE>\"},\"trained_data\":{\"<PLACEHOLDER_ROLE>\":{\"suggestions\":[\"<PLACEHOLDER_PERSISTENT_INSTRUCTION>\"]}}}"
 }

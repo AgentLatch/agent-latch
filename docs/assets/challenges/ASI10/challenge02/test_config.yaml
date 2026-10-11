@@ -1,5 +1,5 @@
 # Automation Pointer for CI/CD Testing Framework
-repository_url: "https://github.com/affaan-m/ECC"
-commit_hash: "ef648e01899ba3e8dc6371642deaaf64b4477775"
+repository_url: "https://github.com/yoheinakajima/babyagi"
+commit_hash: "fa8930ebe72a82e5ad57b356e7cbec96290e5bb2"
 proxy_mode: "enforce"
 timeout_seconds: 30
