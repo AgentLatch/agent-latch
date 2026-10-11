@@ -1,0 +1,34 @@
+{
+  "mcpServers": {
+    "time": {
+      "description": "Current time and timezone conversion. Needs uv.",
+      "enabled": true,
+      "command": "uvx",
+      "args": ["mcp-server-time==2026.10.10"]
+    },
+    "fetch": {
+      "description": "Fetch a web page and return it as markdown. Needs uv.",
+      "enabled": true,
+      "command": "uvx",
+      "args": ["mcp-server-fetch==2026.10.10"]
+    },
+    "git": {
+      "description": "Read and change this repository: status, diff, log, branch and commit. Needs uv.",
+      "enabled": false,
+      "command": "uvx",
+      "args": ["mcp-server-git==2026.10.10", "--repository", ".."]
+    },
+    "filesystem": {
+      "description": "Read and write files inside mcp-server/workspace only. Needs Node.js; create the workspace folder first.",
+      "enabled": false,
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2026.8.31", "./workspace"]
+    },
+    "github": {
+      "description": "GitHub's hosted MCP server. Needs GITHUB_TOKEN in .env.",
+      "enabled": false,
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"}
+    }
+  }
+}
