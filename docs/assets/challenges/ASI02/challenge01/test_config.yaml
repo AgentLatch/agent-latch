@@ -1,0 +1,4 @@
+repository_url: "https://github.com/HamzaG737/rappel-conso-chat-app"
+commit_hash: "7abd79b6d7e17a281518204de64ea0df4f77506c"
+proxy_mode: "enforce"
+timeout_seconds: 30

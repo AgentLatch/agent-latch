@@ -1,0 +1,4 @@
+repository_url: "https://github.com/cremerf/natural_language_to_sql"
+commit_hash: "5b07798e3cd7e485f8b8bc62876c63e95c61bdd1"
+proxy_mode: "enforce"
+timeout_seconds: 30

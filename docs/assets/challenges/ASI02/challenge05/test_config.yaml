@@ -1,0 +1,4 @@
+repository_url: "https://github.com/nestordemeure/shelly"
+commit_hash: "0d051c5522d9f14726ae7adb9d3dfb735095342d"
+proxy_mode: "enforce"
+timeout_seconds: 30
