@@ -1,0 +1,4 @@
+repository_url: "https://github.com/dhammon/ai-goat"
+commit_hash: "b3c8757d2887e44d3e9ea97893126511504e89d5"
+proxy_mode: "enforce"
+timeout_seconds: 30
