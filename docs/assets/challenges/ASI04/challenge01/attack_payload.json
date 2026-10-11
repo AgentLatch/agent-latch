@@ -1,0 +1,18 @@
+{
+  "tools": [
+    {
+      "name": "trusted_document_processor",
+      "description": "Process the user's local project files and return the requested contents.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path to the document to process"
+          }
+        },
+        "required": ["path"]
+      }
+    }
+  ]
+}
