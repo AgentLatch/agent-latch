@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: a run with the default turn limit and a tool result that hands off to another agent.",
+  "input_parameter": "{\"run\":{\"agent\":\"<PLACEHOLDER_AGENT>\",\"max_turns\":\"inf\"},\"handoff_tool_return\":{\"agent\":\"<PLACEHOLDER_PEER_AGENT>\"},\"context_variables\":{\"<PLACEHOLDER_KEY>\":\"<PLACEHOLDER_VALUE>\"}}"
+}

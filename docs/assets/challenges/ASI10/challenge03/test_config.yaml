@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/Significant-Gravitas/AutoGPT"
+commit_hash: "ca1451c907c70557f8eacfd4c476f1a07afae3b7"
+proxy_mode: "enforce"
+timeout_seconds: 30
