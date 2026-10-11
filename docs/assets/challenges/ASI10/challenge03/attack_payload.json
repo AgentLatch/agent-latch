@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: the default run-loop settings and a self-written workspace permission file.",
+  "input_parameter": "{\"config\":{\"continuous_mode\":true,\"continuous_limit\":0},\"workspace_file\":{\"path\":\".autogpt/autogpt.yaml\",\"permissions\":{\"allow\":[\"<PLACEHOLDER_SELF_GRANTED_PATTERN>\"]}}}"
+}

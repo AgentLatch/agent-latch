@@ -11,6 +11,8 @@ import ast
 import re
 from dataclasses import dataclass
 
+from agent_latch.astutil import walk
+
 SOURCE_CLASSES = {
     "TavilySearch",
     "TavilySearchResults",
@@ -98,7 +100,10 @@ def _target_names(target: ast.AST) -> list[str]:
 
 
 def _scope_nodes(scope: _Scope) -> list[ast.AST]:
-    """Nodes belonging to this scope, excluding nested function bodies."""
+    """Nodes belonging to this scope, excluding nested function bodies. Cached on the scope."""
+    cached = getattr(scope, "_agent_latch_scope_nodes", None)
+    if cached is not None:
+        return cached
     roots = scope.body if isinstance(scope, ast.Module) else [scope]
     nodes: list[ast.AST] = []
     stack = list(reversed(roots))
@@ -108,6 +113,7 @@ def _scope_nodes(scope: _Scope) -> list[ast.AST]:
             continue
         nodes.append(node)
         stack.extend(reversed(list(ast.iter_child_nodes(node))))
+    scope._agent_latch_scope_nodes = nodes
     return nodes
 
 
@@ -116,7 +122,7 @@ class _Analysis:
         self.tree = tree
         self.functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {
             node.name: node
-            for node in ast.walk(tree)
+            for node in walk(tree)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
         self.scopes: list[_Scope] = [tree, *self.functions.values()]

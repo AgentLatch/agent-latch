@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/VijayYadav123/Multi-Agent-AI-Deep-Researcher2"
+commit_hash: "929b02e923834ac19502c0f794efb4c86f94cb4c"
+proxy_mode: "enforce"
+timeout_seconds: 30

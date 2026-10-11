@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/KaitoKidKao/phase2-day5-multi-agent-lab"
+commit_hash: "6514414c65a85ba9cc6e5dcc81184c89d959a9a2"
+proxy_mode: "enforce"
+timeout_seconds: 30

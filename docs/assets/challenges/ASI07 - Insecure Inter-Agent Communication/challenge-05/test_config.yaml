@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/gylshaurya/Sentinel"
+commit_hash: "6f3e6fb7cd8cd3fcf0aa016706da845dfc676f11"
+proxy_mode: "enforce"
+timeout_seconds: 30

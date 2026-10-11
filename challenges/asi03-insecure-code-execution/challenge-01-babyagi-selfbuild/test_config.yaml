@@ -1,0 +1,4 @@
+repository_url: "https://github.com/yoheinakajima/babyagi"
+commit_hash: "fa8930ebe72a82e5ad57b356e7cbec96290e5bb2"
+proxy_mode: "enforce"
+timeout_seconds: 30

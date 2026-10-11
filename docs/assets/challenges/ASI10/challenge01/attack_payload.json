@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: a self-written instinct record and a generator-written feedback score.",
+  "input_parameter": "{\"instinct\":{\"path\":\"instincts/personal/<PLACEHOLDER_ID>.md\",\"confidence\":0.85,\"action\":\"<PLACEHOLDER_DRIFTED_BEHAVIOR>\"},\"feedback_file\":{\"path\":\"gan-harness/feedback/feedback-<NNN>.md\",\"total_row\":\"| **TOTAL** | | | **<PLACEHOLDER_SCORE>** |\"}}"
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: a stored-function code update and a self-build request.",
+  "input_parameter": "{\"function_update\":{\"method\":\"PUT\",\"path\":\"/api/function/<PLACEHOLDER_FUNCTION_NAME>\",\"body\":{\"code\":\"<PLACEHOLDER_NON_EXECUTABLE_CODE>\"}},\"self_build\":{\"user_description\":\"<PLACEHOLDER_DESCRIPTION>\",\"X\":3}}"
+}
