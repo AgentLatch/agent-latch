@@ -19,6 +19,7 @@ Everything runs on your machine. It's separate from the AgentLatch scanner and d
 - **New here?** Follow [SETUP.md](SETUP.md): step-by-step setup, connecting your agent, and connecting tools.
 - **Adding a tool, tool server or token?** Follow the standards in [CLAUDE.md](CLAUDE.md).
 - **Running a full open-source agent against it?** See [RUNNING_AGENTS.md](RUNNING_AGENTS.md) for CrewAI, ECC, BabyAGI, Swarm and AutoGPT, including [`bridge.py`](bridge.py) for agents that take plain Python tools.
+- **Testing prompt injection against a live agent?** Follow the [injection lab](examples/injection_lab/README.md) (ASI01).
 - **Prefer a point-and-click view?** Run the [dashboard](#dashboard-ui) (`python ui/ui_server.py`).
 
 ## Quick start
