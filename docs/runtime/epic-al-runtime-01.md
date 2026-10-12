@@ -48,6 +48,7 @@ Depending on an **operator-owned policy file**, it allows, fences, asks for appr
 | P6 | **Keep stdout clean.** | In stdio mode stdout carries the MCP protocol. All interceptor logging goes to stderr or to the events file. |
 | P7 | **Be deterministic.** | Policy matching is first-match in file order. Reports sort by `(timestamp, session_id, rule_id)`. |
 | P8 | **Don't change the static scanner.** | `agent-latch scan` output, exit codes and `RULE_CATEGORIES` stay the same. The runtime work adds new code alongside it (except for the shared improvements in AL-104 and AL-401). |
+| P9 | **Borrow ideas and test cases, never code.** | Study prior art (§12) for designs, risk categories and attack examples. Write every line of code ourselves. Test cases taken from other projects are rewritten as our own synthetic fixtures and credited in `tests/runtime_fixtures/SOURCES.md`. |
 
 ---
 
@@ -359,6 +360,7 @@ If no policy file is given, the gateway runs in `monitor` mode with built-in def
 | `INJECTION_SIGNATURES` (AL-401) | Static PRM001 tests, `examples/vulnerable-agent/agent-latch.sarif` (regenerate), self-scan (`agent-latch scan . --fail-on high --project-ignores`) |
 | A challenge folder | Its `test_config.yaml` `runtime:` block, `tests/test_runtime_challenges.py`, `docs/runtime.md` results table |
 | Gateway flags | `mcp-server/README.md`, `mcp-server/SETUP.md`, `mcp-server/CLAUDE.md`, `docs/runtime.md` |
+| A test case adapted from another project | `tests/runtime_fixtures/SOURCES.md` (project, license, link, what was adapted), §12.3 of this file if it's a new source |
 | Version | `pyproject.toml`, `src/agent_latch/__init__.py`, `docs/release-notes/v0.3.0.md`, README, `docs/ci.md`, `llms.txt` |
 
 ---
@@ -377,6 +379,7 @@ If no policy file is given, the gateway runs in `monitor` mode with built-in def
 | No tool-list checks | AL-403 / AL-404 (RT002, RT003) | Poisoned tool descriptions and silently changed tools are the main MCP-specific risks. |
 | No ASI07 / ASI10 | AL-502, AL-301, AL-501 | These categories are listed as not yet covered in AGENTS.md. |
 | "Intercepts 100%" | "100% of traffic routed through the gateway" | Avoids claiming more coverage than the tool has. |
+| Build everything from scratch, or copy an existing proxy | P9 and §12: borrow ideas and test cases from existing projects, integrate with their gateways (AL-804) | Faster and better-tested without licence risk, and keeps AgentLatch's own design. |
 
 ---
 
@@ -439,6 +442,7 @@ flowchart TD
 - [ ] Self-scan passes: `agent-latch scan . --fail-on high --project-ignores`. Intentional fixtures go into `.agent-latch-ignore`; never weaken a rule to make it pass.
 - [ ] Every row of the §5 sync checklist that the change touches is updated in the same PR.
 - [ ] stdout stays clean in stdio mode (P6).
+- [ ] No code copied from other projects (P9). If the ticket has a **Borrow from** note, the PR description says which ideas were used, and any adapted test cases are credited in `tests/runtime_fixtures/SOURCES.md`.
 
 ---
 
@@ -545,6 +549,8 @@ flowchart TD
 
 **Files.** `src/agent_latch/rules.py` (rename only), `src/agent_latch/runtime/redact.py`, `tests/test_runtime.py`, `tests/test_scanner.py` (only if imports change).
 
+**Borrow from (ideas only, §12).** Lasso `mcp-gateway` "basic" plugin: the *list of token types* it masks (Azure client secrets, GitHub tokens and OAuth, GCP API keys, AWS keys, JWTs, GitLab session cookies, Hugging Face tokens, Teams webhooks, Slack app tokens). Write our own regexes for any type not already in task 2, from each provider's published token format. Use Gitleaks/TruffleHog rule *names* only as a checklist.
+
 **Tasks.**
 1. In `rules.py`, rename `_SECRET_ASSIGNMENT` to `SECRET_ASSIGNMENT` and update its single use in `scan_secrets`. Behavior must not change; existing SEC001 tests must pass unchanged.
 2. `SecretMatcher` in `redact.py`:
@@ -637,6 +643,8 @@ flowchart TD
 **As a** security engineer, **I want** the engine to run on every MCP request and response that passes through the gateway, **so that** every tool call is inspected without changing agents or upstream servers.
 
 **Files.** `src/agent_latch/runtime/middleware.py`, `tests/test_runtime_middleware.py`.
+
+**Borrow from (ideas only, §12).** IBM ContextForge and agentgateway: how they split checks into stages (before the call, after the call, tool list) and what they do when a guardrail plugin errors or times out. Compare with P2 (fail closed) and note any gaps in the PR.
 
 **Tasks.**
 1. `class AgentLatchMiddleware(fastmcp.server.middleware.Middleware)` with `__init__(self, interceptor: Interceptor)`.
@@ -853,7 +861,9 @@ Free-text arguments such as `message` or `text` are never inspected by these fou
 
 Extend the shared list so the static rule PRM001 and the runtime rules RT001 and RT002 improve together.
 
-**Files.** `src/agent_latch/prompts.py`, `tests/test_scanner.py`, `examples/vulnerable-agent/agent-latch.sarif`, `.agent-latch-ignore` (only if the self-scan needs it), `docs/RULES.md` (PRM001 section).
+**Files.** `src/agent_latch/prompts.py`, `tests/test_scanner.py`, `examples/vulnerable-agent/agent-latch.sarif`, `.agent-latch-ignore` (only if the self-scan needs it), `docs/RULES.md` (PRM001 section), `tests/runtime_fixtures/SOURCES.md`.
+
+**Borrow from (test cases only, §12).** Attack and benign prompt examples published with LlamaFirewall (PromptGuard examples), NeMo Guardrails (jailbreak and injection examples), garak probes and promptfoo red-team plugins. Rewrite each one as our own fixture sentence (don't copy datasets), and record the source in `SOURCES.md`. Aim for at least 30 attack and 30 benign fixtures, so the false-positive rate is measured, not guessed.
 
 **Tasks.**
 1. Widen the existing patterns:
@@ -910,6 +920,11 @@ Extend the shared list so the static rule PRM001 and the runtime rules RT001 and
 **Description.** Detect tool poisoning: instructions hidden in a tool's `description` or in parameter descriptions that the model reads but users usually don't (ASI01, ASI04).
 
 **Files.** `src/agent_latch/runtime/inspect_tools.py`, tests.
+
+**Borrow from (ideas and test cases, §12).**
+- Lasso `mcp-gateway` scanner: the *categories* it looks for in tool descriptions (hidden instructions, sensitive file names, malicious actions).
+- Snyk `agent-scan` public risk docs: tool poisoning, **tool shadowing** (a description that tries to change how *other* tools are used) and "toxic flows" (an untrusted-content tool combined with a private-data tool and an outbound tool in the same session). Shadowing is covered by task 2; record toxic flows as a follow-up rule idea in §12.4.
+- Snyk's demo server (`demoserver/`): rebuild its *kinds* of poisoned tools as our own test MCP tools.
 
 **Tasks.**
 1. For each `ToolInfo`, collect the `description` and every `description`, `title` and `default` string anywhere in `input_schema` (recursive). Run the AL-402 normalization and then `find_injection`.
@@ -1087,7 +1102,9 @@ agent-latch-runtime pin --policy POLICY.yaml (--accept TOOL ... | --all | --list
 
 **Background.** The challenge apps (Streamlit, a TCP socket, a CLI) don't use MCP, so the harness reproduces each vulnerable **tool** as an MCP tool, puts it behind the gateway with a policy, and replays the attack as the tool call or tool output that the model would produce. The user's chat message itself never passes through MCP; the docs must say so (AL-703).
 
-**Files.** `challenges/*/*/test_config.yaml`, `challenges/*/*/attack_payload.json`, `challenges/*/*/README.md`, a new folder `challenges/asi05-unexpected-code-execution/`, `tests/test_runtime_challenges.py`, `tests/runtime_fixtures/challenge_tools.py`.
+**Files.** `challenges/*/*/test_config.yaml`, `challenges/*/*/attack_payload.json`, `challenges/*/*/README.md`, a new folder `challenges/asi05-unexpected-code-execution/`, `tests/test_runtime_challenges.py`, `tests/runtime_fixtures/challenge_tools.py`, `tests/runtime_fixtures/SOURCES.md`.
+
+**Borrow from (ideas, §12).** Docker `mcp-gateway`: running each MCP server in its own container with minimal privileges. Use this as the model for the CI sandbox (AL-705, next epic); here, only keep the replica tools free of real network and file access.
 
 **Tasks.**
 1. **Fix metadata:**
@@ -1161,7 +1178,7 @@ agent-latch-runtime pin --policy POLICY.yaml (--accept TOOL ... | --all | --list
 
 | File | Change |
 |---|---|
-| `docs/runtime.md` (new) | What it is and is not (P1–P8 in plain language), install (`pip install -e "..[runtime]"`), enable it in the gateway, policy reference (all of §4.4), modes, what the agent sees (§4.6), runtime rule table (§4.3), challenge results table (AL-701), latency results (AL-702), limitations (MCP traffic only; the user chat path isn't covered; rule-based; a clean run is not a guarantee), and troubleshooting. |
+| `docs/runtime.md` (new) | What it is and is not (P1–P9 in plain language), install (`pip install -e "..[runtime]"`), enable it in the gateway, policy reference (all of §4.4), modes, what the agent sees (§4.6), runtime rule table (§4.3), challenge results table (AL-701), latency results (AL-702), limitations (MCP traffic only; the user chat path isn't covered; rule-based; a clean run is not a guarantee), and troubleshooting. |
 | `docs/RULES.md` | A new "Runtime rules (RT*)" section: per rule, what it detects, its OWASP mapping, the policy keys and known gaps. PRM001 updated for AL-401. |
 | `AGENTS.md` | Repository layout (`runtime/` modules and new test files); a runtime rule table; add a "Runtime rules" column to the ASI table; the rules in "Adding or changing a rule" also apply to RT rules (registry = `RUNTIME_RULE_CATEGORIES`); P1 (operator-owned policy) under the design principles; the `agent-latch-runtime` CLI reference. |
 | `README.md` | A runtime interceptor feature section, rule table rows and roadmap update. Avoid overclaiming. |
@@ -1196,6 +1213,7 @@ agent-latch-runtime pin --policy POLICY.yaml (--accept TOOL ... | --all | --list
 - **AL-801: Dashboard runtime view.** `mcp-server/ui/ui_server.py` reads `runtime-events.jsonl` and shows a live list of events with filters. Approve `ask` calls from the dashboard as an alternative to elicitation.
 - **AL-802: Framework hooks outside MCP.** A LangChain `BaseCallbackHandler`, a CrewAI `step_callback`/tool wrapper, and a `bridge.py` integration, all calling the same `Interceptor`. This extends coverage to plain Python tools.
 - **AL-803: Multi-agent channel checks (ASI07 depth).** Inspect agent-to-agent messages when agents talk through the gateway (for example A2A or MCP sampling).
+- **AL-804: Adapters for other gateways.** Let teams that already run another MCP gateway use AgentLatch checks without switching (§12.5). Ship a small HTTP service (`agent-latch-runtime serve`) that wraps the same `Interceptor`, plus integration guides for agentgateway (custom webhook guardrail), IBM ContextForge (plugin) and Lasso `mcp-gateway` (plugin). Each adapter is our own code written against the other project's public plugin or webhook interface, kept in a separate optional package so the core stays dependency-free.
 
 ---
 
@@ -1209,9 +1227,75 @@ agent-latch-runtime pin --policy POLICY.yaml (--accept TOOL ... | --all | --list
 | The wider PRM001 patterns change static results | Called out in the v0.3.0 release notes; regenerate the example SARIF in AL-401. |
 | Coverage gets overstated | "Traffic routed through the gateway" wording everywhere; SARIF disclaimer; the limitations section in `docs/runtime.md`. |
 | FastMCP API changes | `fastmcp==4.1.0` pinned in both places; the middleware is the only adapter; middleware tests in CI. |
+| Licence problems from reused material | P9: ideas and rewritten test cases only, never code or datasets; every adapted case credited in `SOURCES.md`; reviewer checks the DoD item. |
 
 ## 11. Open questions (decide before Sprint 2)
 
 1. Should `default_action` for new deployments be `allow` (monitor first) or `ask`? Proposed: `allow` with `mode: monitor`.
 2. Is the 120 s approval timeout right for the dashboard flow in AL-801?
 3. Should RT001 also run on `resources/read` and `prompts/get` results? Proposed: yes, as a follow-up ticket using the same detector, through `on_read_resource`/`on_get_prompt`.
+
+---
+
+## 12. Prior art: borrow ideas and test cases, not code
+
+Other open-source projects already intercept MCP traffic or guard agents at runtime. We study them for **design ideas, risk categories and attack examples** (P9). We don't copy their code, and we don't fork any of them: our interceptor is a thin FastMCP middleware, and forking a large gateway would add weight without adding what makes AgentLatch different.
+
+This follows the "Prior art" rule in AGENTS.md. Facts below were checked on 2026-10-12; recheck before relying on them.
+
+### 12.1 What exists
+
+| Project | What it is | Licence | Notes for us |
+|---|---|---|---|
+| [Lasso `mcp-gateway`](https://github.com/lasso-security/mcp-gateway) | Python MCP proxy with plugin guardrails: secret masking, Presidio PII, and a scanner that checks servers and tool descriptions before loading | MIT | Closest to our design. Its strongest guardrail calls Lasso's cloud API. Little activity in the last 9 months. |
+| [IBM ContextForge](https://github.com/IBM/mcp-context-forge) | Large gateway and registry for MCP, A2A and REST, with 40+ plugins, guardrails, admin UI, Helm charts | Apache-2.0 | Too heavy to fork (Postgres, Redis, Rust). Good integration target (AL-804). |
+| [agentgateway](https://github.com/agentgateway/agentgateway) (Linux Foundation) | Rust proxy for MCP, A2A and LLM traffic, with policy rules, guardrails, custom webhooks and auth | Apache-2.0 | Integration target via its webhook guardrail (AL-804). |
+| [Docker `mcp-gateway`](https://github.com/docker/mcp-gateway) | Runs each MCP server in an isolated container, with tool allowlists and secret management | MIT | Model for the CI sandbox. |
+| [Meta LlamaFirewall](https://github.com/meta-llama/PurpleLlama/tree/main/LlamaFirewall) | Guardrail library: PromptGuard 2 classifier, AlignmentCheck (LLM judge), regex rules, CodeShield | Check the repo's LICENSE; models use the Llama licence | Source of attack examples. AlignmentCheck needs an LLM, which conflicts with our no-LLM rule. |
+| [NVIDIA NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) | Programmable guardrails, including rules on tool input and output | Apache-2.0 | Sends anonymous telemetry by default and many rails use an LLM; both conflict with our principles. Source of attack examples. |
+| [ProtectAI LLM Guard](https://github.com/protectai/llm-guard) | Prompt and output scanners | MIT | **Archived July 2026.** Don't depend on it. |
+| [Snyk `agent-scan`](https://github.com/snyk/agent-scan) | Static scanner for agent configs, MCP servers and skills | Apache-2.0 | Not a runtime interceptor; sends data to Snyk's API. Useful public risk taxonomy. |
+| [garak](https://github.com/NVIDIA/garak), [promptfoo](https://github.com/promptfoo/promptfoo) | LLM red-teaming tools | Apache-2.0 / MIT | Test model behaviour, complementary to us. Source of attack *types* for fixtures. |
+
+### 12.2 What we do differently
+
+No project above combines all of these, which is AgentLatch's positioning:
+
+- static scanning and runtime checks with **the same rule IDs**, mapped to OWASP Agentic ASI01–ASI10;
+- **deterministic attack replay in CI** from `challenges/`;
+- **fully local**: no cloud API, no telemetry, no LLM judge;
+- **operator-owned policy** (P1) and **fail closed** (P2);
+- **SARIF output** for GitHub code scanning.
+
+### 12.3 What we borrow, by ticket
+
+| Ticket | From | What we borrow | Type |
+|---|---|---|---|
+| AL-104 | Lasso `mcp-gateway` "basic" plugin; Gitleaks / TruffleHog rule names | List of token types to redact | Idea |
+| AL-202 | ContextForge, agentgateway | Hook stages (before call, after call, tool list); behaviour when a guardrail errors | Idea |
+| AL-401 | LlamaFirewall, NeMo Guardrails, garak, promptfoo | Attack and benign prompt examples, rewritten as our own fixtures | Test cases |
+| AL-403 | Lasso scanner; Snyk `agent-scan` risk docs and demo server | Categories of poisoned tool descriptions; tool shadowing; kinds of poisoned demo tools | Idea + test cases |
+| AL-701 | Docker `mcp-gateway` | One isolated container per MCP server for the CI sandbox | Idea |
+| AL-804 | agentgateway, ContextForge, Lasso | Their public webhook and plugin interfaces, to integrate with | Integration |
+
+### 12.4 Rule ideas for later (from prior art)
+
+Not in this epic. Each needs its own ticket with an ASI mapping before work starts.
+
+| Idea | Seen in | Possible ASI |
+|---|---|---|
+| **Toxic flow:** a session uses an untrusted-content tool, a private-data tool and an outbound tool together | Snyk `agent-scan` | ASI01, ASI02, ASI06 |
+| **Server reputation** before loading (package age, downloads, repo activity) | Lasso scanner | ASI04 (needs network, so opt-in only) |
+| **PII detection** in tool output | Lasso (Presidio), LLM Guard | ASI03 (heavy dependency; optional extra only) |
+| **Optional local classifier** for injection, alongside regex | LlamaFirewall PromptGuard 2 | ASI01 (model licence and size to check; never on by default) |
+
+### 12.5 Integrate, don't compete
+
+Teams already running ContextForge, agentgateway or Lasso shouldn't have to switch gateways to get AgentLatch checks. AL-804 exposes the same engine through a small local HTTP service and per-gateway guides. This spreads AgentLatch's rule IDs and reports to more users, which supports the goal in `docs/vision.md`.
+
+### 12.6 Rules for reuse
+
+1. **Code:** don't copy it. Read it to understand an approach, then write our own.
+2. **Test cases:** rewrite each as our own synthetic fixture. Don't copy datasets wholesale. Record each source in `tests/runtime_fixtures/SOURCES.md` with project, licence, link and what was adapted.
+3. **Model weights** (for example PromptGuard): separate licences. Check them before even an optional extra.
+4. **If copying ever becomes necessary** (decided case by case, by the tech lead): MIT and Apache-2.0 allow it, but keep the original copyright and licence notices, keep any Apache `NOTICE` file, mark the files as changed, and list them in `THIRD_PARTY_NOTICES.md`.
