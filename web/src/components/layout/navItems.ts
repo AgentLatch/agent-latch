@@ -5,7 +5,8 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { label: "Dashboard", to: "/" },
+  { label: "Home", to: "/" },
+  { label: "Dashboard", to: "/dashboard" },
   { label: "Scans", to: "/scans" },
   { label: "Findings", to: "/findings" },
   { label: "Settings", to: "/settings" },

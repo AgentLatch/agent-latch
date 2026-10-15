@@ -24,3 +24,33 @@
     background-attachment: fixed;
   }
 }
+
+@layer utilities {
+  /* Moving dotted connector used by the scanning workflow diagram. */
+  @keyframes flow-pan {
+    to {
+      background-position: 18px 0;
+    }
+  }
+  .flow-line-x {
+    background-image: linear-gradient(90deg, rgba(139, 92, 246, 0.8) 0 45%, transparent 0);
+    background-size: 18px 2px;
+    animation: flow-pan 0.8s linear infinite;
+  }
+  .flow-line-y {
+    background-image: linear-gradient(180deg, rgba(139, 92, 246, 0.8) 0 45%, transparent 0);
+    background-size: 2px 18px;
+    animation: flow-pan-y 0.8s linear infinite;
+  }
+  @keyframes flow-pan-y {
+    to {
+      background-position: 0 18px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .flow-line-x,
+    .flow-line-y {
+      animation: none;
+    }
+  }
+}
