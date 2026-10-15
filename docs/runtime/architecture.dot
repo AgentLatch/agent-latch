@@ -1,0 +1,129 @@
+// AgentLatch runtime interceptor: architecture overview (epic AL-RUNTIME-01).
+// Render: dot -Tpng -Gdpi=160 docs/runtime/architecture.dot -o docs/runtime/architecture.png
+digraph AgentLatchRuntime {
+  graph [rankdir=LR, splines=spline, nodesep=0.5, ranksep=0.8, newrank=true, pad=0.4, bgcolor="white",
+         fontname="DejaVu Sans", fontsize=22, labelloc=t,
+         label=<<B>AgentLatch Runtime Interceptor: Architecture Overview</B><BR/><FONT POINT-SIZE="13" COLOR="#555555">Epic AL-RUNTIME-01 · every MCP message through the gateway is inspected, decided, recorded, and reported · rules mapped to OWASP Agentic Top 10 (ASI01–ASI10)</FONT><BR/> >];
+  node  [fontname="DejaVu Sans", fontsize=12, shape=plain];
+  edge  [fontname="DejaVu Sans", fontsize=10, color="#555555", arrowsize=0.8, penwidth=1.4];
+
+  // ---------------- Agents ----------------
+  subgraph cluster_agents {
+    label=<<B>AI agents</B>>; fontsize=15; style="rounded,filled"; fillcolor="#EEF4FF"; color="#7FA3E0";
+    agents [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="6" CELLPADDING="8" COLOR="#7FA3E0">
+        <TR><TD BGCOLOR="white">Claude Code / Claude Desktop</TD></TR>
+        <TR><TD BGCOLOR="white">Cursor / Codex CLI</TD></TR>
+        <TR><TD BGCOLOR="white">CrewAI / Swarm / BabyAGI<BR/><FONT POINT-SIZE="10" COLOR="#666666">via bridge.py</FONT></TD></TR>
+        <TR><TD BGCOLOR="white">Your Python agent<BR/><FONT POINT-SIZE="10" COLOR="#666666">fastmcp.Client</FONT></TD></TR>
+      </TABLE>>];
+  }
+
+  // ---------------- Operator ----------------
+  subgraph cluster_operator {
+    label=<<B>Operator (trusted)</B>>; fontsize=15; style="rounded,filled"; fillcolor="#FFF8E6"; color="#E0B04A";
+    policy [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" COLOR="#E0B04A" BGCOLOR="white">
+        <TR><TD BGCOLOR="#FCE9B8"><B>runtime-policy.yaml</B></TD></TR>
+        <TR><TD ALIGN="LEFT">mode: monitor | enforce<BR ALIGN="LEFT"/>tools: allow · ask · deny<BR ALIGN="LEFT"/>path / SQL / code / bind_args<BR ALIGN="LEFT"/>limits · pinning · transport<BR ALIGN="LEFT"/></TD></TR>
+        <TR><TD><FONT POINT-SIZE="10" COLOR="#8A6100">--policy flag only · never from the agent's repo</FONT></TD></TR>
+      </TABLE>>];
+  }
+
+  // ---------------- Gateway ----------------
+  subgraph cluster_gateway {
+    label=<<B>MCP gateway  ·  mcp-server/server.py  (FastMCP 4.1)</B>>; fontsize=15;
+    style="rounded,filled"; fillcolor="#F4F6F8"; color="#8896A5"; penwidth=2;
+
+    middleware [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="8" COLOR="#3B6FB6" BGCOLOR="white">
+        <TR><TD COLSPAN="1" BGCOLOR="#3B6FB6"><FONT COLOR="white"><B>AgentLatchMiddleware</B></FONT><BR/><FONT COLOR="#DDE8FA" POINT-SIZE="10">runtime/middleware.py · AL-202</FONT></TD></TR>
+        <TR><TD PORT="list" ALIGN="LEFT">① on_list_tools  →  filter poisoned / changed tools</TD></TR>
+        <TR><TD PORT="req"  ALIGN="LEFT">② on_call_tool (before)  →  allow · ask · block</TD></TR>
+        <TR><TD PORT="resp" ALIGN="LEFT">③ on_call_tool (after)  →  allow · fence · block</TD></TR>
+      </TABLE>>];
+
+    engine [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6" COLOR="#2E8B57" BGCOLOR="white">
+        <TR><TD COLSPAN="3" BGCOLOR="#2E8B57"><FONT COLOR="white"><B>Interceptor engine</B></FONT><BR/><FONT COLOR="#DFF3E7" POINT-SIZE="10">runtime/engine.py · AL-201 · block &gt; ask &gt; fence &gt; filter &gt; allow · fails closed (RT000)</FONT></TD></TR>
+        <TR>
+          <TD BGCOLOR="#E7F5EC"><B>Tool list</B></TD>
+          <TD BGCOLOR="#E7F5EC"><B>Request (before call)</B></TD>
+          <TD BGCOLOR="#E7F5EC"><B>Response (after call)</B></TD>
+        </TR>
+        <TR>
+          <TD ALIGN="LEFT" VALIGN="TOP">RT002 hidden instructions<BR ALIGN="LEFT"/><FONT COLOR="#777777" POINT-SIZE="10">  ASI01 · ASI04</FONT><BR ALIGN="LEFT"/>RT003 definition changed<BR ALIGN="LEFT"/><FONT COLOR="#777777" POINT-SIZE="10">  ASI04 · ASI10</FONT><BR ALIGN="LEFT"/></TD>
+          <TD ALIGN="LEFT" VALIGN="TOP">RT004 denied by policy  <FONT COLOR="#777777" POINT-SIZE="10">ASI02/03/10</FONT><BR ALIGN="LEFT"/>RT005 needs approval  <FONT COLOR="#777777" POINT-SIZE="10">ASI09</FONT><BR ALIGN="LEFT"/>RT006 schema mismatch  <FONT COLOR="#777777" POINT-SIZE="10">ASI02</FONT><BR ALIGN="LEFT"/>RT007 shell injection  <FONT COLOR="#777777" POINT-SIZE="10">ASI05</FONT><BR ALIGN="LEFT"/>RT008 path escape  <FONT COLOR="#777777" POINT-SIZE="10">ASI02/03</FONT><BR ALIGN="LEFT"/>RT009 SQL scope  <FONT COLOR="#777777" POINT-SIZE="10">ASI02/03</FONT><BR ALIGN="LEFT"/>RT010 unsafe code  <FONT COLOR="#777777" POINT-SIZE="10">ASI05</FONT><BR ALIGN="LEFT"/>RT011 identity binding  <FONT COLOR="#777777" POINT-SIZE="10">ASI03</FONT><BR ALIGN="LEFT"/>RT012 call budget / loops  <FONT COLOR="#777777" POINT-SIZE="10">ASI08</FONT><BR ALIGN="LEFT"/>RT015 secret egress  <FONT COLOR="#777777" POINT-SIZE="10">ASI03</FONT><BR ALIGN="LEFT"/></TD>
+          <TD ALIGN="LEFT" VALIGN="TOP">RT001 injection in output<BR ALIGN="LEFT"/><FONT COLOR="#777777" POINT-SIZE="10">  ASI01 · ASI06</FONT><BR ALIGN="LEFT"/>RT013 error cascade<BR ALIGN="LEFT"/><FONT COLOR="#777777" POINT-SIZE="10">  ASI08 (circuit breaker)</FONT><BR ALIGN="LEFT"/></TD>
+        </TR>
+        <TR><TD COLSPAN="3" BGCOLOR="#F3F3F3"><FONT POINT-SIZE="10">Startup: RT014 unauthenticated / plaintext transport (ASI07)   ·   Shared patterns: prompts.find_injection (static PRM001 + runtime)</FONT></TD></TR>
+      </TABLE>>];
+
+    support [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="4" CELLPADDING="7" COLOR="#8896A5" BGCOLOR="#F4F6F8">
+        <TR><TD BGCOLOR="white"><B>Policy</B><BR/><FONT POINT-SIZE="10">policy.py · AL-103</FONT></TD>
+            <TD BGCOLOR="white"><B>Redactor</B><BR/><FONT POINT-SIZE="10">redact.py · AL-104<BR/>no secrets / raw payloads</FONT></TD>
+            <TD PORT="store" BGCOLOR="white"><B>Event store</B><BR/><FONT POINT-SIZE="10">store.py · AL-105<BR/>JSONL · 0600 · append-only</FONT></TD></TR>
+      </TABLE>>];
+
+    approval [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" COLOR="#C0392B" BGCOLOR="white">
+        <TR><TD BGCOLOR="#FBE3E0"><B>Human approval</B></TD></TR>
+        <TR><TD><FONT POINT-SIZE="10">MCP elicitation · AL-301<BR/>decline / unsupported / timeout → block</FONT></TD></TR>
+      </TABLE>>];
+  }
+
+  // ---------------- Tools ----------------
+  subgraph cluster_tools {
+    label=<<B>Tools (untrusted output)</B>>; fontsize=15; style="rounded,filled"; fillcolor="#F3EEFB"; color="#9B7FD1";
+    tools [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="6" CELLPADDING="8" COLOR="#9B7FD1">
+        <TR><TD BGCOLOR="white"><B>Local tools</B><BR/><FONT POINT-SIZE="10">tools/*.py</FONT></TD></TR>
+        <TR><TD BGCOLOR="white"><B>Upstream MCP servers</B><BR/><FONT POINT-SIZE="10">servers.json via create_proxy<BR/>time · fetch · git · github · filesystem …</FONT></TD></TR>
+        <TR><TD BGCOLOR="white"><FONT POINT-SIZE="10">Web pages · DBs · files · email</FONT></TD></TR>
+      </TABLE>>];
+  }
+
+  // ---------------- Reporting ----------------
+  subgraph cluster_report {
+    label=<<B>Reporting  ·  agent-latch-runtime (AL-601 / AL-602)</B>>; fontsize=15; style="rounded,filled"; fillcolor="#EAF7F7"; color="#3AA6A6";
+    cli [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7" COLOR="#3AA6A6" BGCOLOR="white">
+        <TR><TD BGCOLOR="#CDEEEE"><B>agent-latch-runtime report</B></TD></TR>
+        <TR><TD ALIGN="LEFT">--format text | json | sarif<BR ALIGN="LEFT"/>--fail-on high  (exit 0 / 1 / 2)<BR ALIGN="LEFT"/>ASI01–ASI10 coverage summary<BR ALIGN="LEFT"/></TD></TR>
+      </TABLE>>];
+    outputs [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="6" CELLPADDING="7" COLOR="#3AA6A6">
+        <TR><TD BGCOLOR="white">Terminal / text</TD></TR>
+        <TR><TD BGCOLOR="white">JSON audit</TD></TR>
+        <TR><TD BGCOLOR="white">SARIF → GitHub code scanning</TD></TR>
+        <TR><TD BGCOLOR="white">Dashboard (AL-801, stretch)</TD></TR>
+      </TABLE>>];
+  }
+
+  // ---------------- Flows ----------------
+  agents -> middleware [label=<  <B>JSON-RPC</B> (stdio / HTTP + token)  >, dir=both, color="#3B6FB6", penwidth=2.2];
+  middleware -> tools  [label=<  allowed calls only  >, dir=both, color="#9B7FD1", penwidth=2.2];
+  middleware -> engine [label=<  ToolCall / ToolOutput / ToolInfo  >, color="#2E8B57", penwidth=1.8];
+  engine -> middleware [label=<  Decision  >, color="#2E8B57", style=dashed, constraint=false];
+  policy -> support    [label="  loaded at startup  ", color="#E0B04A", style=dashed];
+  engine -> support    [color="#8896A5", label="  rules · redact · record  ", constraint=false];
+  middleware -> approval [label="  ask  ", color="#C0392B", style=dashed];
+  support:store -> cli [label="  runtime-events.jsonl  ", color="#3AA6A6", penwidth=1.8];
+  cli -> outputs       [color="#3AA6A6"];
+  agents -> policy     [style=invis];
+
+  // ---------------- Legend ----------------
+  legend [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#BBBBBB" BGCOLOR="#FAFAFA">
+      <TR><TD COLSPAN="2" ALIGN="LEFT"><B>Verdicts (enforce mode)</B></TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT COLOR="#2E8B57"><B>allow</B></FONT></TD><TD ALIGN="LEFT">pass through unchanged</TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT COLOR="#C27C0E"><B>fence</B></FONT></TD><TD ALIGN="LEFT">wrap output in &lt;untrusted_tool_output&gt;</TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT COLOR="#C27C0E"><B>filter</B></FONT></TD><TD ALIGN="LEFT">hide tool from tools/list</TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT COLOR="#C0392B"><B>ask</B></FONT></TD><TD ALIGN="LEFT">human approves or call is blocked</TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT COLOR="#C0392B"><B>block</B></FONT></TD><TD ALIGN="LEFT">ToolError "Blocked by AgentLatch (RTxxx)"</TD></TR>
+      <TR><TD COLSPAN="2" ALIGN="LEFT"><FONT POINT-SIZE="10" COLOR="#666666">monitor mode: record only (action=alerted, enforce_action=…)<BR ALIGN="LEFT"/>Covers MCP traffic through the gateway only · not a security guarantee<BR ALIGN="LEFT"/></FONT></TD></TR>
+    </TABLE>>];
+
+  outputs -> legend [style=invis];
+}

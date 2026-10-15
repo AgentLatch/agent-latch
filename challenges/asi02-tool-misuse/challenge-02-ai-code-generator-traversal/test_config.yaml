@@ -1,0 +1,4 @@
+repository_url: "https://github.com/techwithtim/AI-Agent-Code-Generator"
+commit_hash: "d9810bef7d9a199529118b0c6dc57ec7bc94fb24"
+proxy_mode: "enforce"
+timeout_seconds: 30

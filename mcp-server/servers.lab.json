@@ -1,0 +1,13 @@
+{
+    "mcpServers": {
+        "fetch": {
+            "description": "LAB ONLY: fetch that may reach 127.0.0.1, for the local prompt-injection test page. Use: python server.py --http --config servers.lab.json",
+            "enabled": true,
+            "command": "uvx",
+            "args": [
+                "mcp-server-fetch==2026.10.10",
+                "--allow-private-ips"
+            ]
+        }
+    }
+}

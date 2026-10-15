@@ -1,0 +1,4 @@
+{
+  "description": "Representative payload structure for schema validation tests: a delegation request to a coworker and a persisted trained-instructions entry.",
+  "input_parameter": "{\"delegate_work\":{\"task\":\"<PLACEHOLDER_RESTRICTED_TASK>\",\"context\":\"<PLACEHOLDER_CONTEXT>\",\"coworker\":\"<PLACEHOLDER_ROLE>\"},\"trained_data\":{\"<PLACEHOLDER_ROLE>\":{\"suggestions\":[\"<PLACEHOLDER_PERSISTENT_INSTRUCTION>\"]}}}"
+}

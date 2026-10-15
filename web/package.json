@@ -1,0 +1,29 @@
+{
+  "name": "invicti-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Invicti design system foundation: React + TypeScript + Tailwind UI for the AgentLatch enterprise console.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "clsx": "2.1.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.26.2",
+    "tailwind-merge": "2.5.4"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.11",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.2",
+    "autoprefixer": "10.4.20",
+    "postcss": "8.4.47",
+    "tailwindcss": "3.4.14",
+    "typescript": "5.6.3",
+    "vite": "5.4.9"
+  }
+}

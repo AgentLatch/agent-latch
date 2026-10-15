@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/crewAIInc/crewAI"
+commit_hash: "6b93fa0e25a926215ca7bb52a95d4db7d9d7262d"
+proxy_mode: "enforce"
+timeout_seconds: 30

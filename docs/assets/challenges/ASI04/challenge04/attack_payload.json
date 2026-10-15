@@ -1,0 +1,13 @@
+{
+  "type": "dependency_supply_chain",
+  "target": "npm",
+  "packages": [
+    "@anthropic-ai/claude-code",
+    "@openai/codex",
+    "@earendil-works/pi-coding-agent"
+  ],
+  "attack": {
+    "version": "malicious-or-compromised-release",
+    "integrity_verified": false
+  }
+}
