@@ -1,0 +1,6 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/open-webui/open-webui.git"
+commit_hash: "8bd8b4fac5e059578ac0c74b3c18d11139f88b7d"
+proxy_mode: "enforce"
+timeout_seconds: 30
+
