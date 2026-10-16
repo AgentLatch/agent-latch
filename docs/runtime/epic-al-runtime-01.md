@@ -1291,7 +1291,7 @@ Not in this epic. Each needs its own ticket with an ASI mapping before work star
 
 ### 12.5 Integrate, don't compete
 
-Teams already running ContextForge, agentgateway or Lasso shouldn't have to switch gateways to get AgentLatch checks. AL-804 exposes the same engine through a small local HTTP service and per-gateway guides. This spreads AgentLatch's rule IDs and reports to more users, which supports the goal in `docs/vision.md`.
+Teams already running ContextForge, agentgateway or Lasso shouldn't have to switch gateways to get AgentLatch checks. AL-804 exposes the same engine through a small local HTTP service and per-gateway guides. This spreads AgentLatch's rule IDs and reports to more users.
 
 ### 12.6 Rules for reuse
 
