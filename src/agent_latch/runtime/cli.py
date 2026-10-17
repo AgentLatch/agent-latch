@@ -103,8 +103,11 @@ def _proxy(args: argparse.Namespace) -> int:
     try:
         from agent_latch.runtime.proxy import build_proxy
     except ImportError:
-        print('agent-latch-runtime: install the runtime extra: pip install "agent-latch[runtime]"',
-              file=sys.stderr)
+        print(
+            "agent-latch-runtime: FastMCP is missing. Install AgentLatch with the runtime extra,"
+            ' for example python -m pip install -e ".[runtime]" from a clone (see docs/runtime.md)',
+            file=sys.stderr,
+        )
         return 2
 
     # stdout carries the MCP protocol in stdio mode, so logging goes to stderr.
