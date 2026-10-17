@@ -84,6 +84,7 @@ Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-comm
 | [Detection rules](docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
 | [Vulnerable example](examples/vulnerable-agent) | A demo project and the findings it should produce |
 | [MCP gateway](mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients |
+| [Runtime proxy (preview)](docs/runtime.md) | Put `agent-latch-runtime proxy` in front of an MCP server to record its tool calls and results; monitor only, no blocking yet |
 
 ## Why AgentLatch?
 
