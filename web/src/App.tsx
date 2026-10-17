@@ -4,6 +4,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Scans } from "./pages/Scans";
 import { Findings } from "./pages/Findings";
 import { Settings } from "./pages/Settings";
+import { Contact } from "./pages/Contact";
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
         <Route path="/scans" element={<Scans />} />
         <Route path="/findings" element={<Findings />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/contact" element={<Contact />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </PageLayout>
