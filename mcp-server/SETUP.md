@@ -116,7 +116,7 @@ claude mcp list
 }
 ```
 
-If the file already has an `mcpServers` section, add only the `"agentlatch-gateway": {...}` entry inside it.
+If the file already has an `mcpServers` section, add only the `"agentlatch-gateway": {...}` entry inside it. On Windows, the Python path is `...\mcp-server\.venv\Scripts\python.exe`.
 
 **3. Restart the app completely.**
 
@@ -230,7 +230,9 @@ GITHUB_TOKEN=github_pat_your_token_here
 
 For a hosted server, use `"url": "https://..."` and `"headers": {"Authorization": "Bearer ${MY_SERVER_TOKEN}"}` instead of `command`, `args` and `env`.
 
-**3. If it needs a token:** add `MY_SERVER_TOKEN=` (empty) to `.env.example`, and the real value to your `.env`.
+**3. If it needs a token:** add `MY_SERVER_TOKEN=` (empty) to `.env.example`, and the real value to your `.env`. Reference it as `${MY_SERVER_TOKEN}` in `env`, `headers`, `args` or `url`. A local server only receives the variables listed in its `env` block, not everything in `.env`.
+
+Use `"enabled": false` to turn a server off without deleting it.
 
 **4.** Run `python server.py --check`.
 
@@ -268,6 +270,7 @@ Before you commit a new tool or server, follow the standards and checklist in [C
 | `No module named fastmcp` | Activate the environment (`source .venv/bin/activate`), then `pip install -r requirements.txt`. |
 | `skip <name>: set <VAR> in .env` | Add that variable to `.env`, or leave the server off. |
 | `skip <name>: 'uvx' is not installed` | Run `brew install uv`. For `npx`, run `brew install node`. |
+| `skip <name>: disabled in servers.json` | Normal. Set `"enabled": true` if you want that server. |
 | A server is mounted but its tools are missing | Open `logs/<name>.log` to see that server's own error. |
 | `address already in use` | Another gateway is running. Stop it, or use `--port 8877`. |
 | The agent doesn't see new tools | Restart the agent, or the gateway in HTTP mode. |

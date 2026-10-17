@@ -196,6 +196,7 @@ Before building a check, look at how established open-source tools handle it. Bo
 - `docs/agent-manifest.md`: manifest schema and checks
 - `docs/ci.md`: pre-commit, GitHub Action inputs and outputs, other CI
 - `docs/RULES.md`: per-rule detection, OWASP mapping, blind spots
+- `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions; `mcp-server/README.md` is an overview that links to it
 - `CONTRIBUTING.md`, `SECURITY.md`, `llms.txt`
 
 When behavior changes, update the relevant docs in the same change.
