@@ -6,6 +6,8 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+# Node dependencies (matches node_modules/ at any depth: repo root, web/, mcp-server/)
+node_modules/
 .env
 .env.*
 !.env.example
