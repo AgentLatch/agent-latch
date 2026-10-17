@@ -11,12 +11,27 @@ To the app, the proxy looks like an MCP server. To the real server, it looks lik
 
 ## Install
 
+Requires Python 3.11 or newer. Install it in its own virtual environment, pinned to a release tag. AgentLatch is **not on PyPI**, so don't run `pip install agent-latch`: a package with that name on PyPI would not be ours.
+
+Linux, macOS and WSL:
+
 ```sh
-python -m pip install "agent-latch[runtime]"
+python3 -m venv ~/agentlatch-runtime
+source ~/agentlatch-runtime/bin/activate
+python -m pip install "agent-latch[runtime] @ git+https://github.com/AgentLatch/agent-latch.git@v0.3.0"
 agent-latch-runtime proxy --help
 ```
 
-The `runtime` extra adds FastMCP. A plain `pip install agent-latch` (the scanner) doesn't install it.
+Windows PowerShell:
+
+```powershell
+py -3 -m venv $HOME\agentlatch-runtime
+& $HOME\agentlatch-runtime\Scripts\Activate.ps1
+python -m pip install "agent-latch[runtime] @ git+https://github.com/AgentLatch/agent-latch.git@v0.3.0"
+agent-latch-runtime proxy --help
+```
+
+The `runtime` extra adds FastMCP; the scanner alone doesn't need it. From a clone of the repository, `python -m pip install -e ".[runtime]"` works too.
 
 ## Connect an app
 
@@ -51,7 +66,7 @@ After:
 }
 ```
 
-- Use full paths: desktop apps often start servers with a different `PATH` and working directory.
+- Use full paths: desktop apps often start servers with a different `PATH` and working directory. The command is the `agent-latch-runtime` inside your virtual environment: `~/agentlatch-runtime/bin/agent-latch-runtime`, or on Windows `C:\\Users\\<you>\\agentlatch-runtime\\Scripts\\agent-latch-runtime.exe` (every `\` is written `\\` in JSON).
 - Keep any `env` block as it was. The proxy passes its environment on to the real server.
 - The config file is `.mcp.json` for Claude Code, `.cursor/mcp.json` for Cursor and `claude_desktop_config.json` for Claude Desktop. Restart the app afterwards.
 
