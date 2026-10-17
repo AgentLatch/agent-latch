@@ -70,13 +70,23 @@ src/agent_latch/
   suppress.py     # .agent-latch-ignore, inline ignores, pyproject excludes
   report.py       # text, JSON, and SARIF renderers; severity ordering
   action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
-tests/test_scanner.py          # all unit tests (synthetic fixtures via tmp_path)
+  runtime/        # runtime checks for MCP traffic (preview, monitor only; `[runtime]` extra)
+    events.py     # ToolCall, ToolOutput, ToolInfo
+    redact.py     # hashes, secret masking, short excerpts (never raw arguments or outputs)
+    trace.py      # TraceLog: one redacted JSONL record per MCP message (agentlatch.runtime.trace/1)
+    middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
+    proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
+    cli.py        # agent-latch-runtime console script (`proxy` subcommand)
+tests/test_scanner.py          # scanner unit tests (synthetic fixtures via tmp_path)
+tests/test_runtime.py          # runtime tests that need no FastMCP
+tests/test_runtime_middleware.py # proxy end-to-end tests (skipped without the [runtime] extra)
+tests/runtime_fixtures/        # synthetic MCP server for the runtime tests
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
 action.yml                     # composite GitHub Action (isolated venv, SARIF path rewrite, summary)
 .pre-commit-hooks.yaml         # pre-commit hook definition (`agent-latch scan --fail-on high`)
 .agent-latch-ignore            # suppressions for the repo's own self-scan
-.github/workflows/tests.yml    # CI: tests + ruff (py3.11–3.14), action smoke test, self-scan
+.github/workflows/tests.yml    # CI: tests + ruff (py3.11–3.14), runtime tests, action smoke test, self-scan
 llms.txt                       # LLM-oriented project summary
 ```
 
@@ -86,7 +96,7 @@ Python 3.11+ is required. The repo uses a local `.venv`.
 
 ```sh
 python3 -m venv .venv && source .venv/bin/activate
-python -m pip install -e ".[dev,audit]"
+python -m pip install -e ".[dev,audit,runtime]"
 python -m pytest          # run all tests
 ruff check .              # lint (line-length 100, target py311)
 ```
@@ -108,7 +118,12 @@ agent-latch [scan] [path] [--config MANIFEST] [--exclude PATH]... [--ignore-file
             [--project-ignores] [--dependencies] [-i/--interactive]
             [--format text|json|sarif] [--output FILE] [--plain] [--min-severity LEVEL]
             [--fail-on none|low|medium|high|critical] [-V]
+
+agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N] [--quiet]
+            [--http HOST:PORT] (--upstream-url URL | -- SERVER COMMAND...)
 ```
+
+`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode.
 
 Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them.
 
@@ -149,7 +164,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 
 ## Conventions
 
-- Keep runtime dependencies minimal: `rich`, `rich-argparse`, `PyYAML`. `pip-audit` is an optional `[audit]` extra. Do not add new runtime dependencies without strong justification.
+- Keep runtime dependencies minimal: `rich`, `rich-argparse`, `PyYAML`. `pip-audit` is an optional `[audit]` extra, and pinned `fastmcp` is the optional `[runtime]` extra (`import agent_latch.runtime` must not import it). Do not add new runtime dependencies without strong justification.
 - Use `from __future__ import annotations`, type hints, and `pathlib.Path` throughout. Use frozen dataclasses for value types.
 - Rules are static heuristics. Parse with `ast` and never import or execute scanned code. Load YAML only with `yaml.SafeLoader` (see `manifest._LineLoader`).
 - The project walker (`rules.iter_project_files` / `scan_project`) visits every folder and every text file (see the design principle above). By file type: `.py` gets source, agent, and prompt rules; `.yaml`/`.yml` (except manifests, which `manifest.py` handles) gets YAML prompt checks; prompt templates (`rules.PROMPT_SUFFIXES`, and `.md`/`.txt` under a `prompts/` folder) get prompt rules; every text file gets `SEC001`. Keep these limits intentional and documented in `docs/getting-started.md`.
@@ -196,6 +211,8 @@ Before building a check, look at how established open-source tools handle it. Bo
 - `docs/agent-manifest.md`: manifest schema and checks
 - `docs/ci.md`: pre-commit, GitHub Action inputs and outputs, other CI
 - `docs/RULES.md`: per-rule detection, OWASP mapping, blind spots
+- `docs/runtime.md`: runtime proxy for MCP (preview, monitor only): install, connecting an app, what is recorded, limits
+- `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions; `mcp-server/README.md` is an overview that links to it
 - `CONTRIBUTING.md`, `SECURITY.md`, `llms.txt`
 
 When behavior changes, update the relevant docs in the same change.
