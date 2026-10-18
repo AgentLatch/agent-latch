@@ -15,8 +15,13 @@ from typing import Any
 from agent_latch.agent_code import scan_agent_code, scan_prompt_yaml
 from agent_latch.astutil import walk
 from agent_latch.findings import Finding, demote_test_findings, is_test_path
-from agent_latch.prompts import check_prompt_text
-from agent_latch.taint import find_untrusted_prompt_flows
+from agent_latch.prompts import check_prompt_text, looks_like_system_prompt
+from agent_latch.taint import (
+    ProjectLinks,
+    find_model_output_actions,
+    find_untrusted_prompt_flows,
+    link_project,
+)
 
 __all__ = ["DependencyAuditError", "Finding", "audit_requirements", "scan_project"]
 
@@ -43,7 +48,7 @@ _PLACEHOLDER_PREFIXES = (
     "not-", "not_", "my-", "my_", "replace", "insert", "xxx", "***", "<", "${", "{{", "{", "%(", "$",
 )
 # "\\u" catches JSON-escaped text, such as translated UI labels.
-_PLACEHOLDER_PARTS = ("...", "xxxx", "****", "redacted", "placeholder", "\\u")
+_PLACEHOLDER_PARTS = ("...", "xxxx", "****", "redacted", "placeholder", "anything", "arbitrary", "\\u")
 # UI translation folders map keys like "password" to words; letter-only values there are labels.
 _I18N_DIRS = {"translations", "locales", "locale", "i18n", "l10n", "lang", "langs"}
 
@@ -52,11 +57,37 @@ def _relative(path: Path, root: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
-def scan_python(path: Path, root: Path, source: str) -> list[Finding]:
-    findings: list[Finding] = []
+_KERNEL_EXEC_METHODS = {"execute_interactive", "run_cell", "runsource", "runcode"}
+_KERNEL_NAME = re.compile(r"(?i)(?:^|_)(?:kc|kernel|kernel_client|km|repl|interpreter|shell)$")
+
+
+def _code_runner(node: ast.Call) -> str | None:
+    """eval/exec, or a Jupyter kernel / REPL call that runs a code string (kc.execute(code), shell.run_cell)."""
+    if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec"}:
+        return node.func.id
+    if not isinstance(node.func, ast.Attribute):
+        return None
+    receiver = node.func.value
+    receiver_name = receiver.attr if isinstance(receiver, ast.Attribute) else getattr(receiver, "id", "")
+    method = node.func.attr
+    if method in _KERNEL_EXEC_METHODS or (method == "execute" and _KERNEL_NAME.search(receiver_name or "")):
+        return f"{receiver_name}.{method}" if receiver_name else method
+    return None
+
+
+def parse_python(path: Path, source: str) -> ast.Module | None:
     try:
-        tree = ast.parse(source, filename=str(path))
+        return ast.parse(source, filename=str(path))
     except SyntaxError:
+        return None
+
+
+def scan_python(
+    path: Path, root: Path, source: str, links: ProjectLinks | None = None, tree: ast.Module | None = None
+) -> list[Finding]:
+    findings: list[Finding] = []
+    tree = tree or parse_python(path, source)
+    if tree is None:
         return findings
 
     dataframe_agent_names = {"create_pandas_dataframe_agent"}
@@ -76,19 +107,20 @@ def scan_python(path: Path, root: Path, source: str) -> list[Finding]:
             and isinstance(node.func.value, ast.Name)
             else None
         )
-        if called in {"eval", "exec"}:
+        runner = _code_runner(node)
+        if runner:
             findings.append(
                 Finding(
                     rule_id="AGENTLATCH-PY001",
                     title="Dynamic code execution",
                     severity="high",
-                    message=f"{called}() executes dynamically supplied code; verify input provenance and necessity.",
+                    message=f"{runner}() executes dynamically supplied code; verify input provenance and necessity.",
                     path=_relative(path, root),
                     line=node.lineno,
                     column=node.col_offset + 1,
                     owasp=("ASI05", "ASI02"),
                     confidence="high",
-                    evidence=f"{called}(...) call",
+                    evidence=f"{runner}(...) call",
                 )
             )
 
@@ -205,8 +237,70 @@ def scan_python(path: Path, root: Path, source: str) -> list[Finding]:
             )
         )
 
+    for action in find_model_output_actions(tree, links):
+        findings.append(
+            Finding(
+                rule_id="AGENTLATCH-AG008",
+                title="Model output drives a dangerous operation",
+                severity="high",
+                message=(
+                    f"An LLM response or a model-chosen tool argument reaches {_ACTION_TEXT[action.kind]} without "
+                    "validation (possibly through another file). A prompt-injected or hallucinated response then "
+                    "decides what runs. Allow-list or parse the output (for SQL, "
+                    "read-only statements on a least-privilege account), and require approval for writes."
+                ),
+                path=_relative(path, root),
+                line=action.line,
+                column=action.column,
+                owasp=("ASI02", "ASI05"),
+                confidence="medium",
+                evidence=f"model output reaches {action.sink}",
+            )
+        )
+
+    findings.extend(_password_default_findings(tree, _relative(path, root)))
     findings.extend(scan_agent_code(tree, _relative(path, root)))
     return demote_test_findings(findings, _relative(path, root))
+
+
+_ACTION_TEXT = {
+    "code_execution": "code or command execution",
+    "database": "a database query",
+    "network": "a network request (server-side request forgery)",
+    "filesystem": "a file operation",
+}
+
+
+def _password_default_findings(tree: ast.Module, relative_path: str) -> list[Finding]:
+    """SEC001 for UI password fields with a literal default, e.g. st.text_input(type="password", value="admin")."""
+    findings: list[Finding] = []
+    for node in walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        keywords = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+        kind = keywords.get("type")
+        if not (isinstance(kind, ast.Constant) and kind.value == "password"):
+            continue
+        default = keywords.get("value", keywords.get("default"))
+        if not (isinstance(default, ast.Constant) and isinstance(default.value, str) and default.value):
+            continue
+        if is_placeholder_secret(default.value):
+            continue
+        findings.append(
+            Finding(
+                rule_id="AGENTLATCH-SEC001",
+                title="Possible hardcoded credential",
+                severity="low" if is_test_path(relative_path) else "high",
+                message="A password field has a literal default value. Leave it empty and load credentials from a secret manager or environment variable.",
+                path=relative_path,
+                line=default.lineno,
+                column=default.col_offset + 1,
+                owasp=("ASI03", "ASI04"),
+                confidence="medium",
+                evidence="password field default; value redacted",
+            )
+        )
+    return findings
 
 
 def is_prompt_file(relative_parts: tuple[str, ...]) -> bool:
@@ -217,8 +311,8 @@ def is_prompt_file(relative_parts: tuple[str, ...]) -> bool:
 
 
 def scan_prompt_file(path: Path, root: Path, source: str) -> list[Finding]:
-    """PRM001 on a prompt template; PRM002 too when the file name says it is a system prompt."""
-    is_system = "system" in path.name.lower()
+    """PRM001/PRM003 on a prompt template; PRM002 too when it is (or is written as) a system prompt."""
+    is_system = "system" in path.name.lower() or looks_like_system_prompt(source)
     label = "System prompt file" if is_system else "Prompt file"
     return check_prompt_text(source, _relative(path, root), 1, label, is_system)
 
@@ -233,7 +327,7 @@ def is_placeholder_secret(value: str, key: str = "", relative_path: str = "") ->
         lowered.startswith(_PLACEHOLDER_PREFIXES)
         or any(part in lowered for part in _PLACEHOLDER_PARTS)
         or len(set(lowered)) <= 2
-        or (key and _normalize_key(value) == _normalize_key(key))
+        or (key and _normalize_key(key) in _normalize_key(value))
     ):
         return True
     in_i18n = any(part.lower() in _I18N_DIRS for part in relative_path.split("/")[:-1])
@@ -315,6 +409,7 @@ def scan_project(target: Path, max_file_bytes: int = 1_000_000) -> list[Finding]
     root = target.resolve()
     base = root if root.is_dir() else root.parent
     findings: list[Finding] = []
+    python_files: list[tuple[Path, str, ast.Module | None]] = []
 
     for path in iter_project_files(root):
         try:
@@ -330,13 +425,18 @@ def scan_project(target: Path, max_file_bytes: int = 1_000_000) -> list[Finding]
 
         suffix = path.suffix.lower()
         if suffix == ".py":
-            findings.extend(scan_python(path, base, source))
+            python_files.append((path, source, parse_python(path, source)))
         elif suffix in {".yaml", ".yml"} and path.name not in MANIFEST_NAMES:
             # Manifests get their own prompt checks in manifest.py; any other YAML may hold prompts.
             findings.extend(scan_prompt_yaml(_relative(path, base), source))
         elif is_prompt_file(relative_parts):
             findings.extend(scan_prompt_file(path, base, source))
         findings.extend(scan_secrets(path, base, source))
+
+    links = link_project([tree for _, _, tree in python_files if tree is not None])
+    for path, source, tree in python_files:
+        if tree is not None:
+            findings.extend(scan_python(path, base, source, links, tree))
 
     return sorted(findings, key=lambda finding: (finding.path, finding.line, finding.rule_id))
 

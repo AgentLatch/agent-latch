@@ -20,6 +20,7 @@ The manifest is found automatically. Every finding below except `MAN*` also appe
 | HIGH | `MAN002` | `agent-manifest.yaml` | `file_manager` has wildcard (`*`) permissions. |
 | HIGH | `PY002` | `tools.py` | `subprocess.run(..., shell=True)` allows command injection. |
 | HIGH | `AG006` | `orchestrator.py` | AutoGen `UserProxyAgent` runs model-written code with `human_input_mode="NEVER"`. |
+| HIGH | `AG008` | `orchestrator.py` | The model chooses the path that `write_report` opens for writing, so it can write anywhere. |
 | MEDIUM | `MAN003` | `agent-manifest.yaml` | `crm_lookup` calls a remote endpoint with `auth: none`. |
 | MEDIUM | `PRM002` | `agent-manifest.yaml` | `{user_input}` is placed inside the system prompt. |
 | MEDIUM | `PRM002` | `prompts/billing-system.md` | `{{ customer_message }}` is placed inside the system prompt. |

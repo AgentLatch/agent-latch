@@ -100,7 +100,7 @@ These layers will remain clearly distinguished: detecting a risky pattern is not
 
 | Rule | Detection | OWASP Agentic mapping |
 |---|---|---|
-| `AGENTLATCH-PY001` | Direct Python `eval()` and `exec()` calls | ASI05 Unexpected Code Execution (RCE); ASI02 Tool Misuse and Exploitation |
+| `AGENTLATCH-PY001` | Direct Python `eval()` and `exec()` calls, and code run in a Jupyter kernel or REPL | ASI05 Unexpected Code Execution (RCE); ASI02 Tool Misuse and Exploitation |
 | `AGENTLATCH-PY002` | `subprocess.*(..., shell=True)` calls | ASI05 Unexpected Code Execution (RCE); ASI02 Tool Misuse and Exploitation |
 | `AGENTLATCH-PY003` | Calls with a literal `verify=False` argument | ASI02 Tool Misuse and Exploitation |
 | `AGENTLATCH-AG001` | CrewAI `Agent(..., allow_delegation=True)` review hint | ASI02 Tool Misuse and Exploitation; ASI03 Identity and Privilege Abuse |
@@ -110,13 +110,15 @@ These layers will remain clearly distinguished: detecting a risky pattern is not
 | `AGENTLATCH-AG005` | Agent given an unrestricted built-in tool (shell, Python REPL, unscoped file access) | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03 |
 | `AGENTLATCH-AG006` | Human approval turned off for agent actions (`human_input_mode="NEVER"` with code execution, `auto_approve=True`, `permission_mode="bypassPermissions"`) | ASI09 Human-Agent Trust Exploitation; ASI05 / ASI02 |
 | `AGENTLATCH-AG007` | Agent loop with no effective limit (`max_iterations=None`, very high limits, `while True` around an agent call) | ASI08 Cascading Failures |
-| `AGENTLATCH-SEC001` | Credential-like quoted assignments; matched value is redacted | ASI03 Identity and Privilege Abuse; ASI04 Agentic Supply Chain Vulnerabilities |
+| `AGENTLATCH-AG008` | LLM output or model-chosen tool arguments flowing (also across files) into code execution, a SQL query, a URL fetch, or a file operation | ASI02 Tool Misuse and Exploitation; ASI05 Unexpected Code Execution (RCE) |
+| `AGENTLATCH-SEC001` | Credential-like quoted assignments and password fields with a literal default; matched value is redacted | ASI03 Identity and Privilege Abuse; ASI04 Agentic Supply Chain Vulnerabilities |
 | `AGENTLATCH-DEP001` | Known advisory for a package in an audited requirements file | ASI04 Agentic Supply Chain Vulnerabilities |
 | `AGENTLATCH-MAN001` | Manifest tool with a high-risk capability and no human-approval gate | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03; ASI09 |
 | `AGENTLATCH-MAN002` | Manifest tool with wildcard permissions | ASI02 Tool Misuse and Exploitation; ASI03 Identity and Privilege Abuse |
 | `AGENTLATCH-MAN003` | Manifest tool calling a remote endpoint without authentication | ASI03 Identity and Privilege Abuse; ASI02 Tool Misuse and Exploitation |
 | `AGENTLATCH-PRM001` | Prompt-injection signatures in prompts in code, YAML, prompt template files, and manifests | ASI01 Agent Goal Hijack |
-| `AGENTLATCH-PRM002` | User-input placeholder interpolated into a system prompt | ASI01 Agent Goal Hijack |
+| `AGENTLATCH-PRM002` | User-input placeholder interpolated into a system prompt, or into any prompt written as system instructions | ASI01 Agent Goal Hijack |
+| `AGENTLATCH-PRM003` | Prompt that tells the model to keep a secret, so the secret is in the prompt; text is redacted | ASI01 Agent Goal Hijack; ASI03 Identity and Privilege Abuse |
 
 ASI08 and ASI09 have their first, partial checks (`AG007`, `AG006`, and `AG004`/`MAN001` for missing confirmation). AgentLatch has no checks yet for ASI06 Memory & Context Poisoning, ASI07 Insecure Inter-Agent Communication, or ASI10 Rogue Agents. Every report ends with an ASI01–ASI10 summary showing finding counts and marking these categories as `no checks yet`, so they aren't mistaken for clean results.
 
@@ -147,7 +149,7 @@ Install AgentLatch and run `agent-latch scan /path/to/agent`. It checks Python a
 
 ### Can AgentLatch detect prompt injection?
 
-It detects three static signals: instruction-override phrases such as "ignore all previous instructions" in prompt templates (`PRM001`), user input interpolated into system prompts (`PRM002`), and **indirect prompt injection** paths where web-search, web-page, or HTTP content flows into an LLM message without delimiters (`AG003`). It does not test model behavior at runtime, so it cannot prove an agent resists prompt injection.
+It detects three static signals: instruction-override phrases such as "ignore all previous instructions" in prompt templates (`PRM001`), user input interpolated into system prompts or prompts written as instructions (`PRM002`), secrets placed in prompts behind a "never reveal" rule (`PRM003`), and **indirect prompt injection** paths where web-search, web-page, or HTTP content flows into an LLM message without delimiters (`AG003`). It does not test model behavior at runtime, so it cannot prove an agent resists prompt injection.
 
 ### Which AI agent frameworks does it support?
 

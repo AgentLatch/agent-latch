@@ -1,4 +1,4 @@
-"""Prompt-text checks (PRM001, PRM002) shared by manifest and source-code scanning."""
+"""Prompt-text checks (PRM001-PRM003) shared by manifest and source-code scanning."""
 
 from __future__ import annotations
 
@@ -23,6 +23,24 @@ _NON_TEXT_SUFFIX = re.compile(
 )
 
 
+# Role or rule text that makes a prompt act as system instructions, even when it is not sent as one.
+_SYSTEM_STYLE = re.compile(
+    r"(?i)\byou\s+are\s+(?:an?|the)\s|\bsystem\s+(?:rules?|prompt|instructions?)\b|\binstructions?\s*:"
+    r"|\{\s*\w*(?:system|instruction|rules)\w*\s*\}"
+)
+# A prompt that asks the model to guard a secret, which means the secret is in the prompt.
+_GUARDED_SECRET = re.compile(
+    r"(?i)\b(?:never|don'?t|do\s+not|must\s+not)\s+(?:\w+\s+){0,3}?"
+    r"(?:reveal|include|display|disclose|share|tell|output|print|leak|expose|mention)\b"
+    r".{0,60}?\b(?:flags?|passwords?|secrets?|api[\s_-]?keys?|tokens?|credentials?|passphrases?)\b"
+)
+
+
+def looks_like_system_prompt(text: str) -> bool:
+    """True when prompt text defines a role or rules, so user input mixed into it can override them."""
+    return bool(_SYSTEM_STYLE.search(text))
+
+
 def untrusted_placeholder(line: str) -> re.Match[str] | None:
     """First user-input-like placeholder on the line that could hold free text."""
     for match in UNTRUSTED_PLACEHOLDER.finditer(line):
@@ -39,7 +57,7 @@ def check_prompt_text(
     is_system: bool,
     base_column: int = 1,
 ) -> list[Finding]:
-    """Run PRM001 (injection phrases) and, for system prompts, PRM002 (user-input placeholders).
+    """Run PRM001 (injection phrases), PRM003 (guarded secrets), and, for system prompts, PRM002.
 
     `base_column` applies to the first line only, for strings that start mid-line in source code.
     """
@@ -67,6 +85,25 @@ def check_prompt_text(
                     )
                 )
                 break
+        match = _GUARDED_SECRET.search(line)
+        if match:
+            findings.append(
+                Finding(
+                    rule_id="AGENTLATCH-PRM003",
+                    title="Secret embedded in prompt",
+                    severity="high",
+                    message=(
+                        f"{label} tells the model to keep a secret, so the secret is in the model's context. "
+                        "Prompt injection can extract it. Keep secrets out of prompts and enforce access in code."
+                    ),
+                    path=path,
+                    line=base_line + offset,
+                    column=match.start() + 1 + column_shift,
+                    owasp=("ASI01", "ASI03"),
+                    confidence="medium",
+                    evidence="instruction to withhold a secret; text redacted",
+                )
+            )
         if is_system:
             match = untrusted_placeholder(line)
             if match:

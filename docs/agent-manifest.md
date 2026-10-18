@@ -82,6 +82,7 @@ Wildcards: `*`, `all`, `any`, or anything ending in `:*`.
 | `MAN003` | medium | Remote endpoint with missing or disabled auth | Authenticate the tool with a credential scoped to it. |
 | `PRM001` | medium | Phrases like "ignore all previous instructions" in a prompt | Find where the text came from; never paste untrusted content into templates. |
 | `PRM002` | medium | `{user_input}`, `{{ query }}`, `${message}` inside a system prompt | Pass user input in the user turn, delimited and labelled as data. |
+| `PRM003` | high | A prompt telling the model never to reveal a flag, password, secret, key, or token | Keep secrets out of prompts and enforce access in code. |
 | `MAN000` | info | Referenced prompt file not found | Fix the path. Does not affect `--fail-on`. |
 
 Full detection details and blind spots are in [RULES.md](RULES.md).

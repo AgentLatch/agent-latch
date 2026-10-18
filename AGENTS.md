@@ -38,11 +38,11 @@ AgentLatch is often run on agents someone else wrote, so nothing inside the scan
 
 | ID | Category | Current rules |
 |---|---|---|
-| ASI01 | Agent Goal Hijack | `AG003`, `PRM001`, `PRM002` |
-| ASI02 | Tool Misuse and Exploitation | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003` |
-| ASI03 | Identity and Privilege Abuse | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003` |
+| ASI01 | Agent Goal Hijack | `AG003`, `PRM001`, `PRM002`, `PRM003` |
+| ASI02 | Tool Misuse and Exploitation | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `AG008`, `MAN001`, `MAN002`, `MAN003` |
+| ASI03 | Identity and Privilege Abuse | `AG001`, `AG004`, `AG005`, `SEC001`, `PRM003`, `MAN001`, `MAN002`, `MAN003` |
 | ASI04 | Agentic Supply Chain Vulnerabilities | `SEC001`, `DEP001` |
-| ASI05 | Unexpected Code Execution (RCE) | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001` |
+| ASI05 | Unexpected Code Execution (RCE) | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `AG006`, `AG008`, `MAN001` |
 | ASI06 | Memory & Context Poisoning | none yet |
 | ASI07 | Insecure Inter-Agent Communication | none yet |
 | ASI08 | Cascading Failures | `AG007` (partial) |
@@ -62,8 +62,8 @@ src/agent_latch/
   agent_code.py   # manifest-free agent checks: prompts in code/YAML (PRM*), AG004, AG005
   oversight.py    # AG006 human approval disabled (ASI09), AG007 unbounded agent loops (ASI08)
   astutil.py      # cached ast.walk shared by the rule modules
-  taint.py        # AG003: untrusted web/HTTP/tool output flowing into LLM messages
-  prompts.py      # PRM001/PRM002 text checks shared by code, YAML, prompt files, and manifests
+  taint.py        # AG003: untrusted web/HTTP/tool output into LLM messages; AG008: LLM output into actions
+  prompts.py      # PRM001-PRM003 text checks shared by code, YAML, prompt files, and manifests
   yamlload.py     # line-aware YAML loading (SafeLoader subclass)
   manifest.py     # Manifest loading and MAN* rules; PRM* on manifest prompts
   owasp.py        # ASI01–ASI10 category IDs/names, rule→category map, coverage summary
@@ -116,7 +116,7 @@ Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown
 
 | ID | Where | Detects |
 |---|---|---|
-| `AGENTLATCH-PY001` | `rules.py` | `eval()` / `exec()` |
+| `AGENTLATCH-PY001` | `rules.py` | `eval()` / `exec()`, Jupyter kernel / REPL code execution |
 | `AGENTLATCH-PY002` | `rules.py` | `subprocess.*(..., shell=True)` |
 | `AGENTLATCH-PY003` | `rules.py` | literal `verify=False` |
 | `AGENTLATCH-AG001` | `rules.py` | CrewAI `Agent(allow_delegation=True)` |
@@ -126,13 +126,15 @@ Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown
 | `AGENTLATCH-AG005` | `agent_code.py` | unrestricted built-in tool (`ShellTool`, `PythonREPLTool`, unscoped `FileManagementToolkit`, ...) |
 | `AGENTLATCH-AG006` | `oversight.py` | human approval disabled (`human_input_mode="NEVER"` with code execution, `auto_approve=True`, ...) |
 | `AGENTLATCH-AG007` | `oversight.py` | agent loop without an effective limit (`max_iterations=None`, huge limits, endless `while True`) |
-| `AGENTLATCH-SEC001` | `rules.py` | credential-like quoted assignments (value redacted) |
+| `AGENTLATCH-AG008` | `taint.py` | LLM output or tool arguments flowing (also across files via `link_project`) into code execution, SQL, URL fetches, or file operations |
+| `AGENTLATCH-SEC001` | `rules.py` | credential-like quoted assignments and password-field defaults (value redacted) |
 | `AGENTLATCH-DEP001` | `rules.py` | `pip-audit` advisories in `requirements*.txt` |
 | `AGENTLATCH-MAN001` | `manifest.py` | high-risk tool capability without an approval gate |
 | `AGENTLATCH-MAN002` | `manifest.py` | wildcard tool permissions |
 | `AGENTLATCH-MAN003` | `manifest.py` | remote tool endpoint without auth |
 | `AGENTLATCH-PRM001` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | prompt-injection signatures in prompts |
-| `AGENTLATCH-PRM002` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | user-input placeholder in a system prompt |
+| `AGENTLATCH-PRM002` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | user-input placeholder in a system prompt or a prompt written as instructions |
+| `AGENTLATCH-PRM003` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | secret placed in a prompt behind a "never reveal" instruction |
 
 Full behavior and blind spots: `docs/RULES.md`.
 
@@ -153,7 +155,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 - Use `from __future__ import annotations`, type hints, and `pathlib.Path` throughout. Use frozen dataclasses for value types.
 - Rules are static heuristics. Parse with `ast` and never import or execute scanned code. Load YAML only with `yaml.SafeLoader` (see `manifest._LineLoader`).
 - The project walker (`rules.iter_project_files` / `scan_project`) visits every folder and every text file (see the design principle above). By file type: `.py` gets source, agent, and prompt rules; `.yaml`/`.yml` (except manifests, which `manifest.py` handles) gets YAML prompt checks; prompt templates (`rules.PROMPT_SUFFIXES`, and `.md`/`.txt` under a `prompts/` folder) get prompt rules; every text file gets `SEC001`. Keep these limits intentional and documented in `docs/getting-started.md`.
-- Noisy rules report findings in test files at low severity instead of dropping them, so real problems in tests stay visible: `SEC001` itself, and `findings.TEST_DEMOTED_RULES` (`PY001`, `AG004`, `AG006`, `AG007`) through `demote_test_findings`.
+- Noisy rules report findings in test files at low severity instead of dropping them, so real problems in tests stay visible: `SEC001` itself, and `findings.TEST_DEMOTED_RULES` (`PY001`, `AG004`, `AG006`, `AG007`, `AG008`) through `demote_test_findings`.
 - `--min-severity` filters what is reported, never what fails: the CLI rejects a `--min-severity` above `--fail-on`, keeps unknown severity, and every report counts hidden findings.
 - Use `astutil.walk` instead of `ast.walk` for whole-file or whole-function traversals; every rule walks the same tree.
 - Sort findings deterministically (path, line, rule ID) so reports and SARIF stay stable.

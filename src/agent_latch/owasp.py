@@ -42,6 +42,7 @@ RULE_CATEGORIES: dict[str, tuple[str, ...]] = {
     "AGENTLATCH-AG005": ("ASI02", "ASI03", "ASI05"),
     "AGENTLATCH-AG006": ("ASI09", "ASI02", "ASI05"),
     "AGENTLATCH-AG007": ("ASI08",),
+    "AGENTLATCH-AG008": ("ASI02", "ASI05"),
     "AGENTLATCH-SEC001": ("ASI03", "ASI04"),
     "AGENTLATCH-DEP001": ("ASI04",),
     "AGENTLATCH-MAN000": (),
@@ -50,6 +51,7 @@ RULE_CATEGORIES: dict[str, tuple[str, ...]] = {
     "AGENTLATCH-MAN003": ("ASI03", "ASI02"),
     "AGENTLATCH-PRM001": ("ASI01",),
     "AGENTLATCH-PRM002": ("ASI01",),
+    "AGENTLATCH-PRM003": ("ASI01", "ASI03"),
 }
 
 

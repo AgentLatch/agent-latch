@@ -1,8 +1,9 @@
 """Agent checks that work from source code alone, with or without an agent manifest.
 
-- PRM001 / PRM002 on prompts written in Python (SystemMessage, ("system", ...) tuples,
-  {"role": "system"} dicts, CrewAI goal/backstory, Agents SDK instructions, *_PROMPT variables)
-  and in YAML prompt files such as CrewAI config/agents.yaml.        (ASI01 Agent Goal Hijack)
+- PRM001 / PRM002 / PRM003 on prompts written in Python (SystemMessage, ("system", ...) tuples,
+  {"role": "system"} dicts, CrewAI goal/backstory, Agents SDK instructions, *_PROMPT / template
+  variables, text passed straight to an llm(...) call) and in YAML prompt files such as CrewAI
+  config/agents.yaml. Prompts that define a role or rules count as system prompts. (ASI01)
 - AG004: a function exposed to the model as a tool runs shell commands, writes or deletes files,
   sends email, writes to a database, or sends HTTP writes, and no approval gate is visible.
 - AG005: an agent is given an unrestricted built-in tool (shell, Python REPL, file system).
@@ -24,7 +25,8 @@ import yaml
 from agent_latch.astutil import walk
 from agent_latch.findings import Finding
 from agent_latch.oversight import scan_oversight
-from agent_latch.prompts import check_prompt_text
+from agent_latch.prompts import check_prompt_text, looks_like_system_prompt
+from agent_latch.taint import LLM_CLASSES, LLM_NAME
 from agent_latch.yamlload import LineDict, line_of, load_yaml
 
 # ---------------------------------------------------------------- shared helpers
@@ -64,8 +66,17 @@ _USER_ROLES = {"user", "human"}
 _SYSTEM_KEYWORDS = {"system_prompt", "system_message", "system", "instructions", "backstory", "goal"}
 _PROMPT_KEYWORDS = {"description", "expected_output", "template", "user_prompt"}
 _AGENT_FACTORIES = {"create_react_agent", "create_agent"}  # prompt= is the system prompt here
-_SYSTEM_VAR = re.compile(r"(?i)system_?(?:prompt|message|instructions?)")
-_PROMPT_VAR = re.compile(r"(?i)prompt")
+_SYSTEM_VAR = re.compile(r"(?i)system_?(?:prompt|message|instructions?)|^instructions?$")
+_PROMPT_VAR = re.compile(r"(?i)prompt|template")
+# Keywords that carry prompt text on any call; the text decides whether it acts as a system prompt.
+_INFERRED_KEYWORDS = {"template", "user_prompt", "prompt"}
+# Calls that display or log text rather than send it to a model.
+_OUTPUT_CALLS = {"print", "debug", "info", "warning", "warn", "error", "exception", "critical", "log",
+                 "write", "write_text", "write_bytes", "send", "markdown", "echo", "format", "join",
+                 "Exception", "ValueError"}
+# Methods that send their first argument to a model, e.g. llm.invoke("...") or llm.predict("...").
+_LLM_METHODS = {"invoke", "ainvoke", "predict", "apredict", "generate", "complete", "acomplete",
+                "create_completion", "stream", "chat", "generate_content", "call"}
 
 
 def _render(node: ast.AST) -> str | None:
@@ -101,14 +112,22 @@ class _PromptCollector:
         self.path = path
         self.seen: set[int] = set()
         self.findings: list[Finding] = []
+        self.assigned: dict[str, list[ast.expr]] = {}
 
-    def check(self, node: ast.AST | None, label: str, is_system: bool) -> None:
+    def check(self, node: ast.AST | None, label: str, is_system: bool, infer: bool = False) -> None:
+        """Check prompt text. `infer` promotes it to a system prompt when it defines a role or rules."""
         if node is None or id(node) in self.seen:
             return
+        self.seen.add(id(node))
+        # Follow variables used in the prompt (template = "..."; from_template(template)).
+        for name in sorted({part.id for part in ast.walk(node) if isinstance(part, ast.Name)}):
+            for value in self.assigned.get(name, []):
+                self.check(value, label, is_system, infer)
         text = _render(node)
         if text is None:
             return
-        self.seen.add(id(node))
+        if infer and not is_system and looks_like_system_prompt(text):
+            is_system, label = True, f"{label} (written as system instructions)"
         self.findings.extend(
             check_prompt_text(
                 text, self.path, node.lineno, label, is_system, base_column=node.col_offset + 1
@@ -116,6 +135,14 @@ class _PromptCollector:
         )
 
     def visit(self, tree: ast.Module) -> list[Finding]:
+        # Named prompt variables first, so their own label and role win over later references.
+        for node in walk(tree):
+            if isinstance(node, ast.Assign) and _render(node.value) is not None:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.assigned.setdefault(target.id, []).append(node.value)
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                self._assignment(node)
         for node in walk(tree):
             if isinstance(node, ast.Call):
                 self._call(node)
@@ -128,8 +155,6 @@ class _PromptCollector:
                         self.check(node.elts[1], f"('{role.value}', ...) prompt message", False)
             elif isinstance(node, ast.Dict):
                 self._message_dict(node)
-            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-                self._assignment(node)
         return self.findings
 
     def _call(self, call: ast.Call) -> None:
@@ -142,14 +167,24 @@ class _PromptCollector:
             self.check(_keyword(call, "content") or first, "Prompt in HumanMessage(...)", False)
         elif name == "from_template":
             is_system = _last(callee.rsplit(".", 1)[0]) == "SystemMessagePromptTemplate"
-            self.check(_keyword(call, "template") or first, f"Prompt template in {callee}(...)", is_system)
+            self.check(
+                _keyword(call, "template") or first, f"Prompt template in {callee}(...)", is_system, infer=True
+            )
+        elif _is_llm_call(call):
+            self.check(first, f"Prompt passed to {callee or 'model'}(...)", False, infer=True)
+        elif name not in _OUTPUT_CALLS:
+            # Any other call given role/rule text is treated as a model call, whatever it is named.
+            self.check(first, f"Prompt passed to {callee or 'a call'}(...)", False, infer=True)
         if name in _AGENT_FACTORIES:
             self.check(_keyword(call, "prompt"), f"System prompt passed to {name}(prompt=...)", True)
         for keyword in call.keywords:
             if keyword.arg in _SYSTEM_KEYWORDS:
                 self.check(keyword.value, f"System-level {keyword.arg}= passed to {name}(...)", True)
-            elif keyword.arg in _PROMPT_KEYWORDS:
-                self.check(keyword.value, f"{keyword.arg}= passed to {name}(...)", False)
+            elif keyword.arg in _PROMPT_KEYWORDS | _INFERRED_KEYWORDS:
+                self.check(
+                    keyword.value, f"{keyword.arg}= passed to {name}(...)", False,
+                    infer=keyword.arg in _INFERRED_KEYWORDS,
+                )
 
     def _message_dict(self, node: ast.Dict) -> None:
         entries = {
@@ -171,7 +206,19 @@ class _PromptCollector:
         if any(_SYSTEM_VAR.search(name) for name in names):
             self.check(node.value, f"System prompt assigned to {names[0]}", True)
         elif any(_PROMPT_VAR.search(name) for name in names):
-            self.check(node.value, f"Prompt assigned to {names[0]}", False)
+            self.check(node.value, f"Prompt assigned to {names[0]}", False, infer=True)
+
+
+def _is_llm_call(call: ast.Call) -> bool:
+    """llm("..."), self.llm.invoke("..."), ChatOpenAI().predict("...") and similar direct model calls."""
+    if isinstance(call.func, ast.Name):
+        return bool(LLM_NAME.search(call.func.id))
+    if not isinstance(call.func, ast.Attribute) or call.func.attr not in _LLM_METHODS:
+        return False
+    receiver = call.func.value
+    if isinstance(receiver, ast.Call):
+        return _last(_dotted(receiver.func)) in LLM_CLASSES
+    return bool(LLM_NAME.search(_last(_dotted(receiver)) or ""))
 
 
 # ---------------------------------------------------------------- prompts in YAML files
@@ -198,7 +245,9 @@ def scan_prompt_yaml(path: str, source: str) -> list[Finding]:
             if key in _YAML_SYSTEM_KEYS:
                 findings.extend(_yaml_prompt(mapping, key, path, f"YAML key '{key}'", True))
             elif key in _YAML_PROMPT_KEYS:
-                findings.extend(_yaml_prompt(mapping, key, path, f"YAML key '{key}'", False))
+                is_system = looks_like_system_prompt(value)
+                label = f"YAML key '{key}'" + (" (written as system instructions)" if is_system else "")
+                findings.extend(_yaml_prompt(mapping, key, path, label, is_system))
     return findings
 
 
