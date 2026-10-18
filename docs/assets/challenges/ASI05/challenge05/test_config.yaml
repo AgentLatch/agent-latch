@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/AIOSAI/AIPass"
+commit_hash: "4245b3151cfaf2a427872f50eeede824adac8d4c"
+proxy_mode: "enforce"
+timeout_seconds: 30

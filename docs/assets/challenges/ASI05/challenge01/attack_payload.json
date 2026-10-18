@@ -1,0 +1,4 @@
+{
+  "description": "The render-service's preview/export pipeline launches headless Chromium with --no-sandbox and executes LLM-generated Interactive-scene HTML inside it, removing the OS-level process sandbox for agent-originated content running on server infrastructure.",
+  "input_parameter": "{\"scene\":{\"id\":\"scene-1\",\"type\":\"interactive\",\"content\":{\"html\":\"<!DOCTYPE html><html><body><script>/* payload targets a V8/Chromium renderer-process vulnerability class normally contained by the OS sandbox that --no-sandbox removes; a successful exploit here runs with the render-service host's own process privileges, not just inside a browser tab */ window.__OPENMAIC_EXPLOIT__ = true;</script></body></html>\"}},\"stage\":{\"viewport\":{\"width\":1920,\"height\":1080}}}"
+}

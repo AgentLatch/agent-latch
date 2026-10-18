@@ -1,0 +1,4 @@
+{
+  "description": "MultiAgentTrainer's execution config defaults to the unsandboxed local mode, so the autonomous autoresearch agent runs arbitrary shell commands directly on the host with no container boundary, command allow-list, or isolation unless a user manually configures ssh/docker instead.",
+  "input_parameter": "{\"config\":{\"execution\":{\"type\":\"local\"},\"agent_command\":\"autoresearch run --prompt {prompt}\"},\"note\":\"No sandbox, container, or command allow-list is applied in this (default) mode. Any code the autonomous agent decides to write during its _CONTINUE_PROMPT loop \\u2014 including 'pip install <anything>' or a reverse shell \\u2014 executes directly on the host that ran `mat train`.\"}"
+}

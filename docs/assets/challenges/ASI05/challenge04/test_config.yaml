@@ -1,0 +1,5 @@
+# Automation Pointer for CI/CD Testing Framework
+repository_url: "https://github.com/microsoft/RD-Agent"
+commit_hash: "484776c211e4fbbeef03e0ec00d6bbee7362a4f4"
+proxy_mode: "enforce"
+timeout_seconds: 30
