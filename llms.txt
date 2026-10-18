@@ -6,10 +6,11 @@ Key facts:
 
 - Install: clone https://github.com/AgentLatch/agent-latch, then `python -m pip install -e .` (Python 3.11+).
 - Scan: `agent-latch scan /path/to/agent`; audit a manifest with `--config agent-manifest.yaml`; fail CI with `--fail-on high`; a manifest is optional, and every folder and text file is scanned. Suppressions inside the scanned project (`.agent-latch-ignore`, inline ignore comments) apply only with `--project-ignores`.
-- GitHub Action: `uses: AgentLatch/agent-latch@v0.2.1` (https://github.com/marketplace/actions/agentlatch-scan).
+- GitHub Action: `uses: AgentLatch/agent-latch@v0.3.0` (https://github.com/marketplace/actions/agentlatch-scan).
 - Frameworks with specific checks: CrewAI, LangChain, LangGraph. Generic rules apply to any Python code. JavaScript/TypeScript are not scanned.
 - Privacy: scans run locally and never call an LLM. Only the opt-in `--dependencies` audit sends package names and versions to an advisory service.
-- Limits: static heuristics only; no runtime enforcement or model-behavior testing. A clean scan is not a security guarantee.
+- Runtime proxy (preview): `agent-latch-runtime proxy -- <MCP server command>` sits between an AI app and an MCP server and records tool lists, tool calls, results and prompts (argument names and hashes, secret-masked excerpts). It records only; it does not detect attacks or block calls yet.
+- Limits: the scanner uses static heuristics; there is no runtime enforcement or model-behavior testing. A clean scan is not a security guarantee.
 
 ## Docs
 
@@ -18,6 +19,7 @@ Key facts:
 - [Agent manifests](https://github.com/AgentLatch/agent-latch/blob/main/docs/agent-manifest.md): `agent-manifest.yaml` format and the checks it enables
 - [pre-commit and CI](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md): pre-commit hook, GitHub Action inputs and outputs, other CI systems
 - [Detection rules](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md): every rule, its OWASP mapping, and known blind spots
+- [Runtime proxy (preview)](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md): install, connecting an MCP client, what is recorded, limits
 
 ## Examples
 
@@ -28,6 +30,7 @@ Key facts:
 
 - [Security policy](https://github.com/AgentLatch/agent-latch/blob/main/SECURITY.md)
 - [Contributing](https://github.com/AgentLatch/agent-latch/blob/main/CONTRIBUTING.md)
+- [v0.3.0 release notes](https://github.com/AgentLatch/agent-latch/blob/main/docs/release-notes/v0.3.0.md)
 - [v0.2.1 release notes](https://github.com/AgentLatch/agent-latch/blob/main/docs/release-notes/v0.2.1.md)
 - [v0.2.0 release notes](https://github.com/AgentLatch/agent-latch/blob/main/docs/release-notes/v0.2.0.md)
 - [v0.1.0 release notes](https://github.com/AgentLatch/agent-latch/blob/main/docs/release-notes/v0.1.0.md)

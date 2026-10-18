@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentLatch Dashboard</title>
+<style>
+  :root {
+    --bg:#f5f3ee; --panel:#fffdf8; --ink:#141a24; --muted:#4a5260; --line:#ddd6c8;
+    --accent:#a3461a; --orange:#f08a4b; --blue:#2f5fa8; --green:#2e7d50; --amber:#b5781a;
+    --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+    --sans:'IBM Plex Sans',system-ui,-apple-system,Arial,sans-serif;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); }
+  header { background:var(--ink); color:#f5f3ee; padding:22px 32px; }
+  header h1 { margin:0; font-size:24px; font-weight:700; }
+  header p { margin:6px 0 0; color:#b9c3d0; font-size:15px; }
+  main { max-width:1100px; margin:0 auto; padding:28px 24px 64px; display:flex; flex-direction:column; gap:24px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:28px; }
+  .panel h2 { margin:0 0 4px; font-size:22px; }
+  .panel .sub { margin:0 0 20px; color:var(--muted); font-size:15px; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  input[type=text] { font-family:var(--mono); font-size:14px; padding:10px 12px; border:1px solid var(--line);
+    border-radius:10px; background:#fff; color:var(--ink); min-width:280px; }
+  button { font-family:var(--sans); font-size:15px; font-weight:600; border:none; border-radius:10px;
+    padding:11px 20px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; }
+  button.primary { background:var(--ink); color:#f5f3ee; }
+  button.play { background:var(--orange); color:#141a24; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .state { font-family:var(--mono); font-size:13px; padding:6px 12px; border-radius:999px; display:inline-block; }
+  .state.idle { background:#ece7dd; color:var(--muted); }
+  .state.ok { background:#e3f0e8; color:var(--green); }
+  .state.warn { background:#f6ecd8; color:var(--amber); }
+  .state.err { background:#f6dedb; color:#9a2a1c; }
+  .note { margin-top:16px; padding:16px; border-radius:12px; background:#f6ecd8; color:#5a4410;
+    border-left:5px solid var(--amber); font-size:15px; line-height:1.5; }
+  table { width:100%; border-collapse:collapse; margin-top:18px; font-size:14px; }
+  th,td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; letter-spacing:.5px; text-transform:uppercase; color:var(--muted); }
+  td.loc { font-family:var(--mono); font-size:12.5px; white-space:nowrap; }
+  .sev { font-family:var(--mono); font-size:11px; font-weight:600; padding:3px 8px; border-radius:6px; }
+  .sev.critical,.sev.high { background:#f6dedb; color:#9a2a1c; }
+  .sev.medium { background:#f6ecd8; color:#8a5a12; }
+  .sev.low { background:#e8eef6; color:#2f5fa8; }
+  .counts { display:flex; gap:20px; flex-wrap:wrap; margin-top:16px; }
+  .count b { font-size:30px; display:block; }
+  .count span { color:var(--muted); font-size:13px; }
+  .tools { display:flex; flex-direction:column; gap:8px; margin:16px 0; }
+  .tools label { display:flex; gap:10px; align-items:flex-start; font-size:14px; padding:8px 10px;
+    border:1px solid var(--line); border-radius:10px; background:#fff; cursor:pointer; }
+  .tools code { font-family:var(--mono); font-weight:600; }
+  .tools small { color:var(--muted); }
+  /* diagram */
+  #stage { position:relative; height:280px; margin:8px 0 4px; background:#0f141c; border-radius:14px; overflow:hidden; }
+  .node { position:absolute; transform:translate(-50%,-50%); text-align:center; color:#d4dde8;
+    font-size:13px; width:120px; }
+  .node .dot { width:66px; height:66px; margin:0 auto 8px; border-radius:16px; background:#1d2530;
+    border:2px solid #37414f; display:flex; align-items:center; justify-content:center; font-size:26px;
+    transition:border-color .25s, box-shadow .25s, background .25s; }
+  .node.live .dot { border-color:var(--orange); box-shadow:0 0 0 4px rgba(240,138,75,.25); background:#2a2015; }
+  .node.done .dot { border-color:var(--green); box-shadow:0 0 0 4px rgba(46,125,80,.22); }
+  svg.links { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  svg.links line { stroke:#37414f; stroke-width:2; }
+  #packet { position:absolute; width:14px; height:14px; border-radius:50%; background:var(--orange);
+    box-shadow:0 0 12px var(--orange); transform:translate(-50%,-50%); left:0; top:0; opacity:0;
+    transition:left .5s ease, top .5s ease, opacity .2s; }
+  #log { font-family:var(--mono); font-size:12.5px; background:#0f141c; color:#c9d4e0; border-radius:12px;
+    padding:14px 16px; margin-top:14px; max-height:200px; overflow:auto; white-space:pre-wrap; }
+  #log .t { color:var(--orange); } #log .r { color:#8fd18f; } #log .e { color:#f08a7b; }
+  a { color:var(--blue); }
+</style>
+</head>
+<body>
+<header>
+  <h1>AgentLatch Dashboard</h1>
+  <p>Local control panel · static scan · MCP gateway · live tool run</p>
+</header>
+<main>
+
+  <!-- 1. Static scan -->
+  <section class="panel">
+    <h2>1 · Static AgentLatch scan</h2>
+    <p class="sub">Scan a path in this repo and list the vulnerabilities AgentLatch detects.</p>
+    <div class="row">
+      <input id="scanPath" type="text" value="examples/vulnerable-agent">
+      <button class="play primary" id="scanBtn" onclick="runScan()">▶ Play</button>
+      <span class="state idle" id="scanState">Not run yet — press Play</span>
+    </div>
+    <div id="scanOut"></div>
+  </section>
+
+  <!-- 2. Gateway connection -->
+  <section class="panel">
+    <h2>2 · MCP gateway</h2>
+    <p class="sub">Check that your agent’s gateway is connected before running tools.</p>
+    <div class="row">
+      <button class="primary" id="statusBtn" onclick="checkGateway()">⟳ Check connection</button>
+      <span class="state idle" id="gwState">Not checked yet</span>
+    </div>
+    <div id="gwNote"></div>
+  </section>
+
+  <!-- 3. Run tools + animation -->
+  <section class="panel">
+    <h2>3 · Run tools</h2>
+    <p class="sub">Select tools and press Run. The animation shows the agent reaching the gateway and calling each tool.</p>
+    <div id="toolPick"><p class="sub">Check the gateway connection first (panel 2).</p></div>
+    <div class="row">
+      <button class="play primary" id="runBtn" onclick="runTools()" disabled>▶ Run</button>
+      <span class="state idle" id="runState">Waiting for a connected gateway</span>
+    </div>
+    <div id="stage">
+      <svg class="links"><line id="l1"></line><line id="l2"></line></svg>
+      <div class="node" id="nAgent" style="left:14%;top:50%"><div class="dot">🤖</div>Agent</div>
+      <div class="node" id="nGate" style="left:50%;top:50%"><div class="dot">🔌</div>Gateway</div>
+      <div class="node" id="nTool" style="left:86%;top:50%"><div class="dot">🛠️</div><span id="toolLbl">Tools</span></div>
+      <div id="packet"></div>
+    </div>
+    <div id="log" hidden></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+function setState(el, cls, text){ el.className = "state " + cls; el.textContent = text; }
+
+// ---- 1. Scan ----
+async function runScan(){
+  const path = $("scanPath").value.trim() || "examples/vulnerable-agent";
+  $("scanBtn").disabled = true;
+  setState($("scanState"), "idle", "Loading…");
+  $("scanOut").innerHTML = "";
+  try {
+    const res = await fetch("/api/scan", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({path})});
+    const data = await res.json();
+    if (data.error){ setState($("scanState"),"err","Error"); $("scanOut").innerHTML =
+      `<div class="note">${esc(data.error)}</div>`; return; }
+    renderScan(data);
+  } catch(e){ setState($("scanState"),"err","Error"); $("scanOut").innerHTML =
+      `<div class="note">${esc(String(e))}</div>`; }
+  finally { $("scanBtn").disabled = false; }
+}
+function renderScan(d){
+  const f = d.findings || [];
+  const bySev = {critical:0,high:0,medium:0,low:0};
+  f.forEach(x => { if (x.severity in bySev) bySev[x.severity]++; });
+  setState($("scanState"),"ok",`${f.length} finding(s)`);
+  let html = `<div class="counts">
+    <div class="count"><b>${d.finding_count ?? f.length}</b><span>findings</span></div>
+    <div class="count"><b style="color:#9a2a1c">${bySev.critical+bySev.high}</b><span>high / critical</span></div>
+    <div class="count"><b style="color:#8a5a12">${bySev.medium}</b><span>medium</span></div>
+    <div class="count"><b style="color:#2f5fa8">${bySev.low}</b><span>low</span></div></div>`;
+  if (f.length){
+    html += `<table><tr><th>Severity</th><th>Rule</th><th>Where</th><th>Finding</th><th>OWASP</th></tr>`;
+    f.forEach(x => { html += `<tr>
+      <td><span class="sev ${esc(x.severity)}">${esc((x.severity||"").toUpperCase())}</span></td>
+      <td class="loc">${esc(x.rule_id||"")}</td>
+      <td class="loc">${esc(x.path||"")}:${esc(String(x.line??""))}</td>
+      <td>${esc(x.message||x.title||"")}</td>
+      <td class="loc">${esc((x.owasp||[]).join(", "))}</td></tr>`; });
+    html += `</table>`;
+  } else {
+    html += `<div class="note">No findings from the enabled checks. This does not mean the project is secure.</div>`;
+  }
+  html += `<p class="sub" style="margin-top:14px">${esc(d.disclaimer||"")}</p>`;
+  $("scanOut").innerHTML = html;
+}
+
+// ---- 2. Gateway ----
+let connectedTools = [];
+async function checkGateway(){
+  $("statusBtn").disabled = true;
+  setState($("gwState"),"idle","Checking…");
+  $("gwNote").innerHTML = "";
+  try {
+    const d = await (await fetch("/api/gateway/status")).json();
+    if (d.connected){
+      connectedTools = d.tools || [];
+      setState($("gwState"),"ok",`Connected · ${connectedTools.length} tool(s)`);
+      renderToolPicker();
+      $("runBtn").disabled = connectedTools.length === 0;
+      setState($("runState"),"idle","Ready — select tools and press Run");
+    } else {
+      connectedTools = [];
+      setState($("gwState"),"warn","Not connected");
+      $("gwNote").innerHTML = `<div class="note"><b>Not connected properly — you still need to do this.</b><br>${esc(d.reason||"")}${d.detail?`<br><small style="color:#8a7340">${esc(d.detail)}</small>`:""}</div>`;
+      $("toolPick").innerHTML = `<p class="sub">Connect the gateway first (panel 2).</p>`;
+      $("runBtn").disabled = true;
+      setState($("runState"),"warn","Gateway not connected");
+    }
+  } catch(e){ setState($("gwState"),"err","Error"); $("gwNote").innerHTML =
+      `<div class="note">${esc(String(e))}</div>`; }
+  finally { $("statusBtn").disabled = false; }
+}
+function renderToolPicker(){
+  let html = `<div class="tools">`;
+  connectedTools.forEach((t,i) => { html += `<label>
+    <input type="checkbox" value="${esc(t.name)}" ${i<2?"checked":""}>
+    <span><code>${esc(t.name)}</code><br><small>${esc(t.description||"")}</small></span></label>`; });
+  html += `</div>`;
+  $("toolPick").innerHTML = html;
+}
+
+// ---- 3. Run + animation ----
+function pos(node){ const s=$("stage").getBoundingClientRect(), r=node.getBoundingClientRect();
+  return {x:r.left-s.left+r.width/2, y:r.top-s.top+r.height/2}; }
+function drawLinks(){ const a=pos($("nAgent")),g=pos($("nGate")),t=pos($("nTool"));
+  const L=(id,p,q)=>{const l=$(id);l.setAttribute("x1",p.x);l.setAttribute("y1",p.y);
+    l.setAttribute("x2",q.x);l.setAttribute("y2",q.y);};
+  L("l1",a,g); L("l2",g,t); }
+function movePacket(node){ const p=pos(node); const pk=$("packet");
+  pk.style.opacity="1"; pk.style.left=p.x+"px"; pk.style.top=p.y+"px"; }
+function logLine(cls,text){ const el=$("log"); el.hidden=false;
+  el.innerHTML += `<span class="${cls}">${esc(text)}</span>\n`; el.scrollTop=el.scrollHeight; }
+
+function runTools(){
+  const picked = [...document.querySelectorAll('#toolPick input:checked')].map(c=>c.value);
+  if (!picked.length){ setState($("runState"),"warn","Select at least one tool"); return; }
+  $("runBtn").disabled = true;
+  ["nAgent","nGate","nTool"].forEach(id=>$(id).className="node");
+  $("log").hidden=false; $("log").innerHTML="";
+  drawLinks();
+  setState($("runState"),"idle","Connecting…");
+  const es = new EventSource("/api/gateway/run?tools="+encodeURIComponent(picked.join(",")));
+  es.onmessage = (ev) => {
+    const d = JSON.parse(ev.data);
+    if (d.step==="connecting"){ $("nAgent").className="node live"; movePacket($("nAgent"));
+      logLine("", "agent → connecting to gateway…"); }
+    else if (d.step==="connected"){ $("nGate").className="node live"; movePacket($("nGate"));
+      logLine("", "gateway connected · "+(d.tools||[]).length+" tool(s)"); setState($("runState"),"ok","Connected"); }
+    else if (d.step==="not_connected"){ $("nAgent").className="node"; $("packet").style.opacity="0";
+      setState($("runState"),"warn","Not connected"); logLine("e", d.message); es.close(); $("runBtn").disabled=false; }
+    else if (d.step==="tool_call"){ $("nTool").className="node live"; $("toolLbl").textContent=d.tool;
+      movePacket($("nTool")); logLine("t", "→ call "+d.tool+"  "+JSON.stringify(d.args)); }
+    else if (d.step==="tool_result"){ movePacket($("nGate"));
+      logLine("r", "✓ "+d.tool+" → "+d.result); }
+    else if (d.step==="tool_error"){ logLine("e", "✗ "+d.tool+" → "+d.error); }
+    else if (d.step==="tool_skipped"){ logLine("e", "skipped "+d.tool+" ("+d.reason+")"); }
+    else if (d.step==="error"){ logLine("e", d.message); }
+    else if (d.step==="done"){ ["nAgent","nGate","nTool"].forEach(id=>$(id).className="node done");
+      movePacket($("nAgent")); setTimeout(()=>$("packet").style.opacity="0",600);
+      setState($("runState"),"ok","Done"); logLine("", "run complete"); es.close(); $("runBtn").disabled=false; }
+  };
+  es.onerror = () => { es.close(); $("runBtn").disabled=false;
+    setState($("runState"),"err","Connection lost"); };
+}
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+window.addEventListener("resize", drawLinks);
+drawLinks();
+
+// Optional auto-run for screenshots/demos: ?auto=scan | connect | run&tools=a,b
+(function(){
+  const p = new URLSearchParams(location.search);
+  const auto = p.get("auto");
+  if (auto === "scan") runScan();
+  else if (auto === "connect") checkGateway();
+  else if (auto === "run"){
+    const tools = p.get("tools");
+    checkGateway().then(()=>{
+      if (tools){ document.querySelectorAll('#toolPick input').forEach(c=>{ c.checked = tools.split(",").includes(c.value); }); }
+      runTools();
+    });
+  }
+})();
+</script>
+</body>
+</html>

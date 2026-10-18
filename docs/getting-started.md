@@ -45,6 +45,7 @@ python -m pip install -e .
 |---|---|---|
 | `audit` | `python -m pip install -e ".[audit]"` | `pip-audit`, needed for `--dependencies` |
 | `dev` | `python -m pip install -e ".[dev]"` | `pytest` and `ruff` for contributing |
+| `runtime` | `python -m pip install -e ".[runtime]"` | FastMCP, needed for the [runtime proxy](runtime.md) (preview) |
 
 ### Using AgentLatch from any folder
 

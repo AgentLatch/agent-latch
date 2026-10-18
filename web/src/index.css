@@ -1,0 +1,26 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-base text-slate-200 antialiased;
+    /* Subtle enterprise backdrop: layered radial violet/cyan glows on the dark base. */
+    background-image:
+      radial-gradient(60rem 60rem at 85% -10%, rgba(139, 92, 246, 0.14), transparent 60%),
+      radial-gradient(50rem 50rem at -10% 110%, rgba(6, 182, 212, 0.1), transparent 55%);
+    background-attachment: fixed;
+  }
+}
