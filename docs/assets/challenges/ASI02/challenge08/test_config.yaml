@@ -1,0 +1,4 @@
+repository_url: "https://github.com/tiktokarchitect/TermNet"
+commit_hash: "4501d63c6b0f60542f8ea223b0dd8dfefdbd6c46"
+proxy_mode: "enforce"
+timeout_seconds: 30

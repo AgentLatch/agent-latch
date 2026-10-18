@@ -1,0 +1,4 @@
+repository_url: "https://github.com/petermartens98/OpenAI-LangChain-Pandas-DF-Agent-Query-Streamlit-App"
+commit_hash: "3d4de3b8c40c914c57f87b90b5f7996d05fdf4cf"
+proxy_mode: "enforce"
+timeout_seconds: 30

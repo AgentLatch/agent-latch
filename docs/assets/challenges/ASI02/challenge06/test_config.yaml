@@ -1,0 +1,4 @@
+repository_url: "https://github.com/BlueBash/postgres-chatbot"
+commit_hash: "98f41195549dbf6bb7fbcb1c7f926b37bfe45070"
+proxy_mode: "enforce"
+timeout_seconds: 30

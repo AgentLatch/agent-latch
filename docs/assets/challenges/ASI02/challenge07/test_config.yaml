@@ -1,0 +1,4 @@
+repository_url: "https://github.com/dataprofessor/langchain-ask-the-data"
+commit_hash: "b7deb18915c7de1dabeb3ffbc6ed00f39cfc1c35"
+proxy_mode: "enforce"
+timeout_seconds: 30

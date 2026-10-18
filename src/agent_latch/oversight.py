@@ -1,7 +1,7 @@
 """Human-oversight and runaway-loop checks that work from source code alone.
 
 - AG006: human approval explicitly turned off, so the agent acts without confirmation
-  (AutoGen human_input_mode="NEVER" with code execution, auto_approve=True,
+  (AutoGen human_input_mode="NEVER"/"TERMINATE" with code execution, auto_approve=True,
   permission_mode="bypassPermissions", require_approval="never", ...).
                                   (ASI09 Human-Agent Trust Exploitation; ASI02 / ASI05)
 - AG007: an agent loop with no effective bound: max_iterations=None, a very high iteration
@@ -96,10 +96,16 @@ def _approval_findings(tree: ast.Module, path: str) -> list[Finding]:
         callee = _last(_dotted(node.func)) or "call"
         for keyword in node.keywords:
             value = _literal(keyword.value)
-            if keyword.arg == "human_input_mode" and value == "NEVER":
+            if keyword.arg == "human_input_mode" and value in ("NEVER", "TERMINATE"):
                 if _code_execution_enabled(node):
-                    add(node, "high", ("ASI09", "ASI05"), f'{callee}(human_input_mode="NEVER", code execution on)',
-                        f"{callee} runs model-written code with no human in the loop.")
+                    detail = (
+                        "no human in the loop"
+                        if value == "NEVER"
+                        else "no per-action human approval between termination checks"
+                    )
+                    add(node, "high", ("ASI09", "ASI02", "ASI05"),
+                        f'{callee}(human_input_mode="{value}", code execution on)',
+                        f"{callee} runs model-written code with {detail}.")
             elif keyword.arg in _AUTO_APPROVE_KWARGS and value is True:
                 add(node, "high", ("ASI09", "ASI02"), f"{callee}({keyword.arg}=True)",
                     f"{keyword.arg}=True approves the agent's actions automatically.")

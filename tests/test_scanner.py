@@ -701,7 +701,7 @@ def test_disabled_human_approval_is_reported(tmp_path: Path) -> None:
         item.line: item.owasp for item in scan_project(tmp_path) if item.rule_id == "AGENTLATCH-AG006"
     }
 
-    assert found == {2: ("ASI09", "ASI05"), 4: ("ASI09", "ASI02"), 5: ("ASI09", "ASI02"), 6: ("ASI09", "ASI02")}
+    assert found == {2: ("ASI09", "ASI02", "ASI05"), 4: ("ASI09", "ASI02"), 5: ("ASI09", "ASI02"), 6: ("ASI09", "ASI02")}
 
 
 def test_unbounded_agent_loops_are_reported(tmp_path: Path) -> None:

@@ -1,0 +1,4 @@
+repository_url: "https://github.com/MoSahil147/Chat-with-SQL-DB-with-Langchain-SQL-Toolkit-and-Agent-type"
+commit_hash: "fb295f0a0e09d2c92afc08487474adb68ab8893d"
+proxy_mode: "enforce"
+timeout_seconds: 30

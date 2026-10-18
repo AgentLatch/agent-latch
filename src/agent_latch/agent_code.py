@@ -426,6 +426,11 @@ class _ToolAnalysis:
 _SHELL_TOOLS = {"ShellTool", "BashProcess", "TerminalTool"}
 _PYTHON_TOOLS = {"PythonREPLTool", "PythonAstREPLTool", "PythonREPL"}
 _DANGEROUS_LOAD_TOOLS = {"terminal", "shell", "python_repl"}
+# A LangChain SQL agent/toolkit runs model-generated SQL against the database.
+# Unless the connection is read-only and table-scoped, the model can read or
+# destroy any table it reaches -- the single most common real-world ASI02 case.
+_SQL_TOOLKITS = {"SQLDatabaseToolkit", "create_sql_agent"}
+_SQL_QUERY_TOOLS = {"QuerySQLDataBaseTool", "QuerySQLDatabaseTool"}
 
 
 def _builtin_tool_findings(tree: ast.Module, path: str) -> list[Finding]:
@@ -455,6 +460,12 @@ def _builtin_tool_findings(tree: ast.Module, path: str) -> list[Finding]:
             add(node, "high", ("ASI02", "ASI05"), f"{name}(...)", f"{name} lets the model run arbitrary shell commands on the host.")
         elif name in _PYTHON_TOOLS:
             add(node, "high", ("ASI02", "ASI05"), f"{name}(...)", f"{name} lets the model run arbitrary Python on the host.")
+        elif name in _SQL_TOOLKITS:
+            add(node, "high", ("ASI02", "ASI03"), f"{name}(...)",
+                f"{name} gives the model unrestricted SQL execution; by default it can read and write any table the database connection allows.")
+        elif name in _SQL_QUERY_TOOLS:
+            add(node, "high", ("ASI02", "ASI03"), f"{name}(...)",
+                f"{name} runs model-generated SQL against the database with no read-only limit.")
         elif name == "load_tools" and node.args:
             dangerous = sorted(set(_str_constants(node.args[0])) & _DANGEROUS_LOAD_TOOLS)
             if dangerous:
@@ -474,6 +485,64 @@ def _builtin_tool_findings(tree: ast.Module, path: str) -> list[Finding]:
     return results
 
 
+# ---------------------------------------------------------------- AG008: persistent OS shell behind custom tools
+
+
+def _exposes_model_tools(tree: ast.Module) -> bool:
+    """A tools=[...] argument, or a *.tools = [...] assignment, anywhere in the file.
+
+    Catches custom agent frameworks (e.g. the `llm` library's model.conversation(tools=...))
+    that the name-based tool detection above does not recognise.
+    """
+    for node in walk(tree):
+        if isinstance(node, ast.Call) and any(
+            kw.arg == "tools" and isinstance(kw.value, (ast.List, ast.Tuple, ast.Name, ast.Attribute))
+            for kw in node.keywords
+        ):
+            return True
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if isinstance(node.value, (ast.List, ast.Tuple)) and any(_last(_dotted(t)) == "tools" for t in targets):
+                return True
+    return False
+
+
+def _persistent_shell_findings(tree: ast.Module, path: str) -> list[Finding]:
+    """A file that opens a persistent OS shell (subprocess.Popen with piped stdin) AND
+    exposes model-callable tools: the model's commands reach the host even when a custom
+    framework hides the wiring and the shell call sits in a helper class (so dataflow from
+    the tool to subprocess is not visible). The co-occurrence is the signal."""
+    popen_nodes = [
+        node
+        for node in walk(tree)
+        if isinstance(node, ast.Call)
+        and _dotted(node.func) == "subprocess.Popen"
+        and _dotted(_keyword(node, "stdin")) == "subprocess.PIPE"
+    ]
+    if not popen_nodes or not _exposes_model_tools(tree):
+        return []
+    node = popen_nodes[0]
+    return [
+        Finding(
+            rule_id="AGENTLATCH-AG008",
+            title="Agent drives a persistent OS shell",
+            severity="high",
+            message=(
+                "This file opens a persistent operating-system shell (subprocess.Popen with piped stdin) "
+                "and exposes model-callable tools, so commands the model chooses run on the host. "
+                "An interactive confirmation prompt is not a reliable control -- it can be skipped by an "
+                "allowlist and is absent in non-interactive runs. Use an explicit command allowlist and a sandbox."
+            ),
+            path=path,
+            line=node.lineno,
+            column=node.col_offset + 1,
+            owasp=("ASI02", "ASI05"),
+            confidence="medium",
+            evidence="subprocess.Popen(stdin=PIPE) in a file that registers model tools",
+        )
+    ]
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -483,5 +552,6 @@ def scan_agent_code(tree: ast.Module, path: str) -> list[Finding]:
         *_PromptCollector(path).visit(tree),
         *_ToolAnalysis(tree, path).findings(),
         *_builtin_tool_findings(tree, path),
+        *_persistent_shell_findings(tree, path),
         *scan_oversight(tree, path),
     ]
