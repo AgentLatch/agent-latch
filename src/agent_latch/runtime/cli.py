@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from rich_argparse import RawDescriptionRichHelpFormatter
 
 from agent_latch import __version__
+from agent_latch.runtime.payloads import DEFAULT_PAYLOAD_MAX_CHARS, PayloadFile, PayloadTap
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
 
 _EPILOG = """\
@@ -57,6 +58,20 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_EXCERPT_CHARS,
         metavar="N",
         help=f"redacted output excerpt length in the trace, 0 for none (default {DEFAULT_EXCERPT_CHARS})",
+    )
+    proxy.add_argument(
+        "--payloads",
+        type=Path,
+        metavar="FILE",
+        help="append intercepted payloads (JSONL): argument values, tool output and tool"
+        " definitions, secret-masked; the file is sensitive",
+    )
+    proxy.add_argument(
+        "--payload-max-chars",
+        type=int,
+        default=DEFAULT_PAYLOAD_MAX_CHARS,
+        metavar="N",
+        help=f"cut each string in --payloads to N characters (default {DEFAULT_PAYLOAD_MAX_CHARS})",
     )
     proxy.add_argument("--quiet", action="store_true", help="no per-message summary on stderr")
     proxy.add_argument(
@@ -122,9 +137,21 @@ def _proxy(args: argparse.Namespace) -> int:
     except OSError as error:
         print(f"agent-latch-runtime: cannot open trace file: {error}", file=sys.stderr)
         return 2
+    payloads: PayloadFile | None = None
+    if args.payloads is not None:
+        try:
+            payloads = PayloadFile(args.payloads, max_chars=args.payload_max_chars)
+        except OSError as error:
+            trace.close()
+            print(f"agent-latch-runtime: cannot open payloads file: {error}", file=sys.stderr)
+            return 2
     try:
         server = build_proxy(
-            name=name, trace=trace, command=command, upstream_url=args.upstream_url
+            name=name,
+            trace=trace,
+            command=command,
+            upstream_url=args.upstream_url,
+            tap=PayloadTap([payloads]) if payloads is not None else None,
         )
         print(
             f"agent-latch-runtime: monitoring {name!r} (preview; records traffic, never blocks)",
@@ -136,6 +163,8 @@ def _proxy(args: argparse.Namespace) -> int:
             server.run(show_banner=False)
     finally:
         trace.close()
+        if payloads is not None:
+            payloads.close()
     return 0
 
 
