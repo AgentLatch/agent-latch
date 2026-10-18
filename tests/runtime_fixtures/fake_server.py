@@ -11,7 +11,7 @@ from fastmcp.exceptions import ToolError
 server = FastMCP("fake-weather")
 
 
-@server.tool
+@server.tool(annotations={"readOnlyHint": True})
 def get_weather(city: str, units: str = "metric") -> str:
     """Return a canned weather report for a city."""
     return f"Weather in {city}: 18 degrees ({units}), light rain."

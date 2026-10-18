@@ -71,9 +71,10 @@ src/agent_latch/
   report.py       # text, JSON, and SARIF renderers; severity ordering
   action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
   runtime/        # runtime checks for MCP traffic (preview, monitor only; `[runtime]` extra)
-    events.py     # ToolCall, ToolOutput, ToolInfo
-    redact.py     # hashes, secret masking, short excerpts (never raw arguments or outputs)
+    events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
+    redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file
     trace.py      # TraceLog: one redacted JSONL record per MCP message (agentlatch.runtime.trace/1)
+    payloads.py   # PayloadTap: full-payload records to sinks; PayloadFile (opt-in --payloads, masked)
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
     cli.py        # agent-latch-runtime console script (`proxy` subcommand)
@@ -119,7 +120,8 @@ agent-latch [scan] [path] [--config MANIFEST] [--exclude PATH]... [--ignore-file
             [--format text|json|sarif] [--output FILE] [--plain] [--min-severity LEVEL]
             [--fail-on none|low|medium|high|critical] [-V]
 
-agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N] [--quiet]
+agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
+            [--payloads FILE] [--payload-max-chars N] [--quiet]
             [--http HOST:PORT] (--upstream-url URL | -- SERVER COMMAND...)
 ```
 

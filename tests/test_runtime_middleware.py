@@ -17,7 +17,9 @@ from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 from fastmcp.server import create_proxy
 
+from agent_latch.runtime.events import PayloadEvent
 from agent_latch.runtime.middleware import AgentLatchMiddleware
+from agent_latch.runtime.payloads import PayloadFile, PayloadTap
 from agent_latch.runtime.redact import MASK
 from agent_latch.runtime.trace import TraceLog
 
@@ -113,14 +115,78 @@ def test_middleware_survives_trace_failures() -> None:
     assert result["weather"].startswith("Weather in London")
 
 
+def _check_payloads(events: list[dict[str, object]]) -> None:
+    by_key = {(e["method"], e["stage"], e["payload"].get("tool") or e["payload"].get("prompt")): e
+              for e in events}
+
+    listed = by_key[("tools/list", "response", None)]["payload"]["tools"]
+    weather_tool = next(tool for tool in listed if tool["name"] == "get_weather")
+    assert weather_tool["annotations"]["readOnlyHint"] is True
+    assert "city" in weather_tool["input_schema"]["properties"]
+
+    request = by_key[("tools/call", "request", "get_weather")]
+    assert request["payload"]["arguments"] == {"city": "London"}
+    assert request["payload"]["tool_definition"]["description"].startswith("Return a canned")
+    response = by_key[("tools/call", "response", "get_weather")]
+    assert response["payload"]["content"][0].startswith("Weather in London")
+    assert request["request_id"] == response["request_id"]
+    assert request["seq"] < response["seq"]
+
+    broken = by_key.get(("tools/call", "error", "broken_tool")) or by_key.get(
+        ("tools/call", "response", "broken_tool")
+    )
+    assert broken is not None
+
+    assert by_key[("prompts/get", "request", "summarize")]["payload"]["arguments"] == {
+        "topic": "Mars"
+    }
+    messages = by_key[("prompts/get", "response", "summarize")]["payload"]["messages"]
+    assert messages[0]["role"] == "user" and "Mars" in messages[0]["text"]
+
+
+def test_payload_tap_gets_full_payloads(tmp_path: Path) -> None:
+    sys.path.insert(0, str(FIXTURES))
+    try:
+        from fake_server import server as backend
+    finally:
+        sys.path.remove(str(FIXTURES))
+
+    seen: list[PayloadEvent] = []
+
+    def broken_sink(event: PayloadEvent) -> None:
+        raise RuntimeError("sink down")
+
+    payloads_path = tmp_path / "payloads.jsonl"
+    payload_file = PayloadFile(payloads_path)
+    tap = PayloadTap([broken_sink, seen.append, payload_file])
+    proxy = create_proxy(backend, name="weather")
+    proxy.add_middleware(
+        AgentLatchMiddleware(TraceLog(None, summary=None), server="weather", tap=tap)
+    )
+    result = asyncio.run(_exercise(Client(proxy)))
+    payload_file.close()
+
+    assert result["weather"].startswith("Weather in London")
+    assert FAKE_TOKEN in result["leaky"]  # the agent still gets the real output
+    _check_payloads([event.to_dict() for event in seen])
+    leaky = next(e for e in seen if e.stage == "response" and e.payload.get("tool") == "leaky_lookup")
+    assert FAKE_TOKEN in leaky.payload["content"][0]  # in memory, sinks see the raw output
+
+    on_disk = _records(payloads_path)
+    _check_payloads(on_disk)
+    assert FAKE_TOKEN not in payloads_path.read_text(encoding="utf-8")
+
+
 def test_proxy_command_over_stdio(tmp_path: Path) -> None:
     trace_path = tmp_path / "trace.jsonl"
+    payloads_path = tmp_path / "payloads.jsonl"
     stderr_path = tmp_path / "stderr.log"
     transport = StdioTransport(
         command=sys.executable,
         args=[
             "-m", "agent_latch.runtime.cli", "proxy",
             "--trace", str(trace_path),
+            "--payloads", str(payloads_path),
             "--",
             sys.executable, str(FIXTURES / "fake_server.py"),
         ],
@@ -138,3 +204,5 @@ def test_proxy_command_over_stdio(tmp_path: Path) -> None:
     assert "monitoring 'fake_server'" in stderr
     assert "tools/call get_weather (city)" in stderr
     assert FAKE_TOKEN not in trace_path.read_text(encoding="utf-8") + stderr
+    _check_payloads(_records(payloads_path))
+    assert FAKE_TOKEN not in payloads_path.read_text(encoding="utf-8")
