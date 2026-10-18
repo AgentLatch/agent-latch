@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-latch"
-version = "0.2.1"
+version = "0.3.0"
 description = "Local-first AI agent security scanner: checks agent code, tool manifests, and prompts for prompt injection, over-privileged tools, and secrets."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -48,10 +48,13 @@ Issues = "https://github.com/AgentLatch/agent-latch/issues"
 
 [project.scripts]
 agent-latch = "agent_latch.cli:main"
+agent-latch-runtime = "agent_latch.runtime.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "ruff>=0.8,<1"]
 audit = ["pip-audit>=2.10,<3"]
+# Runtime checks for MCP tool traffic. Same pin as mcp-server/requirements.txt.
+runtime = ["fastmcp==4.1.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

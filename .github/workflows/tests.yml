@@ -30,6 +30,26 @@ jobs:
       - name: Lint with ruff
         run: ruff check .
 
+  runtime:
+    name: Runtime proxy tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install AgentLatch with the runtime extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,runtime]"
+      - name: Run runtime tests
+        run: python -m pytest tests/test_runtime.py tests/test_runtime_middleware.py
+
   action-smoke-test:
     name: GitHub Action smoke test (vulnerable demo)
     runs-on: ubuntu-latest

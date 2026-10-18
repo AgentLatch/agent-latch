@@ -65,7 +65,7 @@ agent-latch --interactive                            # guided mode
 Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-commit-hook) or the GitHub Action ([setup guide](docs/ci.md#github-actions), [Marketplace listing](https://github.com/marketplace/actions/agentlatch-scan)):
 
 ```yaml
-- uses: AgentLatch/agent-latch@v0.2.1
+- uses: AgentLatch/agent-latch@v0.3.0
   with:
     fail-on: high
     # min-severity: medium      # optional: hide low and info findings
@@ -83,6 +83,8 @@ Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-comm
 | [pre-commit and CI](docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
 | [Detection rules](docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
 | [Vulnerable example](examples/vulnerable-agent) | A demo project and the findings it should produce |
+| [MCP gateway](mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients |
+| [Runtime proxy (preview)](docs/runtime.md) | Put `agent-latch-runtime proxy` in front of an MCP server to record its tool calls and results; monitor only, no blocking yet |
 
 ## Why AgentLatch?
 
@@ -92,7 +94,7 @@ The goal is to grow in layers:
 
 1. **Now — local scanner:** focused checks of Python source, agent manifests, and prompt templates; optional Python dependency advisories; portable reports; and pre-commit and GitHub Action integrations.
 2. **Next — broader static and evaluation checks:** more tested rules, framework adapters, and reproducible security test cases.
-3. **Later — runtime controls:** a separate policy and audit layer for agent actions, with explicit adapters and enforcement boundaries.
+3. **Planned — runtime checks:** inspect live MCP tool calls routed through AgentLatch, recording findings by default and blocking only when the operator turns it on in their own policy; framework adapters come after that.
 
 These layers will remain clearly distinguished: detecting a risky pattern is not the same as testing agent behavior, and neither alone guarantees runtime enforcement.
 
@@ -155,7 +157,7 @@ The source rules work on any Python code. Framework-specific checks cover CrewAI
 
 ### How do I check AI agent security in CI or GitHub Actions?
 
-Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) (`uses: AgentLatch/agent-latch@v0.2.1`) to scan every push and pull request and show findings in GitHub code scanning, or the [pre-commit hook](docs/ci.md#pre-commit-hook) to block risky commits. Any other CI can run `agent-latch scan --fail-on high`, which exits with code 1 when high-severity findings exist.
+Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) (`uses: AgentLatch/agent-latch@v0.3.0`) to scan every push and pull request and show findings in GitHub code scanning, or the [pre-commit hook](docs/ci.md#pre-commit-hook) to block risky commits. Any other CI can run `agent-latch scan --fail-on high`, which exits with code 1 when high-severity findings exist.
 
 ### Does AgentLatch upload my code or call an LLM?
 
@@ -189,7 +191,7 @@ The longer-term direction is a layered AI-agent security toolkit. Each layer sho
 
 - **Scanner (current):** expand well-scoped rules, language support, dependency manifest support, and SARIF quality.
 - **Evaluation (planned):** reproducible test cases for selected agent security behaviors, with transparent methodology and no single opaque “safe” score.
-- **Runtime policy and audit (planned, separate component):** authorize, deny, or require approval for tool actions through explicit, framework-specific adapters. Controls only protect execution paths that cannot bypass enforcement.
+- **Runtime checks (planned, separate component):** first for MCP tool traffic, through the existing gateway or a one-line proxy in your MCP config; then framework adapters and an HTTP sidecar. Monitor mode (findings only) is the default; allow, deny, ask, or fence decisions apply only when the operator enables enforcement in their own policy. Checks cover only traffic routed through AgentLatch.
 - **Hosted scanning service (future, not implemented):** require explicit consent, minimal repository access, retention/deletion policy, tenant isolation, and security review before accepting private source code.
 
 The project will not claim to be an industry standard or a universal security guarantee. Interoperability, independent review, transparent tests, and community adoption must come before such claims.
