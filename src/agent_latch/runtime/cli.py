@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from rich_argparse import RawDescriptionRichHelpFormatter
 
 from agent_latch import __version__
+from agent_latch.runtime.importer import discover_gates, follow_payloads
 from agent_latch.runtime.payloads import DEFAULT_PAYLOAD_MAX_CHARS, PayloadFile, PayloadTap
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
 
@@ -78,6 +79,29 @@ def _parser() -> argparse.ArgumentParser:
         "command",
         nargs=argparse.REMAINDER,
         help="the real MCP server command, after --",
+    )
+
+    importer = commands.add_parser(
+        "import-payloads",
+        help="run runtime gate plugins over an appended payload JSONL file",
+        description=(
+            "Follow an agent-latch.runtime.payload/1 JSONL file and append one CSV result "
+            "after each gate processes each event."
+        ),
+    )
+    importer.add_argument(
+        "--input-payloads",
+        required=True,
+        type=Path,
+        metavar="FILE",
+        help="payload JSONL file written by the proxy (--payloads)",
+    )
+    importer.add_argument(
+        "--output-csv",
+        required=True,
+        type=Path,
+        metavar="FILE",
+        help="CSV file to create or append gate results to",
     )
     return parser
 
@@ -168,10 +192,27 @@ def _proxy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _import_payloads(args: argparse.Namespace) -> int:
+    try:
+        gates = discover_gates()
+        print(
+            f"agent-latch-runtime: importing {args.input_payloads} into {args.output_csv} "
+            f"with {len(gates)} gate(s); following appended events",
+            file=sys.stderr,
+        )
+        follow_payloads(args.input_payloads, args.output_csv, gates)
+    except (ImportError, OSError, ValueError) as error:
+        print(f"agent-latch-runtime: importer failed: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.subcommand == "proxy":
         return _proxy(args)
+    if args.subcommand == "import-payloads":
+        return _import_payloads(args)
     return 2
 
 

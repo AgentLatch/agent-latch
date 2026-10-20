@@ -117,6 +117,36 @@ Every record also has `record_id`, `seq` (order within the proxy run), `timestam
 
 Before a record is written, string values under secret-like keys (`api_key`, `password`, `token`, ...) are replaced by `[REDACTED]`, other strings have secret-like values masked as in the trace, and each string is cut to `--payload-max-chars` characters (default 4000). Masking is pattern-based and can miss unusual formats: keep the payloads file local, private and short-lived. Nothing in it is sent anywhere.
 
+## Import payloads for runtime gates
+
+Run the importer as a separate process alongside the proxy. Point both processes at the same
+payload file; the importer starts with existing records and then processes newly appended complete
+lines:
+
+```sh
+# Terminal 1: MCP traffic continues through the proxy.
+agent-latch-runtime proxy --payloads ./runtime-payloads.jsonl -- npx -y @modelcontextprotocol/server-github
+
+# Terminal 2: consume the payload stream concurrently.
+agent-latch-runtime import-payloads \
+  --input-payloads ./runtime-payloads.jsonl \
+  --output-csv ./runtime-findings.csv
+```
+
+The importer discovers Python gate modules in `agent_latch.gates` in module-name order. A gate
+module exports a unique string `GATE_ID` and an `evaluate(event)` function. The importer gives each
+gate an independent copy of the same payload-event JSON object. `evaluate` returns a JSON object
+with a `findings` list. Each result is written and flushed immediately as a CSV row with
+`record_id`, `seq`, `gate_id`, and `result_json` columns. `result_json` uses a common envelope:
+`{"gate_id":"...","status":"ok","findings":[],"error":null}`. A gate failure produces the same
+envelope with `"status":"error"`, an empty findings list, and the exception type in `error`; later
+gates still receive the event. Malformed or unsupported input lines are logged and skipped.
+
+This importer only runs gates and records their results; it does not block or modify MCP traffic.
+No gates are included yet. If no gate modules are installed, it reports that fact and continues
+following the file without producing result rows. The input payload file and CSV may contain
+sensitive information; keep both local and access-controlled.
+
 ## Limits
 
 - It sees only servers whose config entry goes through the proxy. Other servers, the app's built-in tools (for example Claude Code's shell and file edits) and the user's prompts to the model don't pass through it.
