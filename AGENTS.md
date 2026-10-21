@@ -75,6 +75,8 @@ src/agent_latch/
     redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file
     trace.py      # TraceLog: one redacted JSONL record per MCP message (agentlatch.runtime.trace/1)
     payloads.py   # PayloadTap: full-payload records to sinks; PayloadFile (opt-in --payloads, masked)
+    normalizer.py # MCPEventNormalizer: joins a trace record and its payload record into one event
+    importer.py   # RuntimeLogImporter: tails trace/payload logs, runs gates in turn, one CSV row per gate result
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
     cli.py        # agent-latch-runtime console script (`proxy` subcommand)
@@ -123,9 +125,11 @@ agent-latch [scan] [path] [--config MANIFEST] [--exclude PATH]... [--ignore-file
 agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
             [--payloads FILE] [--payload-max-chars N] [--quiet]
             [--http HOST:PORT] (--upstream-url URL | -- SERVER COMMAND...)
+agent-latch-runtime import-logs --trace FILE [--payloads FILE] --output-csv FILE
+            [--normalized-out FILE] [--run-id ID] [--once]
 ```
 
-`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode.
+`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, runs the gate plugins in `agent_latch.gates`, and never blocks or changes traffic.
 
 Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them.
 

@@ -117,35 +117,42 @@ Every record also has `record_id`, `seq` (order within the proxy run), `timestam
 
 Before a record is written, string values under secret-like keys (`api_key`, `password`, `token`, ...) are replaced by `[REDACTED]`, other strings have secret-like values masked as in the trace, and each string is cut to `--payload-max-chars` characters (default 4000). Masking is pattern-based and can miss unusual formats: keep the payloads file local, private and short-lived. Nothing in it is sent anywhere.
 
-## Import payloads for runtime gates
+## Import logs for runtime gates
 
-Run the importer as a separate process alongside the proxy. Point both processes at the same
-payload file; the importer starts with existing records and then processes newly appended complete
-lines:
+`agent-latch-runtime import-logs` runs next to the proxy as a separate process. It reads the files the proxy already wrote, so it can neither slow down nor change the MCP flow. It follows the trace file (and the payloads file, if you have one) and, for each message:
+
+1. **Normalizes** it: the trace record and its payload record are joined into one event (below).
+2. **Runs every gate** in turn on that event.
+3. **Appends one CSV row per gate** as soon as that gate finishes.
 
 ```sh
-# Terminal 1: MCP traffic continues through the proxy.
-agent-latch-runtime proxy --payloads ./runtime-payloads.jsonl -- npx -y @modelcontextprotocol/server-github
+# Terminal 1: MCP traffic keeps flowing through the proxy.
+agent-latch-runtime proxy --trace ./trace.jsonl --payloads ./payloads.jsonl -- npx -y @modelcontextprotocol/server-github
 
-# Terminal 2: consume the payload stream concurrently.
-agent-latch-runtime import-payloads \
-  --input-payloads ./runtime-payloads.jsonl \
-  --output-csv ./runtime-findings.csv
+# Terminal 2: follow both logs.
+agent-latch-runtime import-logs --trace ./trace.jsonl --payloads ./payloads.jsonl \
+  --output-csv ./results.csv --normalized-out ./normalized.jsonl
 ```
 
-The importer discovers Python gate modules in `agent_latch.gates` in module-name order. A gate
-module exports a unique string `GATE_ID` and an `evaluate(event)` function. The importer gives each
-gate an independent copy of the same payload-event JSON object. `evaluate` returns a JSON object
-with a `findings` list. Each result is written and flushed immediately as a CSV row with
-`record_id`, `seq`, `gate_id`, and `result_json` columns. `result_json` uses a common envelope:
-`{"gate_id":"...","status":"ok","findings":[],"error":null}`. A gate failure produces the same
-envelope with `"status":"error"`, an empty findings list, and the exception type in `error`; later
-gates still receive the event. Malformed or unsupported input lines are logged and skipped.
+`--payloads` is optional: without it, gates see `payload: null` and only the trace `metadata`. `--normalized-out` also saves the normalized events. `--once` processes what the files hold now and exits. `--run-id` overrides the run id.
 
-This importer only runs gates and records their results; it does not block or modify MCP traffic.
-No gates are included yet. If no gate modules are installed, it reports that fact and continues
-following the file without producing result rows. The input payload file and CSV may contain
-sensitive information; keep both local and access-controlled.
+**Normalized event.** Every gate gets this same object, whatever the method:
+
+| Field | Meaning |
+|---|---|
+| `run_id`, `order` | `run_id` is a hash of the first trace line. `order` is the trace line number. Together they identify an event, and both are stable across restarts. |
+| `timestamp`, `session_id`, `request_id`, `client_id`, `server`, `method`, `stage`, `name` | Common envelope. `name` is the tool or prompt name (`null` for list calls). `client_id` comes from the payload record. |
+| `trace`, `payloads` | File name and line number of the source records. `payloads` is `null` when no payload record exists. |
+| `metadata` | The rest of the trace record: hashes, sizes, excerpts, error flags and durations. |
+| `payload` | The full masked payload (as in the payload table above), or `null`. |
+
+A trace record waits for its payload record (matched on session, request, server, method, stage and name). In follow mode it moves on without it after 2 seconds. With `--once`, unmatched records go on without a payload at the end.
+
+**Gates.** The importer discovers Python modules in `agent_latch.gates` in module-name order. A module exports a unique string `GATE_ID` and `evaluate(event)`, which returns `{"findings": [...]}`. Each gate gets its own copy of the event.
+
+**CSV.** Columns are `run_id`, `order`, `gate_id`, `result_json`, and `result_json` always has the same shape: `{"gate_id":"...","status":"ok","findings":[],"error":null}`. If a gate raises, its row has `"status":"error"` and only the exception type in `error`; later gates still run. Restarting the importer skips results already in the CSV, so rows are not repeated. Malformed lines are logged and skipped.
+
+This only runs gates and records their results; it does not block or modify MCP traffic. No gates are included yet: with none installed, it says so and writes no rows. The normalized file and the CSV can hold payload data, so keep them local and access-controlled (both are created with mode `0600`).
 
 ## Limits
 

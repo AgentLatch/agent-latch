@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from rich_argparse import RawDescriptionRichHelpFormatter
 
 from agent_latch import __version__
-from agent_latch.runtime.importer import discover_gates, follow_payloads
+from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
 from agent_latch.runtime.payloads import DEFAULT_PAYLOAD_MAX_CHARS, PayloadFile, PayloadTap
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
 
@@ -82,26 +82,33 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     importer = commands.add_parser(
-        "import-payloads",
-        help="run runtime gate plugins over an appended payload JSONL file",
+        "import-logs",
+        help="run runtime gate plugins over the proxy's trace and payload logs",
         description=(
-            "Follow an agent-latch.runtime.payload/1 JSONL file and append one CSV result "
-            "after each gate processes each event."
+            "Follow the proxy's trace (and payloads) files, join each message into one normalized"
+            " event, run every gate on it in turn and append one CSV row per gate result."
         ),
     )
     importer.add_argument(
-        "--input-payloads",
-        required=True,
-        type=Path,
-        metavar="FILE",
-        help="payload JSONL file written by the proxy (--payloads)",
+        "--trace", required=True, type=Path, metavar="FILE",
+        help="trace JSONL written by the proxy (--trace)",
     )
     importer.add_argument(
-        "--output-csv",
-        required=True,
-        type=Path,
-        metavar="FILE",
+        "--payloads", type=Path, metavar="FILE",
+        help="payloads JSONL written by the proxy (--payloads); gates see payload null without it",
+    )
+    importer.add_argument(
+        "--output-csv", required=True, type=Path, metavar="FILE",
         help="CSV file to create or append gate results to",
+    )
+    importer.add_argument(
+        "--normalized-out", type=Path, metavar="FILE",
+        help="also append the normalized events (JSONL); the file is sensitive",
+    )
+    importer.add_argument("--run-id", help="run id for the events (default: hash of first trace line)")
+    importer.add_argument(
+        "--once", action="store_true",
+        help="process what the files hold now and exit instead of following new lines",
     )
     return parser
 
@@ -192,15 +199,27 @@ def _proxy(args: argparse.Namespace) -> int:
     return 0
 
 
-def _import_payloads(args: argparse.Namespace) -> int:
+def _import_logs(args: argparse.Namespace) -> int:
+    logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
     try:
         gates = discover_gates()
+        importer = RuntimeLogImporter(
+            args.trace,
+            args.output_csv,
+            gates,
+            payloads_path=args.payloads,
+            normalized_path=args.normalized_out,
+            run_id=args.run_id,
+            follow=not args.once,
+        )
         print(
-            f"agent-latch-runtime: importing {args.input_payloads} into {args.output_csv} "
-            f"with {len(gates)} gate(s); following appended events",
+            f"agent-latch-runtime: importing {args.trace} into {args.output_csv} "
+            f"with {len(gates)} gate(s)" + ("" if args.once else "; following new lines"),
             file=sys.stderr,
         )
-        follow_payloads(args.input_payloads, args.output_csv, gates)
+        importer.run()
+    except KeyboardInterrupt:
+        return 0
     except (ImportError, OSError, ValueError) as error:
         print(f"agent-latch-runtime: importer failed: {error}", file=sys.stderr)
         return 2
@@ -211,8 +230,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.subcommand == "proxy":
         return _proxy(args)
-    if args.subcommand == "import-payloads":
-        return _import_payloads(args)
+    if args.subcommand == "import-logs":
+        return _import_logs(args)
     return 2
 
 
