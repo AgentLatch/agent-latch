@@ -14,6 +14,7 @@ from rich_argparse import RawDescriptionRichHelpFormatter
 from agent_latch import __version__
 from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
 from agent_latch.runtime.payloads import DEFAULT_PAYLOAD_MAX_CHARS, PayloadFile, PayloadTap
+from agent_latch.runtime.sqlite_store import SQLiteEventStore
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
 
 _EPILOG = """\
@@ -104,6 +105,10 @@ def _parser() -> argparse.ArgumentParser:
     importer.add_argument(
         "--normalized-out", type=Path, metavar="FILE",
         help="also append the normalized events (JSONL); the file is sensitive",
+    )
+    importer.add_argument(
+        "--database", type=Path, metavar="FILE",
+        help="also store the normalized events in this local SQLite file; it may hold payload data",
     )
     importer.add_argument("--run-id", help="run id for the events (default: hash of first trace line)")
     importer.add_argument(
@@ -203,18 +208,21 @@ def _import_logs(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
     try:
         gates = discover_gates()
+        store = SQLiteEventStore(args.database) if args.database else None
         importer = RuntimeLogImporter(
             args.trace,
             args.output_csv,
             gates,
             payloads_path=args.payloads,
             normalized_path=args.normalized_out,
+            store=store,
             run_id=args.run_id,
             follow=not args.once,
         )
         print(
-            f"agent-latch-runtime: importing {args.trace} into {args.output_csv} "
-            f"with {len(gates)} gate(s)" + ("" if args.once else "; following new lines"),
+            f"agent-latch-runtime: importing {args.trace} into {args.output_csv}"
+            + (f" and {args.database}" if args.database else "")
+            + f" with {len(gates)} gate(s)" + ("" if args.once else "; following new lines"),
             file=sys.stderr,
         )
         importer.run()

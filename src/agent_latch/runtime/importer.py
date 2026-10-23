@@ -7,6 +7,10 @@ turn, and appends one CSV row per gate result as soon as that gate finishes.
 It reads only files the proxy has already written, so it runs in parallel with the MCP flow and
 can neither delay nor change it. A gate that raises is recorded as an error result and the
 remaining gates still run. Restarting is safe: results already in the CSV are not repeated.
+
+With an ``EventStore`` (for example ``SQLiteEventStore``), every normalized event is also saved
+there, one transaction per pass. A save that fails while following is retried on the next pass,
+so the store catches up once it is reachable again; a restart catches up from the files.
 """
 
 from __future__ import annotations
@@ -52,6 +56,18 @@ class Gate(Protocol):
     gate_id: str
 
     def evaluate(self, event: dict[str, Any], /) -> Mapping[str, Any]: ...
+
+
+class EventStore(Protocol):
+    """Somewhere normalized events are kept (``SQLiteEventStore`` is the first)."""
+
+    path: Path | None
+
+    def open(self) -> None: ...
+
+    def save(self, events: list[dict[str, Any]], /) -> int: ...
+
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -163,6 +179,7 @@ class RuntimeLogImporter:
         *,
         payloads_path: Path | None = None,
         normalized_path: Path | None = None,
+        store: EventStore | None = None,
         run_id: str | None = None,
         follow: bool = True,
         poll_interval: float = POLL_INTERVAL_SECONDS,
@@ -170,13 +187,16 @@ class RuntimeLogImporter:
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be greater than zero")
-        paths = [p for p in (trace_path, payloads_path, output_csv, normalized_path) if p]
+        store_path = store.path if store is not None else None
+        candidates = (trace_path, payloads_path, output_csv, normalized_path, store_path)
+        paths = [p for p in candidates if p]
         if len({p.resolve() for p in paths}) != len(paths):
             raise ValueError("trace, payloads and output files must all be different files")
         self.trace_path = trace_path
         self.payloads_path = payloads_path
         self.output_csv = output_csv
         self.normalized_path = normalized_path
+        self.store = store
         self.gates = list(gates)
         self.follow = follow
         self.poll_interval = poll_interval
@@ -193,19 +213,24 @@ class RuntimeLogImporter:
         self._normalized: TextIO | None = None
         self._done: set[tuple[str, str, str]] = set()
         self._normalized_done: set[tuple[str, str]] = set()
+        self._unsaved: list[dict[str, Any]] = []  # events waiting for the store
+        self._store_failing = False
 
     def stop(self) -> None:
         """Ask a following importer to finish its current pass and return."""
         self._stop.set()
 
     def run(self) -> None:
-        self._open_outputs()
-        if not self.gates:
-            log.warning("agent-latch-runtime: no gates are installed; events will produce no rows")
         try:
+            self._open_outputs()
+            if not self.gates:
+                log.warning(
+                    "agent-latch-runtime: no gates are installed; events will produce no rows"
+                )
             while not self._stop.is_set():
                 progressed = self._ingest()
                 progressed = self._drain(final=False) or progressed
+                self._save_events(final=False)
                 if progressed:
                     continue
                 if not self.follow:
@@ -214,6 +239,13 @@ class RuntimeLogImporter:
             if self.follow:
                 self._ingest()
                 self._drain(final=False)
+                self._save_events(final=False)
+                if self._unsaved:
+                    log.warning(
+                        "agent-latch-runtime: %d event(s) not saved to the database; they will be"
+                        " saved on the next run",
+                        len(self._unsaved),
+                    )
             else:
                 self._finish()
         finally:
@@ -226,11 +258,14 @@ class RuntimeLogImporter:
         while self._ingest():
             pass
         self._drain(final=True)
+        self._save_events(final=True)
         unmatched = sum(len(queue) for queue in self._queues.values())
         if unmatched:
             log.warning("agent-latch-runtime: %d payload record(s) had no trace record", unmatched)
 
     def _open_outputs(self) -> None:
+        if self.store is not None:
+            self.store.open()  # first, so a bad database leaves no other file open
         self._csv = _open_private(self.output_csv)
         self._writer = self._csv_writer(self._csv)
         if self.normalized_path is not None:
@@ -263,6 +298,29 @@ class RuntimeLogImporter:
             if stream is not None:
                 stream.close()
         self._csv = self._normalized = self._writer = None
+        if self.store is not None:
+            self.store.close()
+
+    def _save_events(self, *, final: bool) -> None:
+        """Save waiting events in one store transaction; keep them for a retry if that fails."""
+        if self.store is None or not self._unsaved:
+            return
+        try:
+            self.store.save(self._unsaved)
+        except OSError as error:
+            if final:
+                raise
+            if not self._store_failing:
+                log.warning("agent-latch-runtime: %s; retrying", error)
+                self._store_failing = True
+            return
+        if self._store_failing:
+            log.warning(
+                "agent-latch-runtime: database reachable again; saved %d waiting event(s)",
+                len(self._unsaved),
+            )
+            self._store_failing = False
+        self._unsaved = []
 
     def _ingest(self) -> bool:
         progressed = False
@@ -330,6 +388,8 @@ class RuntimeLogImporter:
         if self._normalized is not None and (run_id, order) not in self._normalized_done:
             self._normalized.write(json.dumps(event, ensure_ascii=False) + "\n")
             self._normalized.flush()
+        if self.store is not None:
+            self._unsaved.append(copy.deepcopy(event))  # saved at the end of this pass
         for gate in self.gates:
             if (run_id, order, gate.gate_id) in self._done:
                 continue
