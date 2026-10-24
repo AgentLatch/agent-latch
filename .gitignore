@@ -12,4 +12,5 @@ build/
 .scan-results/
 .DS_Store
 *.sarif
+.idea/
 runtime-logs/
