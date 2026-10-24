@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import os
 import sys
@@ -206,3 +207,20 @@ def test_proxy_command_over_stdio(tmp_path: Path) -> None:
     assert FAKE_TOKEN not in trace_path.read_text(encoding="utf-8") + stderr
     _check_payloads(_records(payloads_path))
     assert FAKE_TOKEN not in payloads_path.read_text(encoding="utf-8")
+
+
+def test_demo_command_records_and_imports_a_session(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent_latch.runtime import cli
+
+    assert cli.main(["demo", "--dir", str(tmp_path)]) == 0
+    err = capsys.readouterr().err
+    assert "tools/call leaky_lookup -> ok" in err
+    with (tmp_path / "events.csv").open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert {r["server"] for r in rows} == {"demo-server"}
+    assert any(r["name"] == "broken_tool" and r["outcome"].startswith("error") for r in rows)
+    for name in ("trace.jsonl", "payloads.jsonl", "events.csv", "normalized.jsonl"):
+        assert FAKE_TOKEN not in (tmp_path / name).read_text(encoding="utf-8")
+    assert FAKE_TOKEN not in err

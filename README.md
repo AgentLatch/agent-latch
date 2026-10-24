@@ -5,22 +5,39 @@
   </picture>
 </p>
 
-# AgentLatch — Local-First AI Agent Security Scanner
+# AgentLatch — Local-First AI Agent Security Scanner and MCP Traffic Monitor
 
 [![CI](https://github.com/AgentLatch/agent-latch/actions/workflows/tests.yml/badge.svg)](https://github.com/AgentLatch/agent-latch/actions/workflows/tests.yml)
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-AgentLatch%20scan-blue?logo=github)](https://github.com/marketplace/actions/agentlatch-scan)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Demo video](https://img.shields.io/badge/Demo-YouTube-red?logo=youtube)](https://youtu.be/4FrRWlApDpo)
 
-**Find selected security risks in AI-agent projects before you run or deploy them.** AgentLatch is an open-source, local-first AI agent security scanner. It checks Python agent code, agent manifests (tools, permissions, and authentication), and prompt templates; optionally audits pinned Python dependencies; and reports evidence in your terminal, JSON, or SARIF. Run it from the command line, as a pre-commit hook, or as a GitHub Action.
+**Find selected security risks in AI-agent projects before you run them, and see what your agent does with its MCP tools while it runs.** AgentLatch is an open-source, local-first AI agent security toolkit with two parts:
+
+- **Static scanner** (`agent-latch scan`): checks Python agent code, agent manifests (tools, permissions, authentication) and prompt templates, optionally audits pinned Python dependencies, and reports evidence in your terminal, JSON or SARIF. Run it from the command line, as a pre-commit hook or as a GitHub Action.
+- **Runtime proxy for MCP, preview** (`agent-latch-runtime`): sits between an AI agent and a Model Context Protocol (MCP) server and records every tool list, tool call, result and prompt, with secrets masked. Monitor only: it never blocks or changes traffic.
 
 ![Example AgentLatch scan showing detected security findings](docs/assets/gent-latch-scan-example.png)
 
-> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding.
+> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic; it does not yet detect attacks or block calls.
 
-AgentLatch aims to make AI-agent security checks approachable for developers working with agentic AI. The first version focuses on a small, explainable set of static checks. A few rules recognise specific frameworks (CrewAI, LangChain, LangGraph), but AgentLatch does not plug into or run your agent. Framework adapters, runtime authorization, policy enforcement, and behavioural evaluations are future layers—not capabilities this scanner currently provides.
+## Contents
 
-## Quick start
+- [Quick start: scan an agent project](#quick-start-scan-an-agent-project)
+- [How it works](#how-it-works)
+- [Runtime monitoring for MCP (preview)](#runtime-monitoring-for-mcp-preview)
+- [What the scanner checks today](#what-the-scanner-checks-today)
+- [OWASP Agentic Top 10 coverage](#owasp-agentic-top-10-coverage)
+- [Documentation](#documentation)
+- [Why AgentLatch?](#why-agentlatch)
+- [Reports and data handling](#reports-and-data-handling)
+- [Important limitations](#important-limitations)
+- [FAQ](#faq)
+- [Development and tests](#development-and-tests)
+- [Roadmap](#roadmap)
+- [Contributing and security reports](#contributing-and-security-reports)
+
+## Quick start: scan an agent project
 
 Requires Python 3.11+. Install AgentLatch in its own virtual environment (Windows: see [Getting started](docs/getting-started.md#windows-powershell)):
 
@@ -74,31 +91,94 @@ Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-comm
 
 > **Upgrading from v0.1.0:** the project's own `.agent-latch-ignore`, `pyproject.toml` excludes, and inline ignore comments are no longer applied by default. If your repository relies on them, add `project-ignores: "true"` to the Action or `--project-ignores` on the command line. See the [v0.2.0 release notes](docs/release-notes/v0.2.0.md).
 
-## Documentation
+## How it works
 
-| Guide | Covers |
-|---|---|
-| [Getting started](docs/getting-started.md) | Install on Linux, macOS, WSL, and Windows; scanning; options; [ignoring false positives with `.agent-latch-ignore`](docs/getting-started.md#ignoring-false-positives-and-known-findings); output formats; exit codes; dependency audit; troubleshooting |
-| [Agent manifests](docs/agent-manifest.md) | Declaring agents, tools, permissions, and prompts in `agent-manifest.yaml`, and what is checked |
-| [pre-commit and CI](docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
-| [Detection rules](docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
-| [Vulnerable example](examples/vulnerable-agent) | A demo project and the findings it should produce |
-| [MCP gateway](mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients |
-| [Runtime proxy (preview)](docs/runtime.md) | Put `agent-latch-runtime proxy` in front of an MCP server to record its tool calls and results; monitor only, no blocking yet |
+AgentLatch looks at an agent at two different times. The scanner reads the project's files before anything runs. The runtime proxy watches the agent's MCP tool traffic while it runs. Both stay on your machine.
 
-## Why AgentLatch?
+```mermaid
+flowchart LR
+    subgraph before["Before you run: static scanner"]
+        code["Python agent code<br/>prompts, YAML, manifests"] --> scan["agent-latch scan"]
+        scan --> report["Findings<br/>terminal · JSON · SARIF<br/>mapped to OWASP ASI01–ASI10"]
+    end
+    subgraph during["While it runs: runtime proxy (preview)"]
+        agent["AI agent<br/>CrewAI · Claude Desktop · Cursor · ..."] --> proxy["agent-latch-runtime proxy"]
+        proxy --> server["MCP server"]
+        proxy --> logs["Masked logs<br/>trace.jsonl · payloads.jsonl"]
+        logs --> importer["agent-latch-runtime import-logs"]
+        importer --> events["One event per message<br/>events.csv · normalized.jsonl"]
+    end
+```
 
-AI agents combine model-generated decisions with tools, credentials, code execution, and external data. Traditional code and dependency checks are useful, but they do not by themselves explain agent-specific risks. AgentLatch is a small starting point: run selected checks locally, inspect the exact file and evidence, and map relevant findings to OWASP Agentic Top 10 categories.
+The scanner never imports or runs the code it checks. The proxy passes every MCP message through unchanged and never blocks anything.
 
-The goal is to grow in layers:
+## Runtime monitoring for MCP (preview)
 
-1. **Now — local scanner:** focused checks of Python source, agent manifests, and prompt templates; optional Python dependency advisories; portable reports; and pre-commit and GitHub Action integrations.
-2. **Next — broader static and evaluation checks:** more tested rules, framework adapters, and reproducible security test cases.
-3. **Planned — runtime checks:** inspect live MCP tool calls routed through AgentLatch, recording findings by default and blocking only when the operator turns it on in their own policy; framework adapters come after that.
+`agent-latch-runtime` records what an AI agent asks its MCP tools to do and what comes back, so you can review an agent's tool use after a run. It is a **preview and monitor only**: it records, it does not detect attacks or block calls yet.
 
-These layers will remain clearly distinguished: detecting a risky pattern is not the same as testing agent behavior, and neither alone guarantees runtime enforcement.
+### Try it in one command
 
-## What it checks today
+Install with the `runtime` extra, which adds FastMCP:
+
+```sh
+python -m pip install -e ".[runtime]"
+agent-latch-runtime demo
+```
+
+`demo` starts a bundled synthetic MCP server behind the real proxy, lists its tools, calls three of them (one returns a fake credential, one fails), gets a prompt, then imports the logs. This is real output:
+
+![Output of agent-latch-runtime demo: ten MCP events, from tools/list to prompts/get, each joined with its payload](docs/assets/runtime-demo.svg)
+
+The files land in `runtime-logs/demo/` (git-ignored). The fake credential appears only as `[REDACTED]` in every one of them.
+
+### Watch a real agent
+
+Put the proxy in front of any MCP server, then follow its logs from a second terminal:
+
+```sh
+# Terminal 1: the agent's MCP traffic goes through the proxy.
+agent-latch-runtime proxy --trace runtime-logs/trace.jsonl --payloads runtime-logs/payloads.jsonl \
+  -- npx -y @modelcontextprotocol/server-github
+
+# Terminal 2: one line per message, plus events.csv and normalized.jsonl in runtime-logs/.
+agent-latch-runtime import-logs
+```
+
+```mermaid
+sequenceDiagram
+    participant A as AI agent
+    participant P as agent-latch-runtime proxy
+    participant S as MCP server
+    participant I as import-logs
+    A->>P: tools/call (arguments)
+    P->>S: forwarded unchanged
+    S-->>P: result
+    P-->>A: returned unchanged
+    P->>P: write masked trace + payload records
+    I->>P: tail the log files (read-only)
+    I->>I: join request, payload and response into one event
+```
+
+Step-by-step guides with expected output at each step:
+
+- [Connect an app](docs/runtime.md#connect-an-app) (Claude Code, Claude Desktop, Cursor, or any MCP config)
+- [Live run with a CrewAI agent, plus 20 test scenarios](mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) (normal calls, errors, fake secrets, SSRF attempts, injection-shaped input)
+- [Claude Desktop on Windows with the MCP server in WSL](mcp-server/SETUP.md#4b-claude-desktop-on-windows-with-the-gateway-in-wsl)
+
+### What the proxy records
+
+| MCP message | Trace (always) | Full payload (`--payloads`) |
+|---|---|---|
+| `tools/list`: tool names, descriptions, schemas | ✅ | ✅ |
+| `tools/call`: request, response and error | ✅ | ✅ (a failed call is logged with its error type) |
+| `prompts/get`: request and response | ✅ | ✅ |
+| `prompts/list` | ✅ | names only |
+
+The **trace** keeps argument names, sizes, SHA-256 hashes and a short secret-masked excerpt, never raw values. The opt-in **payloads** file keeps full argument values and tool output, secret-masked and cut to `--payload-max-chars`. `import-logs` joins the two into one event per message.
+
+**Not recorded yet:** `resources/list` and `resources/read`, `initialize`, `sampling/createMessage`, notifications (including `tools/list_changed`), image, audio and embedded-resource content in tool results, and a failed `prompts/get`. These pass through the proxy unchanged with no record. The proxy also never sees the user's chat with the model, an app's built-in tools, or servers not routed through it. Details: [docs/runtime.md](docs/runtime.md#limits).
+
+## What the scanner checks today
 
 | Rule | Detection | OWASP Agentic mapping |
 |---|---|---|
@@ -120,9 +200,51 @@ These layers will remain clearly distinguished: detecting a risky pattern is not
 | `AGENTLATCH-PRM001` | Prompt-injection signatures in prompts in code, YAML, prompt template files, and manifests | ASI01 Agent Goal Hijack |
 | `AGENTLATCH-PRM002` | User-input placeholder interpolated into a system prompt | ASI01 Agent Goal Hijack |
 
-ASI08 and ASI09 have their first, partial checks (`AG007`, `AG006`, and `AG004`/`MAN001` for missing confirmation). AgentLatch has no checks yet for ASI06 Memory & Context Poisoning, ASI07 Insecure Inter-Agent Communication, or ASI10 Rogue Agents. Every report ends with an ASI01–ASI10 summary showing finding counts and marking these categories as `no checks yet`, so they aren't mistaken for clean results.
+Rule behavior and known blind spots are documented in [docs/RULES.md](docs/RULES.md).
 
-Rule behavior and known blind spots are documented in [docs/RULES.md](docs/RULES.md). OWASP mappings are informational references, not an OWASP endorsement or certification.
+## OWASP Agentic Top 10 coverage
+
+How the scanner's rules map to the [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/). The runtime proxy has no detection rules yet, so it adds no coverage here.
+
+| ID | Category | Coverage | Rules |
+|---|---|---|---|
+| ASI01 | Agent Goal Hijack | ✅ checks | `AG003`, `PRM001`, `PRM002` |
+| ASI02 | Tool Misuse and Exploitation | ✅ checks | `PY001`–`PY003`, `AG001`, `AG002`, `AG004`–`AG006`, `MAN001`–`MAN003` |
+| ASI03 | Identity and Privilege Abuse | ✅ checks | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`–`MAN003` |
+| ASI04 | Agentic Supply Chain Vulnerabilities | ✅ checks | `SEC001`, `DEP001` |
+| ASI05 | Unexpected Code Execution (RCE) | ✅ checks | `PY001`, `PY002`, `AG002`, `AG004`–`AG006`, `MAN001` |
+| ASI06 | Memory & Context Poisoning | ⬜ no checks yet | |
+| ASI07 | Insecure Inter-Agent Communication | ⬜ no checks yet | |
+| ASI08 | Cascading Failures | 🟨 partial | `AG007` |
+| ASI09 | Human-Agent Trust Exploitation | 🟨 partial | `AG004`, `AG006`, `MAN001` |
+| ASI10 | Rogue Agents | ⬜ no checks yet | |
+
+Every scan report ends with the same ASI01–ASI10 summary and marks the uncovered categories as `no checks yet`, so they aren't mistaken for clean results. A ✅ means some checks exist, not that the category is fully covered. The mapping is informational, not an OWASP endorsement or certification.
+
+## Documentation
+
+| Guide | Covers |
+|---|---|
+| [Getting started](docs/getting-started.md) | Install on Linux, macOS, WSL, and Windows; scanning; options; [ignoring false positives with `.agent-latch-ignore`](docs/getting-started.md#ignoring-false-positives-and-known-findings); output formats; exit codes; dependency audit; troubleshooting |
+| [Agent manifests](docs/agent-manifest.md) | Declaring agents, tools, permissions, and prompts in `agent-manifest.yaml`, and what is checked |
+| [pre-commit and CI](docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
+| [Detection rules](docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
+| [Vulnerable example](examples/vulnerable-agent) | A demo project and the findings it should produce |
+| [Runtime proxy for MCP (preview)](docs/runtime.md) | Install, connecting an app, what is recorded, `import-logs` and `demo`, limits |
+| [MCP gateway](mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients, and [live runs through the runtime proxy](mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) |
+
+## Why AgentLatch?
+
+AI agents combine model-generated decisions with tools, credentials, code execution, and external data. Traditional code and dependency checks are useful, but they do not by themselves explain agent-specific risks. AgentLatch is a small starting point: run selected checks locally, inspect the exact file and evidence, see what an agent actually did with its tools, and map relevant findings to OWASP Agentic Top 10 categories.
+
+The goal is to grow in layers:
+
+1. **Now: local scanner.** Focused checks of Python source, agent manifests, and prompt templates; optional Python dependency advisories; portable reports; and pre-commit and GitHub Action integrations.
+2. **Now, preview: runtime recording for MCP.** A proxy records live MCP tool traffic with secrets masked, and an importer turns it into reviewable events. It never blocks.
+3. **Next: runtime detection.** Checks ("gates") that flag risky events in that recorded traffic, recording findings by default.
+4. **Planned: enforcement and adapters.** Blocking only when the operator turns it on in their own policy; framework adapters and broader evaluation checks after that.
+
+These layers will remain clearly distinguished: detecting a risky pattern is not the same as testing agent behavior, and neither alone guarantees runtime enforcement.
 
 ## Reports and data handling
 
@@ -130,16 +252,17 @@ Rule behavior and known blind spots are documented in [docs/RULES.md](docs/RULES
 - The one exception is the opt-in dependency audit (`--dependencies`), which sends package names and versions to an advisory service. See [Dependency audit](docs/getting-started.md#dependency-audit).
 - Detected secret values are redacted from evidence, but reports still include paths, line numbers, and code context. Review them before sharing.
 - Every folder and every text file under the target is scanned, and no manifest is required. Only `.git`, installed environments (a folder with `pyvenv.cfg`, or an installed `node_modules`), symlinks, binary files, and files over 1 MB are skipped.
+- The runtime proxy and importer write only to local files and send nothing anywhere. Their logs can hold tool arguments and output: secrets are masked by pattern, which can miss unusual formats, so keep `runtime-logs/` local and private (files are created with mode `0600`).
 
 ## Important limitations
 
 - Rules are static heuristics: aliases, wrappers, dynamic imports, generated code, non-Python languages, and runtime behavior can be missed.
 - Findings can be false positives. A code-pattern match is not proof that an attacker can exploit it.
-- No findings does not mean the agent is secure. Prompt checks cover prompts found in Python code, YAML, prompt template files, and agent manifests, plus web/tool content flowing into LLM messages in Python code. AgentLatch does not inspect model behavior, deployment configuration, live tool calls, or complete transitive dependency state.
+- No findings does not mean the agent is secure. Prompt checks cover prompts found in Python code, YAML, prompt template files, and agent manifests, plus web/tool content flowing into LLM messages in Python code. The scanner does not inspect model behavior, deployment configuration, or complete transitive dependency state.
 - Manifest checks read what the manifest declares; they do not verify that your code enforces it. Source checks always run, and a manifest can only add findings.
 - By default, nothing in the scanned project can hide a finding: its `.agent-latch-ignore`, `pyproject.toml` excludes, and inline ignore comments are not applied. Add `--project-ignores` for your own repositories.
 - OWASP category IDs help organize selected findings; the mapping is not a compliance assessment, OWASP affiliation, or certification.
-- AgentLatch currently scans projects; it is **not** a Python runtime library that intercepts agent actions and does not yet enforce policies.
+- The runtime proxy is a preview. It records only MCP traffic routed through it, does not record every MCP message type yet ([see above](#what-the-proxy-records)), has no detection rules yet, and never blocks or changes a call.
 
 ## FAQ
 
@@ -147,13 +270,21 @@ Rule behavior and known blind spots are documented in [docs/RULES.md](docs/RULES
 
 Install AgentLatch and run `agent-latch scan /path/to/agent`. It checks Python agent code, an `agent-manifest.yaml` describing the agent's tools and prompts, and the prompt templates it references, then reports each finding with file, line, evidence, and an OWASP Agentic Top 10 mapping. Add `--dependencies` to check pinned Python packages for known advisories.
 
+### How do I monitor the MCP tool calls my AI agent makes?
+
+Put `agent-latch-runtime proxy` in front of the MCP server, either in your app's MCP config or as an HTTP proxy, and run `agent-latch-runtime import-logs` next to it. Every tool list, tool call, result and prompt is recorded with secrets masked, and shown as one event per message. Run `agent-latch-runtime demo` to see the whole flow first. See [Runtime monitoring for MCP](#runtime-monitoring-for-mcp-preview).
+
+### Can AgentLatch block a dangerous MCP tool call?
+
+Not yet. The runtime proxy is monitor only: it passes every message through unchanged. Detection checks on recorded traffic come next, and blocking is planned only as an opt-in the operator turns on in their own policy.
+
 ### Can AgentLatch detect prompt injection?
 
 It detects three static signals: instruction-override phrases such as "ignore all previous instructions" in prompt templates (`PRM001`), user input interpolated into system prompts (`PRM002`), and **indirect prompt injection** paths where web-search, web-page, or HTTP content flows into an LLM message without delimiters (`AG003`). It does not test model behavior at runtime, so it cannot prove an agent resists prompt injection.
 
 ### Which AI agent frameworks does it support?
 
-The source rules work on any Python code. Framework-specific checks cover CrewAI delegation, LangChain's dataframe agent and web/search tools (Tavily, DuckDuckGo, WebBaseLoader, and others), and data flowing through LangGraph state. Manifest and prompt checks are framework-agnostic. JavaScript and TypeScript agents are not scanned yet.
+The source rules work on any Python code. Framework-specific checks cover CrewAI delegation, LangChain's dataframe agent and web/search tools (Tavily, DuckDuckGo, WebBaseLoader, and others), and data flowing through LangGraph state. Manifest and prompt checks are framework-agnostic. JavaScript and TypeScript agents are not scanned yet. The runtime proxy works with any agent or app that talks to MCP servers, whatever language it is written in.
 
 ### How do I check AI agent security in CI or GitHub Actions?
 
@@ -161,11 +292,11 @@ Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) 
 
 ### Does AgentLatch upload my code or call an LLM?
 
-No. Scanning runs locally and does not call any model. The only network use is the opt-in dependency audit, which sends package names and versions to an advisory service, and the GitHub Action's optional upload of the findings report to GitHub code scanning.
+No. Scanning runs locally and does not call any model, and the runtime proxy writes only local files. The only network use is the opt-in dependency audit, which sends package names and versions to an advisory service, and the GitHub Action's optional upload of the findings report to GitHub code scanning.
 
 ### How does it map to the OWASP Top 10 for Agentic Applications?
 
-Each finding lists the related categories, for example ASI01 Agent Goal Hijack for prompt injection, ASI02 Tool Misuse for over-privileged tools, and ASI05 Unexpected Code Execution for `eval` or `shell=True`. The mapping is informational, not a compliance assessment or OWASP endorsement.
+Each finding lists the related categories, for example ASI01 Agent Goal Hijack for prompt injection, ASI02 Tool Misuse for over-privileged tools, and ASI05 Unexpected Code Execution for `eval` or `shell=True`. See the [coverage table](#owasp-agentic-top-10-coverage). The mapping is informational, not a compliance assessment or OWASP endorsement.
 
 ### How do I handle false positives?
 
@@ -178,20 +309,20 @@ No. AgentLatch runs a focused set of static checks. A clean scan means only that
 ## Development and tests
 
 ```sh
-python -m pip install -e ".[dev,audit]"
+python -m pip install -e ".[dev,audit,runtime]"
 python -m pytest
 ruff check .
 ```
 
-Tests use synthetic fixtures and mock the dependency-audit subprocess, so they make no network calls. See [CONTRIBUTING.md](CONTRIBUTING.md) for writing new rules.
+Tests use synthetic fixtures and mock the dependency-audit subprocess, so they make no network calls. Runtime tests that need FastMCP are skipped without the `runtime` extra. See [CONTRIBUTING.md](CONTRIBUTING.md) for writing new rules.
 
 ## Roadmap
 
 The longer-term direction is a layered AI-agent security toolkit. Each layer should have its own stated coverage and tests:
 
 - **Scanner (current):** expand well-scoped rules, language support, dependency manifest support, and SARIF quality.
-- **Evaluation (planned):** reproducible test cases for selected agent security behaviors, with transparent methodology and no single opaque “safe” score.
-- **Runtime checks (planned, separate component):** first for MCP tool traffic, through the existing gateway or a one-line proxy in your MCP config; then framework adapters and an HTTP sidecar. Monitor mode (findings only) is the default; allow, deny, ask, or fence decisions apply only when the operator enables enforcement in their own policy. Checks cover only traffic routed through AgentLatch.
+- **Runtime checks (preview):** recording and importing MCP tool traffic works today. Next come the missing MCP message types (resources, `initialize`, non-text content), then detection gates on the recorded events, mapped to OWASP categories. Monitor mode (findings only) stays the default; allow, deny, ask, or fence decisions apply only when the operator enables enforcement in their own policy. Checks cover only traffic routed through AgentLatch. Framework adapters and an HTTP sidecar come after that.
+- **Evaluation (planned):** reproducible test cases for selected agent security behaviors, with transparent methodology and no single opaque "safe" score.
 - **Hosted scanning service (future, not implemented):** require explicit consent, minimal repository access, retention/deletion policy, tenant isolation, and security review before accepting private source code.
 
 The project will not claim to be an industry standard or a universal security guarantee. Interoperability, independent review, transparent tests, and community adoption must come before such claims.

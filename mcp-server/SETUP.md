@@ -5,6 +5,8 @@ Follow these steps in order. Each step tells you what you should see, so you kno
 - [Part 1: Set up the server](#part-1-set-up-the-server) (about 5 minutes, once)
 - [Part 2: Connect your agent](#part-2-connect-your-agent)
 - [Part 3: Connect tools to the server](#part-3-connect-tools-to-the-server)
+- [Part 4: Watch a live agent run with AgentLatch](#part-4-watch-a-live-agent-run-with-agentlatch)
+  - [4b. Claude Desktop on Windows, with the gateway in WSL](#4b-claude-desktop-on-windows-with-the-gateway-in-wsl)
 - [If something goes wrong](#if-something-goes-wrong)
 
 ## Part 1: Set up the server
@@ -116,7 +118,7 @@ claude mcp list
 }
 ```
 
-If the file already has an `mcpServers` section, add only the `"agentlatch-gateway": {...}` entry inside it. On Windows, the Python path is `...\mcp-server\.venv\Scripts\python.exe`.
+If the file already has an `mcpServers` section, add only the `"agentlatch-gateway": {...}` entry inside it. On Windows, the Python path is `...\mcp-server\.venv\Scripts\python.exe`. If the gateway lives in WSL and Claude Desktop on Windows, use [Part 4b](#4b-claude-desktop-on-windows-with-the-gateway-in-wsl) instead.
 
 **3. Restart the app completely.**
 
@@ -262,6 +264,167 @@ def register(mcp) -> None:
 
 Before you commit a new tool or server, follow the standards and checklist in [CLAUDE.md](CLAUDE.md).
 
+## Part 4: Watch a live agent run with AgentLatch
+
+A real CrewAI agent ([`examples/crewai_fetch_demo.py`](examples/crewai_fetch_demo.py)) uses the gateway's `time` and `fetch` tools through the AgentLatch runtime proxy. The proxy records every message, and `import-logs` shows each one as it happens. Monitor only: nothing is blocked or changed.
+
+```
+CrewAI agent ──▶ agent-latch-runtime proxy :8770 ──▶ gateway ──▶ time, fetch
+                   │ writes runtime-logs/trace.jsonl and payloads.jsonl
+                   ▼
+            agent-latch-runtime import-logs ──▶ one line per event + runtime-logs/events.csv
+```
+
+**Before you start:**
+
+- Part 1 is done, and `python server.py --check` lists `time_...` and `fetch_...` tools.
+- AgentLatch is installed with the runtime extra in the repo's own `.venv` (run this from the repo root, not `mcp-server`):
+
+  ```sh
+  python3 -m venv .venv && source .venv/bin/activate
+  pip install -e ".[runtime]"
+  ```
+
+  ✅ `agent-latch-runtime demo` prints ten `#1 ... #10` event lines. That checks AgentLatch alone, with no model key and no gateway.
+- CrewAI is installed in its **own** environment in `mcp-server`, so its packages never mix with the gateway's:
+
+  ```sh
+  python3 -m venv crewai-env && source crewai-env/bin/activate
+  pip install crewai "crewai-tools[mcp]" python-dotenv
+  ```
+
+- A model key is in `.env`: `python set_token.py OPENAI_API_KEY`. The agent sends its prompts to OpenAI, so this run is not local-only.
+
+Use three terminals. In each one, replace `~/projects/agent-latch` with your clone's path.
+
+**1. Terminal 1: start the proxy.** It starts the gateway for you. Leave it open.
+
+```sh
+cd ~/projects/agent-latch/mcp-server
+~/projects/agent-latch/.venv/bin/agent-latch-runtime proxy --name gateway --http 127.0.0.1:8770 \
+  --trace ~/projects/agent-latch/runtime-logs/trace.jsonl \
+  --payloads ~/projects/agent-latch/runtime-logs/payloads.jsonl \
+  -- .venv/bin/python server.py
+```
+
+✅ You see `agent-latch-runtime: monitoring 'gateway' (preview; records traffic, never blocks)`.
+
+**2. Terminal 2: start the importer.** It waits for the log files, then follows them. Leave it open.
+
+```sh
+cd ~/projects/agent-latch
+source .venv/bin/activate
+agent-latch-runtime import-logs
+```
+
+✅ You see `importing runtime-logs/trace.jsonl into runtime-logs/events.csv with 0 gate(s); following new lines (Ctrl+C to stop)`.
+
+**3. Terminal 3: run the agent.**
+
+```sh
+cd ~/projects/agent-latch/mcp-server
+source crewai-env/bin/activate
+python examples/crewai_fetch_demo.py
+```
+
+✅ Terminal 3 ends with the Tokyo time and a one-line summary of the page. Terminal 1 prints a line per message. About two seconds behind the agent, Terminal 2 prints lines like:
+
+```
+agent-latch-runtime: #1 gateway: tools/list -> 5 tool(s) [payload]
+agent-latch-runtime: #2 gateway: tools/call time_get_current_time (timezone) [payload]
+agent-latch-runtime: #3 gateway: tools/call time_get_current_time -> ok, 120 B in 9.8 ms [payload]
+```
+
+**4. Look at the results.** Stop Terminals 1 and 2 with Ctrl+C, then from the repo root:
+
+```sh
+column -s, -t < runtime-logs/events.csv | less -S
+```
+
+✅ One row per message: method, tool, outcome, duration, whether a payload was joined, and a short redacted excerpt. For the full arguments and response of each message, open `runtime-logs/normalized.jsonl`. `runtime-logs/` is git-ignored. Its files can hold tool output, so keep them local.
+
+**5. Optional: run 20 scenarios, some attack-shaped.** With Terminals 1 and 2 still running, in Terminal 3:
+
+```sh
+python examples/crewai_scenarios.py --list      # what each scenario sends and what to look for
+python examples/crewai_scenarios.py --direct    # the 20 calls without a model: always all 20, no cost
+python examples/crewai_scenarios.py             # a real agent decides each call (uses OPENAI_API_KEY)
+```
+
+The scenarios cover normal calls, tool errors, fake secrets in arguments and in a URL, fetches to cloud-metadata, localhost and `file://` addresses, injection-shaped text (shell, SQL, path traversal, "ignore your instructions"), and an oversized argument. They only use read-only tools (never `slack_send_message`), and all secrets are fake.
+
+✅ Every scenario shows up in Terminal 2. Where to read each part:
+
+| You want | Read |
+|---|---|
+| The prompt each scenario gave the agent, the calls it made and its answer | `runtime-logs/agent-runs.jsonl`, written by the script itself (the proxy never sees prompts to the model) |
+| Each request's arguments, joined with its response, as the proxy saw them | `runtime-logs/normalized.jsonl`, one JSON object per event |
+| A quick table of every event | `runtime-logs/events.csv` |
+
+The fake key and password show as `[REDACTED]` in every file, `agent-runs.jsonl` included: the script masks its log and console output with the proxy's own redaction before writing, and refuses to run if it can't load it. Masking is pattern-based and can miss unusual secret formats, so keep `runtime-logs/` local and private.
+
+**To run again from a clean log,** delete the folder first: `rm -rf runtime-logs/`, then start again from step 1.
+
+> **Run `import-logs` from the repo root.** `runtime-logs/...` is relative to the folder you're in. Started from `mcp-server`, the importer watches `mcp-server/runtime-logs/`, which stays empty, and prints nothing. From anywhere, a full path also works: `--dir ~/projects/agent-latch/runtime-logs/claude-desktop`.
+
+### 4b. Claude Desktop on Windows, with the gateway in WSL
+
+Claude Desktop runs on Windows. The proxy and gateway stay in WSL, and Claude Desktop starts them through `wsl.exe`. No terminal is needed for the proxy: Claude Desktop starts and stops it.
+
+**1. Open the config.** In Claude Desktop, go to **Settings → Developer → Edit Config**. Use this rather than looking for the file yourself: the Microsoft Store version keeps it in a hidden folder.
+
+**2. Add the gateway entry.** If the file is empty, paste all of this. Otherwise add only the `"agentlatch-gateway": {...}` entry inside the existing `mcpServers`. Change `Ubuntu` if your distribution has another name (`wsl -l`), and `~/projects/agent-latch` if your clone is elsewhere.
+
+```json
+{
+  "mcpServers": {
+    "agentlatch-gateway": {
+      "command": "wsl.exe",
+      "args": [
+        "-d", "Ubuntu", "-e", "bash", "-lc",
+        "cd ~/projects/agent-latch && exec .venv/bin/agent-latch-runtime proxy --name gateway --trace runtime-logs/claude-desktop/trace.jsonl --payloads runtime-logs/claude-desktop/payloads.jsonl -- mcp-server/.venv/bin/python mcp-server/server.py"
+      ]
+    }
+  }
+}
+```
+
+`bash -lc` loads your login `PATH`, so the gateway finds `uvx` for the time and fetch tools. The logs go to their own folder, `runtime-logs/claude-desktop/`, so they don't mix with CrewAI runs.
+
+**3. Restart Claude Desktop completely:** right-click its tray icon → **Quit**, then open it again. Closing the window is not enough.
+
+✅ In **Settings → Developer**, `agentlatch-gateway` shows as running.
+
+**4. Start the importer** in a WSL terminal, from the repo root:
+
+```sh
+cd ~/projects/agent-latch
+source .venv/bin/activate
+agent-latch-runtime import-logs --dir runtime-logs/claude-desktop
+```
+
+**5. Ask Claude Desktop to use the tools,** and allow each call when it asks:
+
+- "What time is it in Tokyo? Use the time tool."
+- "Fetch https://example.com and summarize it."
+- "Use the echo tool to repeat: my api key is sk-FAKE0123456789abcdefFAKE" (a fake key)
+
+✅ The importer prints each call, for example:
+
+```
+agent-latch-runtime: #8 gateway: tools/call echo (text) [payload]
+agent-latch-runtime: #9 gateway: tools/call echo -> ok, 41 B in 178.4 ms [payload]
+```
+
+In `runtime-logs/claude-desktop/normalized.jsonl` the echo request and response both show `my api key is [REDACTED]`.
+
+**What to expect:**
+
+- **Claude still sees the unmasked text.** The proxy is monitor-only: it passes traffic through unchanged and masks only what it writes to disk.
+- **Your chat messages are not recorded.** They go from Claude Desktop to Anthropic, not through MCP. Only tool lists, tool calls and prompts pass the proxy. Never paste a real secret into the chat.
+- **Claude may refuse attack-shaped requests,** such as fetching a cloud-metadata address. Nothing reaches the proxy then, so nothing is logged. Use `crewai_scenarios.py --direct` (step 5 of Part 4) for those tests.
+- **`slack_send_message` posts to Slack for real.** Claude Desktop sees it, so deny it when asked, or remove the Slack tools from the gateway first.
+
 ## If something goes wrong
 
 | You see | Do this |
@@ -274,3 +437,9 @@ Before you commit a new tool or server, follow the standards and checklist in [C
 | A server is mounted but its tools are missing | Open `logs/<name>.log` to see that server's own error. |
 | `address already in use` | Another gateway is running. Stop it, or use `--port 8877`. |
 | The agent doesn't see new tools | Restart the agent, or the gateway in HTTP mode. |
+| Part 4: `Is the AgentLatch proxy running on port 8770` | Start Terminal 1 first and wait for `monitoring 'gateway'`. |
+| Part 4: `OPENAI_API_KEY is not set` | Run `python set_token.py OPENAI_API_KEY` in `mcp-server`. |
+| Part 4: `agent-latch-runtime: command not found` | Use the full path `~/projects/agent-latch/.venv/bin/agent-latch-runtime`, or activate the repo's `.venv`. |
+| Part 4: the importer prints nothing | It's watching another folder. Run `import-logs` from the repo root, or give a full path: `--dir ~/projects/agent-latch/runtime-logs/claude-desktop`. |
+| Part 4b: `agentlatch-gateway` fails to start in Claude Desktop | Open **Settings → Developer** for the error. The full log is `mcp-server-agentlatch-gateway.log` in Claude's `logs` folder. Check the distribution name (`wsl -l`) and the clone path in the config. |
+| Part 4b: the gateway starts but has no time or fetch tools | `uvx` isn't on the login `PATH`. In WSL, `bash -lc "command -v uvx"` must print a path. |

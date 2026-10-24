@@ -53,7 +53,7 @@ class TraceLog:
             self._file.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
             self._file.flush()
         if self.summary is not None:
-            self.summary.write(f"agent-latch-runtime: {_summarize(line)}\n")
+            self.summary.write(f"agent-latch-runtime: {summarize_record(line)}\n")
             self.summary.flush()
         return line
 
@@ -177,7 +177,8 @@ def _call_fields(call: ToolCall) -> dict[str, Any]:
     }
 
 
-def _summarize(record: Mapping[str, Any]) -> str:
+def summarize_record(record: Mapping[str, Any]) -> str:
+    """One short human-readable line for a trace record (no argument values or output)."""
     method, stage = record.get("method", "?"), record.get("stage", "?")
     if method == "tools/list":
         return f"tools/list -> {len(record.get('tools', []))} tool(s)"
