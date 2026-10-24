@@ -9,14 +9,15 @@ FAIL = malicious tool definition; PASS = benign tool definition.
 INCONCLUSIVE and NOT_EVALUATED are preserved as distinct predictions.
 """
 from __future__ import annotations
-from pathlib import Path
 
 import argparse
 import csv
 import json
 import os
 from collections import Counter, defaultdict
-from typing import Any, Iterator
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
 # Change this path for each test, or supply the filename as a PyCharm program argument.
 INPUT_FILE = Path(__file__).resolve().parent / "alr04_normalized_events.json"
