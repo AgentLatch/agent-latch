@@ -16,7 +16,6 @@ import csv
 import json
 import os
 from collections import Counter, defaultdict
-from pathlib import Path
 from typing import Any, Iterator
 
 # Change this path for each test, or supply the filename as a PyCharm program argument.
@@ -47,17 +46,17 @@ def read_events(path: Path) -> Iterator[dict[str, Any]]:
                     except json.JSONDecodeError as exc:
                         raise ValueError(f"Invalid JSONL at line {number}: {exc}") from exc
                     if not isinstance(event, dict):
-                        raise ValueError(f"JSONL line {number} must be an object")
+                        raise TypeError(f"JSONL line {number} must be an object")
                     yield event
         else:
             items = json.load(stream)
             if isinstance(items, dict):
                 items = [items]
             if not isinstance(items, list):
-                raise ValueError("Input must be an object, array of objects, or JSONL")
+                raise TypeError("Input must be an object, array of objects, or JSONL")
             for number, event in enumerate(items, 1):
                 if not isinstance(event, dict):
-                    raise ValueError(f"JSON event {number} must be an object")
+                    raise TypeError(f"JSON event {number} must be an object")
                 yield event
 
 
@@ -193,7 +192,7 @@ def run(input_path: Path, output_path: Path) -> Counter:
                     if not isinstance(records, list):
                         raise TypeError("Gate findings must be a list")
                     error = ""
-                except Exception as exc:
+                except (AttributeError, TypeError, ValueError, KeyError, IndexError, json.JSONDecodeError) as exc:
                     records, error = [], type(exc).__name__
                     counters["gate_errors"] += 1
                 summary = next((r for r in records if r.get("family") == "scan_summary"), None)
@@ -227,7 +226,7 @@ def run(input_path: Path, output_path: Path) -> Counter:
                         seen_tool_names.add((server, name))
                     emit({**base, "tool": name}, name, actual, inspect, matched, error, sha)
         os.replace(temp_path, output_path)
-    except Exception:
+    except (AttributeError, OSError, TypeError, ValueError, KeyError, IndexError, json.JSONDecodeError):
         temp_path.unlink(missing_ok=True)
         raise
     return counters
