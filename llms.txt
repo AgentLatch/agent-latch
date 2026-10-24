@@ -9,7 +9,7 @@ Key facts:
 - GitHub Action: `uses: AgentLatch/agent-latch@v0.3.0` (https://github.com/marketplace/actions/agentlatch-scan).
 - Frameworks with specific checks: CrewAI, LangChain, LangGraph. Generic rules apply to any Python code. JavaScript/TypeScript are not scanned.
 - Privacy: scans run locally and never call an LLM. Only the opt-in `--dependencies` audit sends package names and versions to an advisory service.
-- Runtime proxy (preview): `agent-latch-runtime proxy -- <MCP server command>` sits between an AI app and an MCP server and records tool lists, tool calls, results and prompts (argument names and hashes, secret-masked excerpts). It records only; it does not detect attacks or block calls yet.
+- Runtime proxy (preview): `agent-latch-runtime proxy -- <MCP server command>` sits between an AI app and an MCP server and records tool lists, tool calls, results and prompts (argument names and hashes, secret-masked excerpts). `agent-latch-runtime import-logs` joins those logs into one event per message (printed, plus `events.csv` and `normalized.jsonl` under `runtime-logs/`), and `agent-latch-runtime demo` runs the whole flow against a bundled synthetic server. It records only; it does not detect attacks or block calls yet.
 - Limits: the scanner uses static heuristics; there is no runtime enforcement or model-behavior testing. A clean scan is not a security guarantee.
 
 ## Docs
