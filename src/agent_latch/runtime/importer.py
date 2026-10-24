@@ -1,8 +1,9 @@
-"""RuntimeLogImporter: turn runtime trace and payload logs into gate results.
+"""RuntimeLogImporter: turn runtime trace and payload logs into readable events and gate results.
 
 It tails the proxy's trace file (and, optionally, its payloads file), joins each trace record with
-its payload record (``MCPEventNormalizer``), hands the same normalized event to every gate in
-turn, and appends one CSV row per gate result as soon as that gate finishes.
+its payload record (``MCPEventNormalizer``), appends one row per event to an events CSV, prints a
+one-line summary per event, and hands the same normalized event to every installed gate in turn,
+appending one CSV row per gate result as soon as that gate finishes.
 
 It reads only files the proxy has already written, so it runs in parallel with the MCP flow and
 can neither delay nor change it. A gate that raises is recorded as an error result and the
@@ -36,10 +37,17 @@ from agent_latch.runtime.normalizer import (
     run_id_for,
     trace_key,
 )
+from agent_latch.runtime.trace import summarize_record
 
 log = logging.getLogger("agent_latch.runtime")
 
 CSV_COLUMNS = ("run_id", "order", "gate_id", "result_json")
+EVENT_COLUMNS = (
+    "run_id", "order", "timestamp", "session_id", "request_id", "server", "method", "stage",
+    "name", "outcome", "duration_ms", "output_bytes", "has_payload", "excerpt",
+)
+# A spreadsheet runs a cell that starts with one of these as a formula.
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
 POLL_INTERVAL_SECONDS = 0.1
 # How long a trace record waits for its payload record before moving on without it (follow mode).
 PAYLOAD_GRACE_SECONDS = 2.0
@@ -151,6 +159,10 @@ def _parse(text: str) -> Any:
 class RuntimeLogImporter:
     """Joins trace and payload logs into normalized events and runs every gate on each one.
 
+    ``events_csv`` gets one row per event whether or not any gate is installed; ``output_csv``
+    gets one row per gate result and is only created when there are gates. ``summary`` (for
+    example ``sys.stderr``) gets one line per newly processed event.
+
     ``follow=True`` keeps waiting for appended lines until ``stop()`` is called (or the process is
     interrupted); ``follow=False`` processes what is in the files now and returns.
     """
@@ -158,11 +170,13 @@ class RuntimeLogImporter:
     def __init__(
         self,
         trace_path: Path,
-        output_csv: Path,
+        output_csv: Path | None,
         gates: Iterable[Gate],
         *,
         payloads_path: Path | None = None,
+        events_csv: Path | None = None,
         normalized_path: Path | None = None,
+        summary: TextIO | None = None,
         run_id: str | None = None,
         follow: bool = True,
         poll_interval: float = POLL_INTERVAL_SECONDS,
@@ -170,13 +184,17 @@ class RuntimeLogImporter:
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be greater than zero")
-        paths = [p for p in (trace_path, payloads_path, output_csv, normalized_path) if p]
+        paths = [
+            p for p in (trace_path, payloads_path, output_csv, events_csv, normalized_path) if p
+        ]
         if len({p.resolve() for p in paths}) != len(paths):
             raise ValueError("trace, payloads and output files must all be different files")
         self.trace_path = trace_path
         self.payloads_path = payloads_path
         self.output_csv = output_csv
+        self.events_csv = events_csv
         self.normalized_path = normalized_path
+        self.summary = summary
         self.gates = list(gates)
         self.follow = follow
         self.poll_interval = poll_interval
@@ -190,8 +208,11 @@ class RuntimeLogImporter:
         self._normalizer: MCPEventNormalizer | None = None
         self._csv: TextIO | None = None
         self._writer: csv.DictWriter[str] | None = None
+        self._events: TextIO | None = None
+        self._events_writer: csv.DictWriter[str] | None = None
         self._normalized: TextIO | None = None
-        self._done: set[tuple[str, str, str]] = set()
+        self._done: set[tuple[str, ...]] = set()
+        self._events_done: set[tuple[str, ...]] = set()
         self._normalized_done: set[tuple[str, str]] = set()
 
     def stop(self) -> None:
@@ -200,8 +221,8 @@ class RuntimeLogImporter:
 
     def run(self) -> None:
         self._open_outputs()
-        if not self.gates:
-            log.warning("agent-latch-runtime: no gates are installed; events will produce no rows")
+        if not (self.gates or self.events_csv or self.normalized_path or self.summary):
+            log.warning("agent-latch-runtime: no gates and no outputs; nothing will be written")
         try:
             while not self._stop.is_set():
                 progressed = self._ingest()
@@ -231,38 +252,29 @@ class RuntimeLogImporter:
             log.warning("agent-latch-runtime: %d payload record(s) had no trace record", unmatched)
 
     def _open_outputs(self) -> None:
-        self._csv = _open_private(self.output_csv)
-        self._writer = self._csv_writer(self._csv)
+        if self.events_csv is not None:
+            self._events = _open_private(self.events_csv)
+            self._events_writer, self._events_done = _csv_writer(
+                self._events, EVENT_COLUMNS, ("run_id", "order")
+            )
+        if self.gates and self.output_csv is not None:
+            self._csv = _open_private(self.output_csv)
+            self._writer, self._done = _csv_writer(
+                self._csv, CSV_COLUMNS, ("run_id", "order", "gate_id")
+            )
         if self.normalized_path is not None:
             self._normalized = _open_private(self.normalized_path)
             self._normalized_done = _existing_events(self._normalized)
-
-    def _csv_writer(self, output: TextIO) -> csv.DictWriter[str]:
-        output.seek(0)
-        if not output.readline():
-            writer = csv.DictWriter(output, fieldnames=CSV_COLUMNS)
-            writer.writeheader()
-            output.flush()
-            return writer
-        output.seek(0)
-        reader = csv.DictReader(output)
-        if tuple(reader.fieldnames or ()) != CSV_COLUMNS:
-            raise ValueError(
-                f"CSV header must be {','.join(CSV_COLUMNS)};"
-                f" found {','.join(reader.fieldnames or ())}"
-            )
-        self._done = {(r["run_id"], r["order"], r["gate_id"]) for r in reader}
-        output.seek(0, 2)
-        return csv.DictWriter(output, fieldnames=CSV_COLUMNS)
 
     def _close(self) -> None:
         self._trace.close()
         if self._payloads is not None:
             self._payloads.close()
-        for stream in (self._csv, self._normalized):
+        for stream in (self._csv, self._events, self._normalized):
             if stream is not None:
                 stream.close()
-        self._csv = self._normalized = self._writer = None
+        self._csv = self._events = self._normalized = None
+        self._writer = self._events_writer = None
 
     def _ingest(self) -> bool:
         progressed = False
@@ -322,25 +334,109 @@ class RuntimeLogImporter:
         payload_line: int | None,
         payload: dict[str, Any] | None,
     ) -> None:
-        assert self._normalizer is not None and self._writer is not None and self._csv is not None
+        assert self._normalizer is not None
         event = self._normalizer.normalize(
             trace_line=line_no, trace=trace, payload_line=payload_line, payload=payload
         )
         run_id, order = event["run_id"], str(event["order"])
+        # Only events new to some output are summarized, so a restart does not repeat old lines.
+        fresh = not (self._events or self._csv or self._normalized)
         if self._normalized is not None and (run_id, order) not in self._normalized_done:
             self._normalized.write(json.dumps(event, ensure_ascii=False) + "\n")
             self._normalized.flush()
-        for gate in self.gates:
-            if (run_id, order, gate.gate_id) in self._done:
-                continue
-            result = _evaluate(gate, event)
-            self._writer.writerow({
-                "run_id": run_id,
-                "order": order,
-                "gate_id": gate.gate_id,
-                "result_json": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
-            })
-            self._csv.flush()
+            fresh = True
+        if (
+            self._events is not None
+            and self._events_writer is not None
+            and (run_id, order) not in self._events_done
+        ):
+            self._events_writer.writerow(_event_row(event))
+            self._events.flush()
+            fresh = True
+        findings = errors = 0
+        if self._csv is not None and self._writer is not None:
+            for gate in self.gates:
+                if (run_id, order, gate.gate_id) in self._done:
+                    continue
+                result = _evaluate(gate, event)
+                findings += len(result["findings"])
+                errors += result["status"] == "error"
+                self._writer.writerow({
+                    "run_id": run_id,
+                    "order": order,
+                    "gate_id": gate.gate_id,
+                    "result_json": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                })
+                self._csv.flush()
+                fresh = True
+        if self.summary is not None and fresh:
+            line = f"#{order} {event['server']}: {summarize_record(trace)}"
+            if event["payload"] is not None:
+                line += " [payload]"
+            if self._csv is not None:
+                line += f" | gates: {findings} finding(s)"
+                if errors:
+                    line += f", {errors} error(s)"
+            self.summary.write(f"agent-latch-runtime: {line}\n")
+            self.summary.flush()
+
+
+def _csv_writer(
+    output: TextIO, columns: tuple[str, ...], key: tuple[str, ...]
+) -> tuple[csv.DictWriter[str], set[tuple[str, ...]]]:
+    """Writer appending to ``output`` (header written if empty) and the keys already in it."""
+    output.seek(0)
+    if not output.readline():
+        writer = csv.DictWriter(output, fieldnames=columns)
+        writer.writeheader()
+        output.flush()
+        return writer, set()
+    output.seek(0)
+    reader = csv.DictReader(output)
+    if tuple(reader.fieldnames or ()) != columns:
+        raise ValueError(
+            f"CSV header must be {','.join(columns)}; found {','.join(reader.fieldnames or ())}"
+        )
+    done = {tuple(row[field] for field in key) for row in reader}
+    output.seek(0, 2)
+    return csv.DictWriter(output, fieldnames=columns), done
+
+
+def _cell(value: Any) -> str:
+    """CSV cell text; values from MCP traffic must not run as spreadsheet formulas."""
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    return "'" + text if text.startswith(_FORMULA_START) else text
+
+
+def _event_row(event: Mapping[str, Any]) -> dict[str, str]:
+    meta = event["metadata"]
+    stage = event["stage"]
+    if stage == "error":
+        outcome = f"error ({meta.get('error_type')})" if meta.get("error_type") else "error"
+    elif meta.get("is_error") is True:
+        outcome = "error result"
+    elif stage == "response":
+        outcome = "ok"
+    else:
+        outcome = ""
+    return {
+        "run_id": _cell(event["run_id"]),
+        "order": _cell(event["order"]),
+        "timestamp": _cell(event["timestamp"]),
+        "session_id": _cell(event["session_id"]),
+        "request_id": _cell(event["request_id"]),
+        "server": _cell(event["server"]),
+        "method": _cell(event["method"]),
+        "stage": _cell(stage),
+        "name": _cell(event["name"]),
+        "outcome": outcome,
+        "duration_ms": _cell(meta.get("duration_ms")),
+        "output_bytes": _cell(meta.get("output_bytes")),
+        "has_payload": "yes" if event["payload"] is not None else "no",
+        "excerpt": _cell(meta.get("excerpt")),
+    }
 
 
 def _existing_events(stream: TextIO) -> set[tuple[str, str]]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import threading
 import time
@@ -11,7 +12,15 @@ from typing import Any
 
 import pytest
 
-from agent_latch.runtime import PayloadFile, PayloadTap, ToolCall, ToolInfo, ToolOutput, TraceLog
+from agent_latch.runtime import (
+    PayloadFile,
+    PayloadTap,
+    ToolCall,
+    ToolInfo,
+    ToolOutput,
+    TraceLog,
+    cli,
+)
 from agent_latch.runtime.importer import GatePlugin, RuntimeLogImporter, discover_gates
 from agent_latch.runtime.normalizer import MCPEventNormalizer, run_id_for
 
@@ -216,9 +225,70 @@ def test_importer_rejects_bad_setup(tmp_path: Path) -> None:
     out = tmp_path / "r.csv"
     out.write_text("wrong,header\n", encoding="utf-8")
     with pytest.raises(ValueError, match="CSV header"):
-        RuntimeLogImporter(trace_path, out, [], follow=False).run()
+        RuntimeLogImporter(trace_path, out, [_gate("one")], follow=False).run()
+    with pytest.raises(ValueError, match="CSV header"):
+        RuntimeLogImporter(trace_path, None, [], events_csv=out, follow=False).run()
 
 
 def test_run_id_is_stable_and_gate_discovery_finds_no_gates_yet() -> None:
     assert run_id_for("abc\n") == run_id_for("abc") and len(run_id_for("abc")) == 16
     assert discover_gates() == []
+
+
+def test_events_are_visible_without_any_gate(tmp_path: Path) -> None:
+    trace_path, payloads_path = _record_run(tmp_path)
+    events_csv, gate_csv = tmp_path / "events.csv", tmp_path / "gate-results.csv"
+    summary = io.StringIO()
+
+    def run() -> None:
+        RuntimeLogImporter(
+            trace_path, gate_csv, [], payloads_path=payloads_path, events_csv=events_csv,
+            summary=summary, follow=False,
+        ).run()
+
+    run()
+    rows = _rows(events_csv)
+    assert [(r["order"], r["method"], r["stage"]) for r in rows] == [
+        ("1", "tools/list", "response"), ("2", "prompts/list", "response"),
+        ("3", "tools/call", "request"), ("4", "tools/call", "response"),
+    ]
+    assert [r["has_payload"] for r in rows] == ["yes", "no", "yes", "yes"]
+    assert rows[3]["outcome"] == "ok" and rows[3]["excerpt"] == "done"
+    assert not gate_csv.exists()  # no gates installed, so no empty gate CSV
+    lines = summary.getvalue().splitlines()
+    assert len(lines) == 4
+    assert lines[2] == "agent-latch-runtime: #3 demo: tools/call run_command (command) [payload]"
+    assert "rm -rf" not in summary.getvalue()  # argument values are never printed
+
+    run()  # a rerun adds no rows and prints nothing new
+    assert len(_rows(events_csv)) == 4 and len(summary.getvalue().splitlines()) == 4
+
+
+def test_events_csv_cells_cannot_run_as_formulas(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    trace = TraceLog(trace_path, summary=None)
+    call = ToolCall("s", "1", None, "=cmd", "demo", {}, "t")
+    trace.call_response(call, ToolOutput(("=HYPERLINK(\"x\")",), None, True), 1.0)
+    trace.close()
+    events_csv = tmp_path / "events.csv"
+    RuntimeLogImporter(trace_path, None, [], events_csv=events_csv, follow=False).run()
+    row = _rows(events_csv)[0]
+    assert row["name"] == "'=cmd" and row["excerpt"].startswith("'=")
+    assert row["outcome"] == "error result"
+
+
+def test_import_logs_cli_uses_the_log_folder_by_default(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _record_run(tmp_path)
+    assert cli.main(["import-logs", "--dir", str(tmp_path), "--once"]) == 0
+    assert len(_rows(tmp_path / "events.csv")) == 4
+    events = (tmp_path / "normalized.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(events[2])["payload"]["arguments"] == {"command": "rm -rf /"}
+    assert not (tmp_path / "gate-results.csv").exists()
+    err = capsys.readouterr().err
+    assert "with 0 gate(s)" in err and "#4 demo: tools/call run_command -> ok" in err
+
+    (tmp_path / "events.csv").write_text("wrong,header\n", encoding="utf-8")
+    assert cli.main(["import-logs", "--dir", str(tmp_path), "--once"]) == 2
+    assert "CSV header must be" in capsys.readouterr().err
