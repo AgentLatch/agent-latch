@@ -85,6 +85,34 @@ agent-latch-runtime proxy --http 127.0.0.1:8770 --upstream-url https://tools.exa
 
 The HTTP listener has no authentication, so it accepts loopback addresses only. Upstream servers that need auth headers aren't supported yet.
 
+## Supported clients
+
+Where an app's MCP client runs decides how it reaches the proxy:
+
+- **Local apps** (Claude Desktop, Cursor, VS Code) run their MCP client on your PC. They start the proxy themselves over stdio, using the config change above. No network is involved.
+- **Cloud apps** (ChatGPT, claude.ai in a browser) call tools from the vendor's servers. They can't start a program on your PC or reach `localhost`, so they need a tunnel or a public HTTPS server. For ChatGPT, OpenAI's Secure MCP Tunnel connects out from your PC, so nothing is made public.
+
+| Client | Connection | Status | Setup guide |
+|---|---|---|---|
+| Claude Desktop | Local stdio | Tested on Windows, Oct 2026 | [docs/clients/claude-desktop.md](clients/claude-desktop.md) |
+| ChatGPT (web) | OpenAI Secure MCP Tunnel | Tested on Windows with ChatGPT Plus, Oct 2026 | [docs/clients/chatgpt.md](clients/chatgpt.md) |
+| Cursor | Local stdio (`~/.cursor/mcp.json`) | Tested on Windows, Oct 2026 | [docs/clients/cursor.md](clients/cursor.md) |
+| GitHub Copilot in VS Code | Local stdio (`.vscode/mcp.json`, `"servers"` key) | Tested on Windows, VS Code 1.142, Oct 2026 | [docs/clients/vscode-copilot.md](clients/vscode-copilot.md) |
+| Gemini in Google Antigravity | Local stdio (`~/.gemini/config/mcp_config.json`) | Tested on Windows, Oct 2026 | [docs/clients/antigravity.md](clients/antigravity.md) |
+| OpenAI Codex app | Reuses the ChatGPT plugin (Secure MCP Tunnel) | Codex imports the ChatGPT account's plugins, so no separate setup is needed; it selected the AgentLatch plugin. A tool call through it is not yet verified | [docs/clients/chatgpt.md](clients/chatgpt.md#use-it-from-the-codex-app) |
+
+Each guide uses the test server in `tests/runtime_fixtures/fake_server.py` and its own `--name` (for example `claude-weather`), so one trace file shows which client made each call.
+
+Not supported, as of October 2026:
+
+| Client | Reason |
+|---|---|
+| claude.ai in a browser, Gemini web app | Connect only to servers with a public URL. A public tunnel would expose the proxy's unauthenticated HTTP listener |
+| Gemini CLI | Stopped serving free, AI Pro and Ultra users on 18 June 2026; Google moved them to Antigravity |
+| Gemini desktop app | Custom MCP servers are only in testing, by URL |
+| Microsoft Copilot (Windows app) | No support for adding MCP servers |
+| Cloud agents (Cursor Cloud Agents, GitHub Copilot coding agent, Copilot Studio) | Run on the vendor's servers, so they can't start a local proxy |
+
 ## What gets recorded
 
 With `--trace FILE`, each MCP message adds one JSON line (`"schema": "agentlatch.runtime.trace/1"`) to the file, created with mode `0600`. A one-line summary of each message also goes to stderr (turn it off with `--quiet`). Nothing is written to stdout, which carries the MCP protocol.
