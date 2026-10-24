@@ -13,9 +13,13 @@ PREREQUISITES
         cd mcp-server
         python set_token.py OPENAI_API_KEY        # model key for the agent
         python server.py --check                  # should list time_... and fetch_... tools
-  2. The proxy running in front of the gateway (leave it running):
+  2. The proxy running in front of the gateway (leave it running), and optionally
+     `agent-latch-runtime import-logs` from the repo root to watch each event
+     (full steps: SETUP.md, Part 4):
         /path/to/agent-latch/.venv/bin/agent-latch-runtime proxy --name gateway \\
-          --http 127.0.0.1:8770 --payloads ~/agentlatch-payloads.jsonl -- \\
+          --http 127.0.0.1:8770 \\
+          --trace /path/to/agent-latch/runtime-logs/trace.jsonl \\
+          --payloads /path/to/agent-latch/runtime-logs/payloads.jsonl -- \\
           .venv/bin/python server.py
   3. CrewAI installed in a SEPARATE environment:
         python3 -m venv crewai-env && source crewai-env/bin/activate

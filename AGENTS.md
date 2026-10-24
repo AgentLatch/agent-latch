@@ -75,13 +75,18 @@ src/agent_latch/
     redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file
     trace.py      # TraceLog: one redacted JSONL record per MCP message (agentlatch.runtime.trace/1)
     payloads.py   # PayloadTap: full-payload records to sinks; PayloadFile (opt-in --payloads, masked)
+    normalizer.py # MCPEventNormalizer: joins a trace record and its payload record into one event
+    importer.py   # RuntimeLogImporter: tails trace/payload logs, events.csv + stderr line per event, runs gates
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
-    cli.py        # agent-latch-runtime console script (`proxy` subcommand)
+    demo_server.py # synthetic MCP server for `demo` and the runtime tests [needs fastmcp]
+    demo.py       # `demo`: drives demo_server through the proxy, then imports the logs [needs fastmcp]
+    cli.py        # agent-latch-runtime console script (`proxy`, `import-logs`, `demo`)
 tests/test_scanner.py          # scanner unit tests (synthetic fixtures via tmp_path)
 tests/test_runtime.py          # runtime tests that need no FastMCP
-tests/test_runtime_middleware.py # proxy end-to-end tests (skipped without the [runtime] extra)
-tests/runtime_fixtures/        # synthetic MCP server for the runtime tests
+tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests (no FastMCP)
+tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
+tests/runtime_fixtures/        # wrapper that runs runtime/demo_server.py as a script
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
 action.yml                     # composite GitHub Action (isolated venv, SARIF path rewrite, summary)
@@ -123,9 +128,13 @@ agent-latch [scan] [path] [--config MANIFEST] [--exclude PATH]... [--ignore-file
 agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
             [--payloads FILE] [--payload-max-chars N] [--quiet]
             [--http HOST:PORT] (--upstream-url URL | -- SERVER COMMAND...)
+agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
+            [--events-csv FILE] [--output-csv FILE] [--normalized-out FILE]
+            [--run-id ID] [--once] [--quiet]
+agent-latch-runtime demo [--dir DIR]
 ```
 
-`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode.
+`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` (and `gate-results.csv` when gate plugins exist in `agent_latch.gates`) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command.
 
 Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them.
 
