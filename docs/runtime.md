@@ -117,6 +117,78 @@ Every record also has `record_id`, `seq` (order within the proxy run), `timestam
 
 Before a record is written, string values under secret-like keys (`api_key`, `password`, `token`, ...) are replaced by `[REDACTED]`, other strings have secret-like values masked as in the trace, and each string is cut to `--payload-max-chars` characters (default 4000). Masking is pattern-based and can miss unusual formats: keep the payloads file local, private and short-lived. Nothing in it is sent anywhere.
 
+## Import logs for runtime gates
+
+`agent-latch-runtime import-logs` runs next to the proxy as a separate process. It reads the files the proxy already wrote, so it can neither slow down nor change the MCP flow. It follows the trace file (and the payloads file, if you have one) and, for each message:
+
+1. **Normalizes** it: the trace record and its payload record are joined into one event (below).
+2. **Runs every gate** in turn on that event.
+3. **Appends one CSV row per gate** as soon as that gate finishes.
+
+```sh
+# Terminal 1: MCP traffic keeps flowing through the proxy.
+agent-latch-runtime proxy --trace ./trace.jsonl --payloads ./payloads.jsonl -- npx -y @modelcontextprotocol/server-github
+
+# Terminal 2: follow both logs.
+agent-latch-runtime import-logs --trace ./trace.jsonl --payloads ./payloads.jsonl \
+  --output-csv ./results.csv --normalized-out ./normalized.jsonl
+```
+
+`--payloads` is optional: without it, gates see `payload: null` and only the trace `metadata`. `--normalized-out` also saves the normalized events. `--once` processes what the files hold now and exits. `--run-id` overrides the run id.
+
+**Normalized event.** Every gate gets this same object, whatever the method:
+
+| Field | Meaning |
+|---|---|
+| `run_id`, `order` | `run_id` is a hash of the first trace line. `order` is the trace line number. Together they identify an event, and both are stable across restarts. |
+| `timestamp`, `session_id`, `request_id`, `client_id`, `server`, `method`, `stage`, `name` | Common envelope. `name` is the tool or prompt name (`null` for list calls). `client_id` comes from the payload record. |
+| `trace`, `payloads` | File name and line number of the source records. `payloads` is `null` when no payload record exists. |
+| `metadata` | The rest of the trace record: hashes, sizes, excerpts, error flags and durations. |
+| `payload` | The full masked payload (as in the payload table above), or `null`. |
+
+A trace record waits for its payload record (matched on session, request, server, method, stage and name). In follow mode it moves on without it after 2 seconds. With `--once`, unmatched records go on without a payload at the end.
+
+**Gates.** The importer discovers Python modules in `agent_latch.gates` in module-name order. A module exports a unique string `GATE_ID` and `evaluate(event)`, which returns `{"findings": [...]}`. Each gate gets its own copy of the event.
+
+**CSV.** Columns are `run_id`, `order`, `gate_id`, `result_json`, and `result_json` always has the same shape: `{"gate_id":"...","status":"ok","findings":[],"error":null}`. If a gate raises, its row has `"status":"error"` and only the exception type in `error`; later gates still run. Restarting the importer skips results already in the CSV, so rows are not repeated. Malformed lines are logged and skipped.
+
+This only runs gates and records their results; it does not block or modify MCP traffic. No gates are included yet: with none installed, it says so and writes no rows. The normalized file and the CSV can hold payload data, so keep them local and access-controlled (both are created with mode `0600`).
+
+### Store events in SQLite
+
+`--database FILE` also saves every normalized event in a local SQLite database, using Python's built-in `sqlite3` (nothing extra to install). The CSV and normalized JSONL outputs are unchanged, and without `--database` nothing else changes.
+
+```sh
+agent-latch-runtime import-logs --trace ./trace.jsonl --payloads ./payloads.jsonl \
+  --output-csv ./results.csv --normalized-out ./normalized.jsonl --database ./runtime.db
+```
+
+Each event is one row in the `events` table:
+
+| Column | From the normalized event |
+|---|---|
+| `run_id`, `event_order` | `run_id`, `order` (the key: an event is stored once) |
+| `timestamp`, `session_id`, `request_id`, `client_id`, `server`, `method`, `stage`, `name` | Same fields |
+| `trace_path`, `trace_line` | `trace` |
+| `payloads_path`, `payloads_line` | `payloads` (`NULL` when there is no payload record) |
+| `metadata` | `metadata`, as JSON text |
+| `payload` | `payload`, as JSON text (`NULL` without `--payloads`) |
+| `imported_at` | When the importer stored the row (UTC) |
+
+- **No duplicates.** Rows are keyed by `run_id` and `event_order` and saved with `INSERT OR IGNORE`, one transaction per pass. Importing the same files again, or restarting the importer, adds only events it has not stored yet.
+- **Live.** Without `--once`, the importer keeps following the logs and saves new events within about a second. If a save fails (for example the database is locked by another program), it logs one warning, keeps the events and retries on the next pass. Events still waiting when it stops are saved on the next run, which re-reads the files.
+- **Trace only.** Without `--payloads`, `payload`, `payloads_path` and `payloads_line` are `NULL` and `metadata` still holds the trace fields.
+- **Schema.** The schema version is kept in `PRAGMA user_version`, and numbered migrations bring an older database up to date when it is opened, each in one transaction. A database from a newer AgentLatch, or a file that is not SQLite, is refused with exit code `2`.
+- **Readable view.** `event_log` shows one line per event: `time`, `server`, `method`, `stage`, `tool_or_prompt`, `client_id`, `is_error`, `duration_ms`, the masked `excerpt` and `has_payload`.
+
+Read it with Python:
+
+```sh
+python -c "import sqlite3; db = sqlite3.connect('runtime.db'); [print(r) for r in db.execute('select time, tool_or_prompt, stage, is_error, excerpt from event_log order by time desc limit 10')]"
+```
+
+**The database is sensitive.** With `--payloads` it holds tool arguments and outputs, masked by pattern only. A new database file is created with mode `0600` on macOS and Linux; on Windows it follows the folder's permissions, so keep it in your user folder. Keep it local and delete it when you no longer need it. Nothing is uploaded: the importer makes no network requests.
+
 ## Limits
 
 - It sees only servers whose config entry goes through the proxy. Other servers, the app's built-in tools (for example Claude Code's shell and file edits) and the user's prompts to the model don't pass through it.
