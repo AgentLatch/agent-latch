@@ -82,6 +82,7 @@ tests/test_runtime.py          # runtime tests that need no FastMCP
 tests/test_runtime_middleware.py # proxy end-to-end tests (skipped without the [runtime] extra)
 tests/runtime_fixtures/        # synthetic MCP server for the runtime tests
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
+scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
 action.yml                     # composite GitHub Action (isolated venv, SARIF path rewrite, summary)
 .pre-commit-hooks.yaml         # pre-commit hook definition (`agent-latch scan --fail-on high`)
