@@ -240,7 +240,7 @@ Every scan report ends with the same ASI01–ASI10 summary and marks the uncover
 | [pre-commit and CI](docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
 | [Detection rules](docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
 | [Vulnerable example](examples/vulnerable-agent) | A demo project and the findings it should produce |
-| [Runtime proxy for MCP (preview)](docs/runtime.md) | Install, connecting an app, what is recorded, `import-logs` and `demo`, limits |
+| [Runtime proxy for MCP (preview)](docs/runtime.md) | Install, connecting an app, what is recorded, `import-logs` and `demo`, limits. Optional local SQLite: [Store events in SQLite](docs/runtime.md#store-events-in-sqlite) |
 | [MCP gateway](mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients, and [live runs through the runtime proxy](mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) |
 
 ## Why AgentLatch?

@@ -273,6 +273,7 @@ CrewAI agent ──▶ agent-latch-runtime proxy :8770 ──▶ gateway ──�
                    │ writes runtime-logs/trace.jsonl and payloads.jsonl
                    ▼
             agent-latch-runtime import-logs ──▶ one line per event + runtime-logs/events.csv
+                                                 optional --database runtime-logs/runtime.db
 ```
 
 **Before you start:**
@@ -309,15 +310,15 @@ cd ~/projects/agent-latch/mcp-server
 
 ✅ You see `agent-latch-runtime: monitoring 'gateway' (preview; records traffic, never blocks)`.
 
-**2. Terminal 2: start the importer.** It waits for the log files, then follows them. Leave it open.
+**2. Terminal 2: start the importer before the agent.** It waits for the log files, then follows them and records each new event while the agent runs. Leave it open. Add `--database` when you want a local SQLite copy. Leave that flag off and only the CSV and JSONL files are written. Nothing is uploaded. What the file contains: [Store events in SQLite](../docs/runtime.md#store-events-in-sqlite).
 
 ```sh
 cd ~/projects/agent-latch
 source .venv/bin/activate
-agent-latch-runtime import-logs
+agent-latch-runtime import-logs --database runtime-logs/runtime.db
 ```
 
-✅ You see `importing runtime-logs/trace.jsonl into runtime-logs/events.csv with 1 gate(s); following new lines (Ctrl+C to stop)`.
+✅ You see `importing runtime-logs/trace.jsonl into runtime-logs/events.csv and runtime-logs/runtime.db with 1 gate(s); following new lines (Ctrl+C to stop)`. Without `--database` the `and runtime-logs/runtime.db` part is absent.
 
 **3. Terminal 3: run the agent.**
 
@@ -363,6 +364,7 @@ Scenario 21 calls `schema_fixture`. That tool's description tells the agent to r
 | The prompt each scenario gave the agent, the calls it made and its answer | `runtime-logs/agent-runs.jsonl`, written by the script itself (the proxy never sees prompts to the model) |
 | Each request's arguments, joined with its response, as the proxy saw them | `runtime-logs/normalized.jsonl`, one JSON object per event |
 | A quick table of every event | `runtime-logs/events.csv` |
+| The same events in SQLite, when Terminal 2 was started with `--database` | `runtime-logs/runtime.db` |
 
 The fake key and password show as `[REDACTED]` in every file, `agent-runs.jsonl` included: the script masks its log and console output with the proxy's own redaction before writing, and refuses to run if it can't load it. Masking is pattern-based and can miss unusual secret formats, so keep `runtime-logs/` local and private.
 
@@ -403,8 +405,10 @@ Claude Desktop runs on Windows. The proxy and gateway stay in WSL, and Claude De
 ```sh
 cd ~/projects/agent-latch
 source .venv/bin/activate
-agent-latch-runtime import-logs --dir runtime-logs/claude-desktop
+agent-latch-runtime import-logs --dir runtime-logs/claude-desktop --database runtime-logs/claude-desktop/runtime.db
 ```
+
+Start this before you send Claude a message, so events are stored as they happen. Omit `--database` if you only want the CSV and JSONL files in `runtime-logs/claude-desktop/`.
 
 **5. Ask Claude Desktop to use the tools,** and allow each call when it asks:
 
