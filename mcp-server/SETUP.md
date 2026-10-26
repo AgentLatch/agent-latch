@@ -317,7 +317,7 @@ source .venv/bin/activate
 agent-latch-runtime import-logs
 ```
 
-✅ You see `importing runtime-logs/trace.jsonl into runtime-logs/events.csv with 0 gate(s); following new lines (Ctrl+C to stop)`.
+✅ You see `importing runtime-logs/trace.jsonl into runtime-logs/events.csv with 1 gate(s); following new lines (Ctrl+C to stop)`.
 
 **3. Terminal 3: run the agent.**
 
@@ -354,7 +354,7 @@ python examples/crewai_scenarios.py             # a real agent decides each call
 
 The scenarios cover normal calls, tool errors, fake secrets in arguments and in a URL, fetches to cloud-metadata, localhost and `file://` addresses, injection-shaped text (shell, SQL, path traversal, "ignore your instructions"), an oversized argument, and one schema-injection fixture. They only use read-only tools (never `slack_send_message`), and all secrets are fake.
 
-Scenario 21 calls `schema_fixture`. That tool's description tells the agent to read `~/.ssh/id_rsa`; the function itself returns a fixed string and reads nothing. ALR04 flags the definition when the tool list is recorded, as rule ALR04-004 in `runtime-logs/gate-results.csv`. A PASS on the other tools is unchanged. Restart the proxy after this tool is added so the gateway loads it. The list stays flagged until `mcp-server/tools/alr04_fixture_tools.py` is removed.
+Scenario 21 calls `schema_fixture`. That tool's description tells the agent to read `~/.ssh/id_rsa`; the function itself returns a fixed string and reads nothing. ALR04 reports a finding when the tool list is recorded, as rule ALR04-004 in `runtime-logs/gate-results.csv`. Print that table with `agent-latch --runtime-result`. Restart the proxy after this tool is added so the gateway loads it. The list stays flagged until `mcp-server/tools/alr04_fixture_tools.py` is removed.
 
 ✅ Every scenario shows up in Terminal 2. Where to read each part:
 

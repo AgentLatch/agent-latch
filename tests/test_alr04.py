@@ -107,7 +107,7 @@ def test_alr04_matches_the_recorded_baseline() -> None:
     assert len(events) == 100 and len(actual) == 111
 
 
-def test_alr04_pass_is_a_clear_scan_not_a_safety_claim() -> None:
+def test_alr04_summary_is_not_reported_as_a_finding() -> None:
     alr04.reset_state()
     event = {
         "method": "tools/list",
@@ -121,8 +121,8 @@ def test_alr04_pass_is_a_clear_scan_not_a_safety_claim() -> None:
     }
     findings = alr04.evaluate(event)["findings"]
     summary = next(record for record in findings if record.get("family") == "scan_summary")
-    assert summary["outcome"] == "PASS"
-    assert "not safe" in summary["message"]
+    assert summary["is_finding"] is False
+    assert "safe" not in summary["message"].lower()
     assert summary["owasp"] == ["ASI01", "ASI02", "ASI04"]
 
 

@@ -15,10 +15,8 @@ Scope. This gate looks at what a tool definition *says*. It deliberately does no
 - observe what the agent did after discovery (needs cross-event correlation)
 - write reports; findings go to the importer's CSV and a separate exporter flattens them
 
-Outcomes per tool and rule family: FAIL (hard evidence, or independent corroboration above the
-rule's threshold), INCONCLUSIVE (needs review, or the input was incomplete) and PASS (nothing above
-threshold; reported only when some weak evidence was seen). Scores are heuristic and never prove
-that an agent was compromised. A quiet result means "nothing matched", not "safe".
+A finding is recorded when evidence meets a rule threshold or needs review. Scores are
+heuristic and never prove that an agent was compromised. The gate does not clear a tool.
 
 Known blind spots: paraphrases that avoid every phrase family, languages beyond the few override
 phrases listed, encodings beyond two layers of Base64/hex/percent, text cut by the payload file's
@@ -813,6 +811,6 @@ def evaluate(event: dict[str, Any], *, policy: Mapping[str, Any] | None = None) 
             "coverage": 1.0, "tools_scanned": scanned, "tools_failed": outcomes["FAIL"],
             "tools_inconclusive": outcomes["INCONCLUSIVE"], "tools_clear": outcomes["PASS"],
             "tools_already_scanned": skipped, "owasp": OWASP, "evidence": [], "evidence_count": 0,
-            "message": "Scan summary. Clear means no above-threshold indicator, not safe.",
+            "message": "Scan summary for this event.",
         })
     return {"findings": out}

@@ -4,8 +4,8 @@ Each gate module exports a unique string ``GATE_ID`` and an
 ``evaluate(event: dict) -> {"findings": list}`` function. The importer supplies each gate with
 the same payload-event JSON object and writes a common result envelope to its CSV output.
 
-``alr04`` ships with the package. It is a monitor-only preview: a PASS means no rule crossed
-its threshold, not that the tool definition is safe. Gates record findings and never block.
+``alr04`` ships with the package. It is a monitor-only preview: it reports findings and never
+blocks. The runtime report lists findings only.
 
 ``agent-latch --runtime-result`` prints every gate's alerts from ``gate-results.csv``. A finding
 is included when ``is_finding`` is true, or when that key is absent and ``outcome`` is ``FAIL``

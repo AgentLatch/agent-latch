@@ -78,7 +78,7 @@ def test_runtime_result_uses_a_finding_path_and_a_local_tool(tmp_path: Path, cap
     assert "ASI07 Insecure Inter-Agent Communication" in report
     assert "ALR04-099" not in report
     assert "GATEX-000" not in report
-    assert "not that the tool is safe" in report
+    assert "The report lists findings only." in report
 
 
 def test_runtime_result_fail_on_and_missing_file(tmp_path: Path, capsys) -> None:
