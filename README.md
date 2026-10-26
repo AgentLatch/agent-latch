@@ -106,7 +106,7 @@ flowchart LR
         proxy --> server["MCP server"]
         proxy --> logs["Masked logs<br/>trace.jsonl · payloads.jsonl"]
         logs --> importer["agent-latch-runtime import-logs"]
-        importer --> events["One event per message<br/>events.csv · normalized.jsonl"]
+        importer --> events["One event per message<br/>events.csv · normalized.jsonl<br/>optional --database (local SQLite)"]
     end
 ```
 
@@ -143,6 +143,16 @@ agent-latch-runtime proxy --trace runtime-logs/trace.jsonl --payloads runtime-lo
 # Terminal 2: one line per message, plus events.csv and normalized.jsonl in runtime-logs/.
 agent-latch-runtime import-logs
 ```
+
+Run both from the repository root, with the repository virtualenv active (`source .venv/bin/activate`). `mcp-server/.venv` does not provide `agent-latch-runtime`.
+
+To also keep a queryable copy, name a local SQLite file. That flag is the choice of store. Leave it off and nothing is written except the CSV and JSONL files. Nothing is uploaded.
+
+```sh
+agent-latch-runtime import-logs --database runtime-logs/runtime.db
+```
+
+SQLite is the first store. The importer calls it through a small `EventStore` interface, so a later destination can be selected the same way without becoming part of the default install. Details: [Store events in SQLite](docs/runtime.md#store-events-in-sqlite).
 
 ```mermaid
 sequenceDiagram
@@ -230,7 +240,7 @@ Every scan report ends with the same ASI01–ASI10 summary and marks the uncover
 | [pre-commit and CI](docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
 | [Detection rules](docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
 | [Vulnerable example](examples/vulnerable-agent) | A demo project and the findings it should produce |
-| [Runtime proxy for MCP (preview)](docs/runtime.md) | Install, connecting an app, what is recorded, `import-logs` and `demo`, limits |
+| [Runtime proxy for MCP (preview)](docs/runtime.md) | Install, connecting an app, what is recorded, `import-logs` and `demo`, limits. Optional local SQLite: [Store events in SQLite](docs/runtime.md#store-events-in-sqlite) |
 | [MCP gateway](mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients, and [live runs through the runtime proxy](mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) |
 
 ## Why AgentLatch?
@@ -240,7 +250,7 @@ AI agents combine model-generated decisions with tools, credentials, code execut
 The goal is to grow in layers:
 
 1. **Now: local scanner.** Focused checks of Python source, agent manifests, and prompt templates; optional Python dependency advisories; portable reports; and pre-commit and GitHub Action integrations.
-2. **Now, preview: runtime recording for MCP.** A proxy records live MCP tool traffic with secrets masked, and an importer turns it into reviewable events. It never blocks.
+2. **Now, preview: runtime recording for MCP.** A proxy records live MCP tool traffic with secrets masked, and an importer turns it into reviewable events. `--database FILE` optionally keeps those events in a local SQLite file. It never blocks, and it does not upload them.
 3. **Now, preview: one runtime gate.** ALR04 reports a finding when a MCP tool definition (name, description, or schema) contains instruction-like content, and maps that finding to ASI01, ASI02, and ASI04. Calls are not blocked. The report lists findings only.
 4. **Planned: enforcement and adapters.** Blocking only when the operator turns it on in their own policy; framework adapters and broader evaluation checks after that.
 
@@ -252,7 +262,7 @@ These layers will remain clearly distinguished: detecting a risky pattern is not
 - The one exception is the opt-in dependency audit (`--dependencies`), which sends package names and versions to an advisory service. See [Dependency audit](docs/getting-started.md#dependency-audit).
 - Detected secret values are redacted from evidence, but reports still include paths, line numbers, and code context. Review them before sharing.
 - Every folder and every text file under the target is scanned, and no manifest is required. Only `.git`, installed environments (a folder with `pyvenv.cfg`, or an installed `node_modules`), symlinks, binary files, and files over 1 MB are skipped.
-- The runtime proxy and importer write only to local files and send nothing anywhere. Their logs can hold tool arguments and output: secrets are masked by pattern, which can miss unusual formats, so keep `runtime-logs/` local and private (files are created with mode `0600`).
+- The runtime proxy and importer write only to local files and send nothing anywhere. Their logs can hold tool arguments and output: secrets are masked by pattern, which can miss unusual formats, so keep `runtime-logs/` local and private (files are created with mode `0600`). `--database` adds another local file, SQLite, with the same rule: it can hold payloads, it is created with mode `0600` on macOS and Linux, and it is written only when you pass the flag.
 
 ## Important limitations
 
@@ -272,7 +282,7 @@ Install AgentLatch and run `agent-latch scan /path/to/agent`. It checks Python a
 
 ### How do I monitor the MCP tool calls my AI agent makes?
 
-Put `agent-latch-runtime proxy` in front of the MCP server, either in your app's MCP config or as an HTTP proxy, and run `agent-latch-runtime import-logs` next to it. Every tool list, tool call, result and prompt is recorded with secrets masked, and shown as one event per message. Run `agent-latch-runtime demo` to see the whole flow first. See [Runtime monitoring for MCP](#runtime-monitoring-for-mcp-preview).
+Put `agent-latch-runtime proxy` in front of the MCP server, either in your app's MCP config or as an HTTP proxy, and run `agent-latch-runtime import-logs` next to it from the repository root. Every tool list, tool call, result and prompt is recorded with secrets masked, and shown as one event per message. Add `--database runtime-logs/runtime.db` when you want those events in a local SQLite file as well. Run `agent-latch-runtime demo` to see the whole flow first. See [Runtime monitoring for MCP](#runtime-monitoring-for-mcp-preview).
 
 ### Can AgentLatch block a dangerous MCP tool call?
 

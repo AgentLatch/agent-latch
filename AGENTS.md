@@ -79,7 +79,8 @@ src/agent_latch/
     trace.py      # TraceLog: one redacted JSONL record per MCP message (agentlatch.runtime.trace/1)
     payloads.py   # PayloadTap: full-payload records to sinks; PayloadFile (opt-in --payloads, masked)
     normalizer.py # MCPEventNormalizer: joins a trace record and its payload record into one event
-    importer.py   # RuntimeLogImporter: tails trace/payload logs, events.csv + stderr line per event, runs gates
+    importer.py   # RuntimeLogImporter: tails logs, writes events, runs gates; optional EventStore
+    sqlite_store.py # SQLiteEventStore: first EventStore, local SQLite via stdlib sqlite3 (`--database`)
     results.py    # agent-latch --runtime-result: findings table from gate-results.csv, for every gate
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
@@ -137,11 +138,13 @@ agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
             [--http HOST:PORT] (--upstream-url URL | -- SERVER COMMAND...)
 agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
             [--events-csv FILE] [--output-csv FILE] [--normalized-out FILE]
-            [--run-id ID] [--once] [--quiet]
+            [--database FILE] [--run-id ID] [--once] [--quiet]
 agent-latch-runtime demo [--dir DIR]
 ```
 
 `agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR04 is installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. ALR04 reports findings only; the runtime report does not clear a tool. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command.
+
+`--database FILE` is the operator's choice of a local store. It saves each normalized event in a SQLite file (`SQLiteEventStore`) and is off when omitted. The importer talks to that file only through the `EventStore` contract in `importer.py` (`open`, `save`, `close`). SQLite is the first implementation, using the standard-library `sqlite3` module, so it adds no dependency and makes no network request. A later destination (a warehouse or an opt-in trace exporter) implements the same contract and is selected the same way: by a flag on `import-logs`, not by a default. The database can hold payload data, so a new file is created with mode `0600` where the platform supports it. Keep it local. Do not add a vendor client as a required dependency.
 
 Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them.
 
@@ -196,7 +199,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 ## Privacy and security constraints
 
 - Scans must stay local. Do not add LLM calls, telemetry, or uploads.
-- The only network use is the opt-in `--dependencies` audit, which sends package names and versions. Any new network behavior must be opt-in and documented.
+- The only network use is the opt-in `--dependencies` audit, which sends package names and versions. Any new network behavior must be opt-in and documented. `--database` is local SQLite and must stay that way. A destination that sends events off the machine is new network behavior: opt-in, documented, and not a required dependency.
 - Tests must make no network calls. Mock `subprocess` for `pip-audit`.
 - Use synthetic fixtures only. Never commit real secrets or proprietary code.
 - Report vulnerabilities in AgentLatch itself as described in `SECURITY.md`.
@@ -230,7 +233,7 @@ Before building a check, look at how established open-source tools handle it. Bo
 - `docs/ci.md`: pre-commit, GitHub Action inputs and outputs, other CI
 - `docs/RULES.md`: per-rule detection, OWASP mapping, blind spots
 - `docs/runtime.md`: runtime proxy for MCP (preview, monitor only): install, connecting an app, what is recorded, limits
-- `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions; `mcp-server/README.md` is an overview that links to it
+- `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions, including starting `import-logs --database` before a live CrewAI or Claude Desktop run; `mcp-server/README.md` is an overview that links to it
 - `CONTRIBUTING.md`, `SECURITY.md`, `llms.txt`
 
 When behavior changes, update the relevant docs in the same change.

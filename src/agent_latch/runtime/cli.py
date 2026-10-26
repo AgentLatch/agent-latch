@@ -15,6 +15,7 @@ from rich_argparse import RawDescriptionRichHelpFormatter
 from agent_latch import __version__
 from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
 from agent_latch.runtime.payloads import DEFAULT_PAYLOAD_MAX_CHARS, PayloadFile, PayloadTap
+from agent_latch.runtime.sqlite_store import SQLiteEventStore
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
 
 DEFAULT_LOG_DIR = "runtime-logs"
@@ -121,6 +122,11 @@ def _parser() -> argparse.ArgumentParser:
         "--normalized-out", type=Path, metavar="FILE",
         help="append the full normalized events: arguments, payload and response per event"
         " (default DIR/normalized.jsonl); the file is sensitive",
+    )
+    importer.add_argument(
+        "--database", type=Path, metavar="FILE",
+        help="also store the normalized events in this local SQLite file; it may hold payload data."
+        " Off unless set. Nothing is uploaded",
     )
     importer.add_argument("--run-id", help="run id for the events (default: hash of first trace line)")
     importer.add_argument(
@@ -237,6 +243,7 @@ def _import_logs(args: argparse.Namespace) -> int:
     events_csv = args.events_csv or directory / "events.csv"
     try:
         gates = discover_gates()
+        store = SQLiteEventStore(args.database) if args.database else None
         importer = RuntimeLogImporter(
             trace,
             args.output_csv or directory / "gate-results.csv",
@@ -245,11 +252,14 @@ def _import_logs(args: argparse.Namespace) -> int:
             events_csv=events_csv,
             normalized_path=args.normalized_out or directory / "normalized.jsonl",
             summary=None if args.quiet else sys.stderr,
+            store=store,
             run_id=args.run_id,
             follow=not args.once,
         )
         print(
-            f"agent-latch-runtime: importing {trace} into {events_csv} with {len(gates)} gate(s)"
+            f"agent-latch-runtime: importing {trace} into {events_csv}"
+            + (f" and {args.database}" if args.database else "")
+            + f" with {len(gates)} gate(s)"
             + ("" if args.once else "; following new lines (Ctrl+C to stop)"),
             file=sys.stderr,
         )

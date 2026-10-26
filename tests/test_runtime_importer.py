@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -21,9 +23,13 @@ from agent_latch.runtime import (
     ToolOutput,
     TraceLog,
     cli,
+    sqlite_store,
 )
 from agent_latch.runtime.importer import GatePlugin, RuntimeLogImporter, discover_gates
 from agent_latch.runtime.normalizer import MCPEventNormalizer, run_id_for
+from agent_latch.runtime.sqlite_store import SQLiteEventStore
+
+FIXTURE = Path(__file__).parent / "runtime_fixtures" / "normalized-sample.json"
 
 
 def _record_run(tmp_path: Path, *, payloads: bool = True) -> tuple[Path, Path]:
@@ -301,3 +307,264 @@ def test_import_logs_cli_uses_the_log_folder_by_default(
     (tmp_path / "events.csv").write_text("wrong,header\n", encoding="utf-8")
     assert cli.main(["import-logs", "--dir", str(tmp_path), "--once"]) == 2
     assert "CSV header must be" in capsys.readouterr().err
+
+
+# --- SQLite event storage --------------------------------------------------------------------
+
+
+def _stored(path: Path) -> list[dict[str, Any]]:
+    store = SQLiteEventStore(path)
+    store.open()
+    try:
+        return list(store.events())
+    finally:
+        store.close()
+
+
+def _import(tmp_path: Path, trace_path: Path, payloads_path: Path | None, **kwargs: Any) -> Path:
+    database = tmp_path / "runtime.db"
+    RuntimeLogImporter(
+        trace_path, tmp_path / "results.csv", [], payloads_path=payloads_path,
+        store=SQLiteEventStore(database), follow=False, **kwargs,
+    ).run()
+    return database
+
+
+def test_sqlite_store_keeps_the_sample_events_unchanged(tmp_path: Path) -> None:
+    sample = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert sample, "the fixture must hold at least one event"
+    store = SQLiteEventStore(tmp_path / "runtime.db")
+    store.open()
+    try:
+        assert store.save(sample) == len(sample)
+        stored = list(store.events())
+    finally:
+        store.close()
+
+    expected = sorted(sample, key=lambda event: (event["run_id"], event["order"]))
+    assert stored == expected
+    # Same keys, in the normalizer's order, for every event.
+    assert all(list(got) == list(want) for got, want in zip(stored, expected, strict=True))
+    assert any(event["payload"] is None and event["payloads"] is None for event in stored)
+
+
+def test_importer_stores_every_normalized_event(tmp_path: Path) -> None:
+    trace_path, payloads_path = _record_run(tmp_path)
+    normalized = tmp_path / "normalized.jsonl"
+    database = _import(tmp_path, trace_path, payloads_path, normalized_path=normalized)
+
+    written = [json.loads(line) for line in normalized.read_text(encoding="utf-8").splitlines()]
+    assert _stored(database) == written
+    assert [event["order"] for event in written] == [1, 2, 3, 4]
+
+
+def test_reimport_and_restart_do_not_duplicate_events(tmp_path: Path) -> None:
+    trace_path, payloads_path = _record_run(tmp_path)
+    database = _import(tmp_path, trace_path, payloads_path)
+    _import(tmp_path, trace_path, payloads_path)
+    assert len(_stored(database)) == 4
+
+    trace = TraceLog(trace_path, summary=None)
+    trace.prompts_listed(session_id="s", request_id="9", server="demo", names=["x"])
+    trace.close()
+    _import(tmp_path, trace_path, payloads_path)
+    assert [event["order"] for event in _stored(database)] == [1, 2, 3, 4, 5]
+
+
+def test_trace_only_import_stores_null_payloads(tmp_path: Path) -> None:
+    trace_path, _ = _record_run(tmp_path, payloads=False)
+    database = _import(tmp_path, trace_path, None)
+    stored = _stored(database)
+    assert len(stored) == 4
+    assert all(event["payload"] is None and event["payloads"] is None for event in stored)
+    assert stored[2]["metadata"]["argument_names"] == ["command"]
+
+
+def test_existing_outputs_are_unchanged_by_the_database(tmp_path: Path) -> None:
+    trace_path, payloads_path = _record_run(tmp_path)
+    plain, with_db = tmp_path / "plain", tmp_path / "with_db"
+    for folder in (plain, with_db):
+        folder.mkdir()
+        RuntimeLogImporter(
+            trace_path, folder / "results.csv", [_gate("one")], payloads_path=payloads_path,
+            normalized_path=folder / "normalized.jsonl", follow=False,
+            store=SQLiteEventStore(folder / "runtime.db") if folder is with_db else None,
+        ).run()
+    for name in ("results.csv", "normalized.jsonl"):
+        assert (plain / name).read_bytes() == (with_db / name).read_bytes()
+    assert sorted(p.name for p in plain.iterdir()) == ["normalized.jsonl", "results.csv"]
+
+
+def test_follow_mode_keeps_the_database_in_sync(tmp_path: Path) -> None:
+    trace_path, payloads_path = tmp_path / "trace.jsonl", tmp_path / "payloads.jsonl"
+    database = tmp_path / "runtime.db"
+    importer = RuntimeLogImporter(
+        trace_path, tmp_path / "r.csv", [], payloads_path=payloads_path,
+        store=SQLiteEventStore(database), poll_interval=0.01, payload_grace=0.05,
+    )
+    thread = threading.Thread(target=importer.run)
+    thread.start()
+    try:
+        trace = TraceLog(trace_path, summary=None)
+        for number in range(1, 4):  # lines arrive one by one while the importer runs
+            trace.prompts_listed(session_id="s", request_id=str(number), server="demo", names=[])
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and len(_stored(database)) < number:
+                time.sleep(0.02)
+            assert len(_stored(database)) == number
+        trace.close()
+    finally:
+        importer.stop()
+        thread.join(5)
+    assert not thread.is_alive()
+
+
+class _FlakyStore:
+    """An in-memory store whose first save fails: proves any store works and nothing is lost."""
+
+    path = None
+
+    def __init__(self) -> None:
+        self.events: dict[tuple[str, int], dict[str, Any]] = {}
+        self.calls = 0
+
+    def open(self) -> None:
+        pass
+
+    def save(self, events: list[dict[str, Any]]) -> int:
+        self.calls += 1
+        if self.calls == 1:
+            raise OSError("database is locked")
+        new = [event for event in events if (event["run_id"], event["order"]) not in self.events]
+        self.events.update({(event["run_id"], event["order"]): event for event in new})
+        return len(new)
+
+    def close(self) -> None:
+        pass
+
+
+def test_failed_save_is_retried_and_no_event_is_lost(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    trace_path, payloads_path = _record_run(tmp_path)
+    store = _FlakyStore()
+    importer = RuntimeLogImporter(
+        trace_path, tmp_path / "r.csv", [], payloads_path=payloads_path, store=store,
+        poll_interval=0.01,
+    )
+    thread = threading.Thread(target=importer.run)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and len(store.events) < 4:
+            time.sleep(0.02)
+    finally:
+        importer.stop()
+        thread.join(5)
+    assert sorted(order for _, order in store.events) == [1, 2, 3, 4]
+    assert store.calls >= 2
+    assert "retrying" in caplog.text and "reachable again" in caplog.text
+
+
+def test_failed_save_in_one_shot_mode_is_an_error(tmp_path: Path) -> None:
+    trace_path, _ = _record_run(tmp_path, payloads=False)
+
+    class _Broken(_FlakyStore):
+        def save(self, events: list[dict[str, Any]]) -> int:
+            raise OSError("disk full")
+
+    with pytest.raises(OSError, match="disk full"):
+        RuntimeLogImporter(trace_path, tmp_path / "r.csv", [], store=_Broken(), follow=False).run()
+
+
+def test_migrations_create_and_keep_the_schema(tmp_path: Path) -> None:
+    database = tmp_path / "runtime.db"
+    _stored(database)
+    _stored(database)  # opening again is safe
+    conn = sqlite3.connect(database)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(sqlite_store.MIGRATIONS)
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(events)")]
+        assert columns == list(sqlite_store.COLUMNS)
+    finally:
+        conn.close()
+
+
+def test_a_new_migration_upgrades_an_existing_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace_path, payloads_path = _record_run(tmp_path)
+    database = _import(tmp_path, trace_path, payloads_path)
+
+    def add_note(conn: sqlite3.Connection) -> None:
+        conn.execute("ALTER TABLE events ADD COLUMN note TEXT")
+
+    monkeypatch.setattr(sqlite_store, "MIGRATIONS", (*sqlite_store.MIGRATIONS, add_note))
+    assert len(_stored(database)) == 4  # opening runs the new migration and keeps every event
+    conn = sqlite3.connect(database)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(sqlite_store.MIGRATIONS)
+        assert "note" in [row[1] for row in conn.execute("PRAGMA table_info(events)")]
+    finally:
+        conn.close()
+
+
+def test_a_failed_migration_changes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "runtime.db"
+
+    def broken(conn: sqlite3.Connection) -> None:
+        conn.execute("CREATE TABLE half_done (x INTEGER)")
+        raise RuntimeError("migration bug")
+
+    monkeypatch.setattr(sqlite_store, "MIGRATIONS", (*sqlite_store.MIGRATIONS, broken))
+    with pytest.raises(RuntimeError, match="migration bug"):
+        SQLiteEventStore(database).open()
+    conn = sqlite3.connect(database)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
+        tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master")]
+        assert tables == []  # migration 1 was rolled back too: all or nothing
+    finally:
+        conn.close()
+
+
+def test_newer_or_foreign_databases_are_refused(tmp_path: Path) -> None:
+    newer = tmp_path / "newer.db"
+    conn = sqlite3.connect(newer)
+    conn.execute("PRAGMA user_version = 99")
+    conn.close()
+    with pytest.raises(ValueError, match="newer than this AgentLatch"):
+        SQLiteEventStore(newer).open()
+
+    not_a_database = tmp_path / "notes.db"
+    not_a_database.write_text("hello, this is not SQLite\n" * 100, encoding="utf-8")
+    with pytest.raises(ValueError, match="not a usable AgentLatch database"):
+        SQLiteEventStore(not_a_database).open()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes; Windows uses folder permissions")
+def test_new_database_file_is_private(tmp_path: Path) -> None:
+    database = tmp_path / "runtime.db"
+    _stored(database)
+    assert database.stat().st_mode & 0o777 == 0o600
+
+
+def test_cli_database_option(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    trace_path, payloads_path = _record_run(tmp_path)
+    database = tmp_path / "runtime.db"
+    argv = [
+        "import-logs", "--dir", str(tmp_path), "--trace", str(trace_path),
+        "--payloads", str(payloads_path), "--database", str(database), "--once",
+    ]
+    assert cli.main(argv) == 0
+    assert cli.main(argv) == 0  # a second run adds nothing
+    assert len(_stored(database)) == 4
+    assert str(database) in capsys.readouterr().err
+
+    bad = [
+        "import-logs", "--dir", str(tmp_path), "--trace", str(trace_path),
+        "--database", str(trace_path), "--once",
+    ]
+    assert cli.main(bad) == 2  # same file as --trace
