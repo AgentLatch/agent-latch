@@ -56,7 +56,12 @@ def _check_trace(records: list[dict[str, object]], server: str) -> None:
     assert all(r["server"] == server for r in records)
 
     listed = next(r for r in records if r["method"] == "tools/list")
-    assert {t["name"] for t in listed["tools"]} >= {"get_weather", "leaky_lookup", "broken_tool"}
+    assert {t["name"] for t in listed["tools"]} >= {
+        "get_weather",
+        "leaky_lookup",
+        "broken_tool",
+        "echo_injection",
+    }
 
     request = by_key[("tools/call", "request", "get_weather")]
     assert request["argument_names"] == ["city"]

@@ -71,7 +71,17 @@ After:
 
 - Use full paths: desktop apps often start servers with a different `PATH` and working directory. The command is the `agent-latch-runtime` inside your virtual environment: `~/agentlatch-runtime/bin/agent-latch-runtime`, or on Windows `C:\\Users\\<you>\\agentlatch-runtime\\Scripts\\agent-latch-runtime.exe` (every `\` is written `\\` in JSON).
 - Keep any `env` block as it was. The proxy passes its environment on to the real server.
-- The config file is `.mcp.json` for Claude Code, `.cursor/mcp.json` for Cursor and `claude_desktop_config.json` for Claude Desktop. Restart the app afterwards.
+- Restart the app afterwards. The settings file depends on the app. The JSON shape above (`mcpServers`) is the same in each of these except VS Code, which uses `servers`:
+
+| App | Settings file |
+|---|---|
+| Claude Code | `.mcp.json` in the project |
+| Claude Desktop | **Settings → Developer → Edit Config**. The installer from claude.ai uses `%APPDATA%\Claude\claude_desktop_config.json` on Windows and `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS. The Microsoft Store build uses `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\claude_desktop_config.json` |
+| Cursor | `~/.cursor/mcp.json` |
+| GitHub Copilot in VS Code | `.vscode/mcp.json` in the folder you open, with a top-level `servers` key instead of `mcpServers`. Keep that file out of git; it holds paths on your machine |
+| Gemini in Google Antigravity | `~/.gemini/config/mcp_config.json` (the `config` directory; a file directly under `.gemini` is not read) |
+
+These local apps were connected on Windows in October 2026. The macOS and Linux paths are the same files with that system's home directory. Claude Desktop has no Linux build.
 
 **Remote server over HTTP.** Run the proxy as a local service and point the app at it:
 
@@ -84,6 +94,32 @@ agent-latch-runtime proxy --http 127.0.0.1:8770 --upstream-url https://tools.exa
 ```
 
 The HTTP listener has no authentication, so it accepts loopback addresses only. Upstream servers that need auth headers aren't supported yet.
+
+## Supported clients
+
+Where an app's MCP client runs decides how it reaches the proxy:
+
+- **Local apps** (Claude Desktop, Cursor, VS Code, Antigravity) run their MCP client on your PC. They start the proxy themselves over stdio, using the config change above. No network is involved. Use a real server after `--`. A trace from that connection shows calls; a finding still needs [Import logs](#import-logs) with `--payloads`, because ALR04 reads tool definitions, not the text a tool returns.
+- **ChatGPT on the web** calls tools from OpenAI's servers. It cannot start a program on your PC or reach `localhost`. OpenAI's Secure MCP Tunnel connects out from your PC, so the proxy's unauthenticated HTTP listener is not published. The steps are in [docs/clients/chatgpt.md](clients/chatgpt.md). That guide records a trace of the bundled practice server. It is not the findings path.
+
+| Client | Connection | Status |
+|---|---|---|
+| Claude Desktop | Local stdio | Tested on Windows, Oct 2026. Settings file in the table above |
+| Cursor | Local stdio | Tested on Windows, Oct 2026. `~/.cursor/mcp.json` |
+| GitHub Copilot in VS Code | Local stdio | Tested on Windows, VS Code 1.142, Oct 2026. `.vscode/mcp.json`, `"servers"` key |
+| Gemini in Google Antigravity | Local stdio | Tested on Windows, Oct 2026. `~/.gemini/config/mcp_config.json` |
+| ChatGPT (web) | OpenAI Secure MCP Tunnel | Tested on Windows with ChatGPT Plus, Oct 2026. [Setup](clients/chatgpt.md) |
+| OpenAI Codex app | Reuses the ChatGPT plugin | The plugin was selected. A tool call through it is not yet verified. [Notes](clients/chatgpt.md#use-it-from-the-codex-app) |
+
+Not supported, as of October 2026:
+
+| Client | Reason |
+|---|---|
+| claude.ai in a browser, Gemini web app | Connect only to servers with a public URL. A public tunnel would expose the proxy's unauthenticated HTTP listener |
+| Gemini CLI | Stopped serving free, AI Pro and Ultra users on 18 June 2026; Google moved them to Antigravity |
+| Gemini desktop app | Custom MCP servers are only in testing, by URL |
+| Microsoft Copilot (Windows app) | No support for adding MCP servers |
+| Cloud agents (Cursor Cloud Agents, GitHub Copilot coding agent, Copilot Studio) | Run on the vendor's servers, so they can't start a local proxy |
 
 ## What gets recorded
 
