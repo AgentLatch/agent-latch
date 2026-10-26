@@ -234,7 +234,7 @@ Before building a check, look at how established open-source tools handle it. Bo
 - `docs/ci.md`: pre-commit, GitHub Action inputs and outputs, other CI
 - `docs/RULES.md`: per-rule detection, OWASP mapping, blind spots
 - `docs/runtime.md`: runtime proxy for MCP (preview, monitor only): install, connecting an app, supported clients, what is recorded, limits
-- `docs/clients/`: tested, step-by-step proxy setup for one client per file (`claude-desktop.md`, `chatgpt.md`, `cursor.md`, `vscode-copilot.md`, `antigravity.md`); `docs/runtime.md` links to them
+- `docs/clients/chatgpt.md`: ChatGPT reaches the proxy through OpenAI's Secure MCP Tunnel. Local apps use the config change in `docs/runtime.md`
 - `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions, including starting `import-logs --database` before a live CrewAI or Claude Desktop run; `mcp-server/README.md` is an overview that links to it
 - `CONTRIBUTING.md`, `SECURITY.md`, `llms.txt`
 

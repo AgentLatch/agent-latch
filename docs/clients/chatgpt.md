@@ -4,6 +4,8 @@ Route ChatGPT's MCP tool calls through `agent-latch-runtime proxy` on your own P
 
 **Tested:** ChatGPT Plus on the web with a personal OpenAI account, Windows 11, `tunnel-client` v0.0.16, October 2026. The macOS and Linux commands do the same steps with those systems' tools, but haven't been tested end to end yet.
 
+This connects the proxy so ChatGPT's tool calls are written to a trace on your PC. The proxy only watches. A trace line is not a finding: ALR04 runs later, in `import-logs`, and it reads tool definitions from the payload log. The practice server in this guide has ordinary definitions, so that check stays quiet. See [The trace is not a finding](#the-trace-is-not-a-finding).
+
 ## Why a tunnel is needed
 
 ChatGPT's MCP client runs on OpenAI's servers, not on your PC. It can't start a local program, your router and firewall block incoming connections, and `localhost` would mean OpenAI's own machine. So unlike Claude Desktop or Cursor, ChatGPT can't use a local stdio server directly.
@@ -241,7 +243,24 @@ In a new chat with the plugin selected, start each prompt with *Use only the Age
 | Call get_weather for London | `"server": "chatgpt-weather"`, a `request` with `argument_names: ["city", "units"]`, and a `response` with the weather text |
 | Call leaky_lookup for user alice | An excerpt containing `token=[REDACTED]`. ChatGPT itself sees the fake token, because the proxy only monitors |
 | Call broken_tool with reason test | A response with `"is_error": true`, or an `error` stage |
-| Call echo_injection for Paris | The injected instruction in the excerpt. ChatGPT should not act on it |
+| Call echo_injection for Paris | The instruction text in the excerpt. That text is the tool's reply. ALR04 does not report it |
+
+## The trace is not a finding
+
+The table above checks that the proxy recorded the call and masked a secret-shaped value. To run the check AgentLatch ships:
+
+1. Stop the tunnel. Recreate the profile with `--payloads` on the proxy command, before `--`, pointing at a payloads file next to the trace. The one-command script does not do this: the payloads file holds argument values and tool output, so it stays off unless you add it.
+2. Start the tunnel again and make one tool call, so the server's definitions are listed.
+3. In another window, from the AgentLatch clone:
+
+```sh
+agent-latch-runtime import-logs --trace "$HOME/agentlatch-trace.jsonl" --payloads "$HOME/agentlatch-payloads.jsonl" --once
+agent-latch --runtime-result runtime-logs/gate-results.csv
+```
+
+Use the payloads path you passed to the proxy. On Windows the trace path is `$HOME\agentlatch-trace.jsonl`.
+
+`import-logs` runs ALR04 on tool definitions. The practice server's descriptions do not contain instruction-like text, so the report has no finding. `echo_injection` puts that text in the tool result, which this gate does not read. A finding needs the instruction in the tool definition itself. The live path for that is [Part 4 of the gateway setup](../../mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch), which starts `import-logs` before the agent runs. `agent-latch-runtime demo` is the same pipeline with no ChatGPT account: proxy, import, one line per event.
 
 ## Use it from the Codex app
 
