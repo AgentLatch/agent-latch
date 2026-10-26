@@ -12,4 +12,8 @@ build/
 .scan-results/
 .DS_Store
 *.sarif
+.idea/
+# Recorded MCP traffic from agent-latch-runtime (trace, payloads, events, gate results).
+# Ignore this output folder only. A pattern of "runtime/" would also hide the source
+# package src/agent_latch/runtime/, and these logs must not land in that package.
 runtime-logs/
