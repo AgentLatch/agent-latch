@@ -70,7 +70,10 @@ src/agent_latch/
   suppress.py     # .agent-latch-ignore, inline ignores, pyproject excludes
   report.py       # text, JSON, and SARIF renderers; severity ordering
   action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
-  runtime/        # runtime checks for MCP traffic (preview, monitor only; `[runtime]` extra)
+  gates/          # runtime gate plugins discovered by the importer (monitor only, never block)
+    __init__.py
+    alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; PASS is not "safe")
+  runtime/        # MCP traffic recording (preview, monitor only; `[runtime]` extra). Logs go to runtime-logs/, not here.
     events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
     redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file
     trace.py      # TraceLog: one redacted JSONL record per MCP message (agentlatch.runtime.trace/1)
@@ -86,7 +89,8 @@ tests/test_scanner.py          # scanner unit tests (synthetic fixtures via tmp_
 tests/test_runtime.py          # runtime tests that need no FastMCP
 tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests (no FastMCP)
 tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
-tests/runtime_fixtures/        # wrapper that runs runtime/demo_server.py as a script
+tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
+tests/runtime_fixtures/        # demo-server wrapper, plus the ALR04 event dataset and expected outcomes
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
 action.yml                     # composite GitHub Action (isolated venv, SARIF path rewrite, summary)
@@ -123,7 +127,8 @@ agent-latch scan --format sarif --output agent-latch.sarif
 agent-latch [scan] [path] [--config MANIFEST] [--exclude PATH]... [--ignore-file FILE]
             [--project-ignores] [--dependencies] [-i/--interactive]
             [--format text|json|sarif] [--output FILE] [--plain] [--min-severity LEVEL]
-            [--fail-on none|low|medium|high|critical] [-V]
+            [--fail-on none|low|medium|high|critical]
+            [--runtime-result [CSV]] [-V]
 
 agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
             [--payloads FILE] [--payload-max-chars N] [--quiet]
@@ -134,7 +139,7 @@ agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
 agent-latch-runtime demo [--dir DIR]
 ```
 
-`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` (and `gate-results.csv` when gate plugins exist in `agent_latch.gates`) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command.
+`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR04 is installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. A PASS from ALR04 means no rule crossed its threshold, not that the tool is safe. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command.
 
 Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them.
 

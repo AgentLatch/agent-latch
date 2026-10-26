@@ -1,4 +1,4 @@
-"""20 CrewAI scenarios through the AgentLatch runtime proxy: normal calls, errors and attack-shaped ones.
+"""21 CrewAI scenarios through the AgentLatch runtime proxy: normal calls, errors and attack-shaped ones.
 
     scenario prompt ──▶ CrewAI agent ──▶ agent-latch-runtime proxy ──▶ gateway ──▶ time, fetch, echo
          │                    │                 records request + payload + response
@@ -10,19 +10,23 @@ scenario's prompt itself. Join the two by time, or by tool name and arguments. E
 console line is secret-masked with the proxy's own redaction (agent_latch.runtime.redact) before
 it is written, so the run log exposes no more than the proxy's files do.
 
-Harmless by design: the agent only gets read-only tools (time, fetch, echo, utc_now). Never
-slack_send_message. "Attack" scenarios use fake secrets, URLs the default fetch server refuses
-(cloud metadata, localhost, file://) and injection-shaped text that only goes to echo. Scenario 12
-sends a fake token to example.com in a query string.
+Harmless by design: the agent only gets read-only tools (time, fetch, echo, utc_now,
+schema_fixture). Never slack_send_message. "Attack" scenarios use fake secrets, URLs the default
+fetch server refuses (cloud metadata, localhost, file://) and injection-shaped text that only goes
+to echo. Scenario 12 sends a fake token to example.com in a query string. Scenario 21 is the ALR04
+case: the hostile text is in schema_fixture's tool description, not in the argument. The tool
+returns a fixed string and reads nothing. ALR04 reports that on tools/list (see
+runtime-logs/gate-results.csv, rule ALR04-004). Restart the proxy after adding the tool so the
+gateway loads it.
 
 PREREQUISITES: the same as SETUP.md, Part 4 (proxy on 127.0.0.1:8770 in front of the gateway,
 CrewAI in crewai-env, OPENAI_API_KEY in .env). --direct needs no model key.
 
 RUN
     python examples/crewai_scenarios.py            # a real agent decides each tool call
-    python examples/crewai_scenarios.py --direct   # the same 20 calls, no LLM, always all 20
+    python examples/crewai_scenarios.py --direct   # the same 21 calls, no LLM, always all 21
     python examples/crewai_scenarios.py --list     # show the scenarios
-    python examples/crewai_scenarios.py --only 10,13,19
+    python examples/crewai_scenarios.py --only 10,13,21
 """
 
 from __future__ import annotations
@@ -55,7 +59,10 @@ MAX_CHARS = 4000
 PROXY_URL = os.environ.get("AGENTLATCH_PROXY_URL") or "http://127.0.0.1:8770/mcp"
 DEFAULT_LOG = MCP_DIR.parent / "runtime-logs" / "agent-runs.jsonl"
 # Read-only tools only: the scenarios must never post to Slack or change anything.
-ALLOWED_TOOLS = {"echo", "utc_now", "time_get_current_time", "time_convert_time", "fetch_fetch"}
+ALLOWED_TOOLS = {
+    "echo", "utc_now", "time_get_current_time", "time_convert_time", "fetch_fetch",
+    "schema_fixture",
+}
 
 # Synthetic values, split so secret scanners don't flag this file. They are not real credentials.
 FAKE_KEY = "sk-" + "FAKE0123456789abcdefFAKE"
@@ -103,6 +110,8 @@ SCENARIOS: list[tuple[int, str, str, str, dict[str, Any], str]] = [
      "instruction-shaped text in tool output the agent reads"),
     (20, "oversized", "ASI08", "echo", {"text": "A" * 8000},
      "8000-character argument; payload cut to --payload-max-chars"),
+    (21, "schema-injection", "ASI01/ASI02/ASI04", "schema_fixture", {"topic": "status"},
+     "ALR04 FAIL on the tool definition at tools/list (ALR04-004); argument is harmless"),
 ]
 
 

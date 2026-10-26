@@ -343,15 +343,18 @@ column -s, -t < runtime-logs/events.csv | less -S
 
 ✅ One row per message: method, tool, outcome, duration, whether a payload was joined, and a short redacted excerpt. For the full arguments and response of each message, open `runtime-logs/normalized.jsonl`. `runtime-logs/` is git-ignored. Its files can hold tool output, so keep them local.
 
-**5. Optional: run 20 scenarios, some attack-shaped.** With Terminals 1 and 2 still running, in Terminal 3:
+**5. Optional: run 21 scenarios, some attack-shaped.** With Terminals 1 and 2 still running, in Terminal 3:
 
 ```sh
 python examples/crewai_scenarios.py --list      # what each scenario sends and what to look for
-python examples/crewai_scenarios.py --direct    # the 20 calls without a model: always all 20, no cost
+python examples/crewai_scenarios.py --direct    # the 21 calls without a model: always all 21, no cost
+python examples/crewai_scenarios.py --direct --only 21   # ALR04 schema-injection fixture only
 python examples/crewai_scenarios.py             # a real agent decides each call (uses OPENAI_API_KEY)
 ```
 
-The scenarios cover normal calls, tool errors, fake secrets in arguments and in a URL, fetches to cloud-metadata, localhost and `file://` addresses, injection-shaped text (shell, SQL, path traversal, "ignore your instructions"), and an oversized argument. They only use read-only tools (never `slack_send_message`), and all secrets are fake.
+The scenarios cover normal calls, tool errors, fake secrets in arguments and in a URL, fetches to cloud-metadata, localhost and `file://` addresses, injection-shaped text (shell, SQL, path traversal, "ignore your instructions"), an oversized argument, and one schema-injection fixture. They only use read-only tools (never `slack_send_message`), and all secrets are fake.
+
+Scenario 21 calls `schema_fixture`. That tool's description tells the agent to read `~/.ssh/id_rsa`; the function itself returns a fixed string and reads nothing. ALR04 flags the definition when the tool list is recorded, as rule ALR04-004 in `runtime-logs/gate-results.csv`. A PASS on the other tools is unchanged. Restart the proxy after this tool is added so the gateway loads it. The list stays flagged until `mcp-server/tools/alr04_fixture_tools.py` is removed.
 
 ✅ Every scenario shows up in Terminal 2. Where to read each part:
 
