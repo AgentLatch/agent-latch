@@ -145,9 +145,43 @@ agent-latch-runtime import-logs
 
 For a full live run with a real CrewAI agent and this repo's MCP gateway, follow [Part 4 of the gateway setup guide](../mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch).
 
-`--dir DIR` uses another folder. `--trace`, `--payloads`, `--events-csv` and `--output-csv` set single files. When `--trace` is given, payloads are read only if `--payloads` is given too; without them, gates see `payload: null` and only the trace `metadata`. `--normalized-out FILE` moves the full normalized events elsewhere. `--once` processes what the files hold now and exits. `--quiet` turns off the per-event lines. `--run-id` overrides the run id.
+`--dir DIR` uses another folder. `--trace`, `--payloads`, `--events-csv` and `--output-csv` set single files. When `--trace` is given, payloads are read only if `--payloads` is given too; without them, gates see `payload: null` and only the trace `metadata`. `--normalized-out FILE` moves the full normalized events elsewhere. `--database FILE` also stores each event in a local SQLite file (below); it is off unless you set it. `--once` processes what the files hold now and exits. `--quiet` turns off the per-event lines. `--run-id` overrides the run id.
 
 **events.csv.** One row per event: `run_id`, `order`, `timestamp`, `session_id`, `request_id`, `server`, `method`, `stage`, `name`, `outcome` (`ok`, `error result`, `error (Type)`, or empty for requests), `duration_ms`, `output_bytes`, `has_payload` and the trace's redacted `excerpt`. Argument values are never in it. Cells that a spreadsheet would run as a formula (starting with `=`, `+`, `-` or `@`) get a leading `'`.
+
+### Store events in SQLite
+
+`--database FILE` also saves every normalized event in a local SQLite database, using Python's built-in `sqlite3` (nothing extra to install). The CSV and normalized JSONL outputs are unchanged. Without `--database`, nothing else changes, and nothing is uploaded.
+
+```sh
+agent-latch-runtime import-logs --database ./runtime.db
+```
+
+Each event is one row in the `events` table. `SQLiteEventStore` is the first destination behind the importer's `EventStore` contract (`open`, `save`, `close`). A later destination, such as a warehouse or an opt-in trace exporter, implements that same contract. This file is only the local one.
+
+| Column | From the normalized event |
+|---|---|
+| `run_id`, `event_order` | `run_id`, `order` (the key: an event is stored once) |
+| `timestamp`, `session_id`, `request_id`, `client_id`, `server`, `method`, `stage`, `name` | Same fields |
+| `trace_path`, `trace_line` | `trace` |
+| `payloads_path`, `payloads_line` | `payloads` (`NULL` when there is no payload record) |
+| `metadata` | `metadata`, as JSON text |
+| `payload` | `payload`, as JSON text (`NULL` without `--payloads`) |
+| `imported_at` | When the importer stored the row (UTC) |
+
+- **No duplicates.** Rows are keyed by `run_id` and `event_order` and saved with `INSERT OR IGNORE`, one transaction per pass. Importing the same files again, or restarting the importer, adds only events it has not stored yet.
+- **Live.** Without `--once`, the importer keeps following the logs and saves new events within about a second. If a save fails (for example the database is locked by another program), it logs one warning, keeps the events and retries on the next pass. Events still waiting when it stops are saved on the next run, which re-reads the files.
+- **Trace only.** Without `--payloads`, `payload`, `payloads_path` and `payloads_line` are `NULL` and `metadata` still holds the trace fields.
+- **Schema.** The schema version is kept in `PRAGMA user_version`, and numbered migrations bring an older database up to date when it is opened, each in one transaction. A database from a newer AgentLatch, or a file that is not SQLite, is refused with exit code `2`.
+- **Readable view.** `event_log` shows one line per event: `time`, `server`, `method`, `stage`, `tool_or_prompt`, `client_id`, `is_error`, `duration_ms`, the masked `excerpt` and `has_payload`.
+
+Read it with Python:
+
+```sh
+python -c "import sqlite3; db = sqlite3.connect('runtime.db'); [print(r) for r in db.execute('select time, tool_or_prompt, stage, is_error, excerpt from event_log order by time desc limit 10')]"
+```
+
+**The database is sensitive.** With `--payloads` it holds tool arguments and outputs, masked by pattern only. A new database file is created with mode `0600` on macOS and Linux; on Windows it follows the folder's permissions, so keep it in your user folder. Keep it local and delete it when you no longer need it. The importer makes no network request for this store.
 
 **Normalized event.** Every gate gets this same object, whatever the method:
 

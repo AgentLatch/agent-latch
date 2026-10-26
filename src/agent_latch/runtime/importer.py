@@ -8,6 +8,10 @@ appending one CSV row per gate result as soon as that gate finishes.
 It reads only files the proxy has already written, so it runs in parallel with the MCP flow and
 can neither delay nor change it. A gate that raises is recorded as an error result and the
 remaining gates still run. Restarting is safe: results already in the CSV are not repeated.
+
+With an ``EventStore`` (for example ``SQLiteEventStore``), every normalized event is also saved
+there, one transaction per pass. A save that fails while following is retried on the next pass,
+so the store catches up once it is reachable again; a restart catches up from the files.
 """
 
 from __future__ import annotations
@@ -60,6 +64,22 @@ class Gate(Protocol):
     gate_id: str
 
     def evaluate(self, event: dict[str, Any], /) -> Mapping[str, Any]: ...
+
+
+class EventStore(Protocol):
+    """Where normalized events are kept. ``SQLiteEventStore`` is the local one.
+
+    Another destination (a warehouse, or an opt-in trace exporter) implements this same contract.
+    ``save`` returns how many events were new and raises ``OSError`` when the batch was not stored.
+    """
+
+    path: Path | None
+
+    def open(self) -> None: ...
+
+    def save(self, events: list[dict[str, Any]], /) -> int: ...
+
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -161,7 +181,8 @@ class RuntimeLogImporter:
 
     ``events_csv`` gets one row per event whether or not any gate is installed; ``output_csv``
     gets one row per gate result and is only created when there are gates. ``summary`` (for
-    example ``sys.stderr``) gets one line per newly processed event.
+    example ``sys.stderr``) gets one line per newly processed event. ``store`` keeps the same
+    events; it is optional and local unless that store itself says otherwise.
 
     ``follow=True`` keeps waiting for appended lines until ``stop()`` is called (or the process is
     interrupted); ``follow=False`` processes what is in the files now and returns.
@@ -177,6 +198,7 @@ class RuntimeLogImporter:
         events_csv: Path | None = None,
         normalized_path: Path | None = None,
         summary: TextIO | None = None,
+        store: EventStore | None = None,
         run_id: str | None = None,
         follow: bool = True,
         poll_interval: float = POLL_INTERVAL_SECONDS,
@@ -184,8 +206,11 @@ class RuntimeLogImporter:
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be greater than zero")
+        store_path = store.path if store is not None else None
         paths = [
-            p for p in (trace_path, payloads_path, output_csv, events_csv, normalized_path) if p
+            p for p in (
+                trace_path, payloads_path, output_csv, events_csv, normalized_path, store_path,
+            ) if p
         ]
         if len({p.resolve() for p in paths}) != len(paths):
             raise ValueError("trace, payloads and output files must all be different files")
@@ -195,6 +220,7 @@ class RuntimeLogImporter:
         self.events_csv = events_csv
         self.normalized_path = normalized_path
         self.summary = summary
+        self.store = store
         self.gates = list(gates)
         self.follow = follow
         self.poll_interval = poll_interval
@@ -214,19 +240,24 @@ class RuntimeLogImporter:
         self._done: set[tuple[str, ...]] = set()
         self._events_done: set[tuple[str, ...]] = set()
         self._normalized_done: set[tuple[str, str]] = set()
+        self._unsaved: list[dict[str, Any]] = []  # events waiting for the store
+        self._store_failing = False
 
     def stop(self) -> None:
         """Ask a following importer to finish its current pass and return."""
         self._stop.set()
 
     def run(self) -> None:
-        self._open_outputs()
-        if not (self.gates or self.events_csv or self.normalized_path or self.summary):
-            log.warning("agent-latch-runtime: no gates and no outputs; nothing will be written")
         try:
+            self._open_outputs()
+            if not (
+                self.gates or self.events_csv or self.normalized_path or self.summary or self.store
+            ):
+                log.warning("agent-latch-runtime: no gates and no outputs; nothing will be written")
             while not self._stop.is_set():
                 progressed = self._ingest()
                 progressed = self._drain(final=False) or progressed
+                self._save_events(final=False)
                 if progressed:
                     continue
                 if not self.follow:
@@ -235,6 +266,13 @@ class RuntimeLogImporter:
             if self.follow:
                 self._ingest()
                 self._drain(final=False)
+                self._save_events(final=False)
+                if self._unsaved:
+                    log.warning(
+                        "agent-latch-runtime: %d event(s) not saved to the database; they will be"
+                        " saved on the next run",
+                        len(self._unsaved),
+                    )
             else:
                 self._finish()
         finally:
@@ -247,11 +285,14 @@ class RuntimeLogImporter:
         while self._ingest():
             pass
         self._drain(final=True)
+        self._save_events(final=True)
         unmatched = sum(len(queue) for queue in self._queues.values())
         if unmatched:
             log.warning("agent-latch-runtime: %d payload record(s) had no trace record", unmatched)
 
     def _open_outputs(self) -> None:
+        if self.store is not None:
+            self.store.open()  # first, so a bad database leaves no other file open
         if self.events_csv is not None:
             self._events = _open_private(self.events_csv)
             self._events_writer, self._events_done = _csv_writer(
@@ -275,6 +316,29 @@ class RuntimeLogImporter:
                 stream.close()
         self._csv = self._events = self._normalized = None
         self._writer = self._events_writer = None
+        if self.store is not None:
+            self.store.close()
+
+    def _save_events(self, *, final: bool) -> None:
+        """Save waiting events in one store transaction; keep them for a retry if that fails."""
+        if self.store is None or not self._unsaved:
+            return
+        try:
+            self.store.save(self._unsaved)
+        except OSError as error:
+            if final:
+                raise
+            if not self._store_failing:
+                log.warning("agent-latch-runtime: %s; retrying", error)
+                self._store_failing = True
+            return
+        if self._store_failing:
+            log.warning(
+                "agent-latch-runtime: database reachable again; saved %d waiting event(s)",
+                len(self._unsaved),
+            )
+            self._store_failing = False
+        self._unsaved = []
 
     def _ingest(self) -> bool:
         progressed = False
@@ -353,6 +417,8 @@ class RuntimeLogImporter:
             self._events_writer.writerow(_event_row(event))
             self._events.flush()
             fresh = True
+        if self.store is not None:
+            self._unsaved.append(copy.deepcopy(event))  # saved at the end of this pass
         findings = errors = 0
         if self._csv is not None and self._writer is not None:
             for gate in self.gates:
