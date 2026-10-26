@@ -34,10 +34,7 @@ _SEVERITY_STYLE = {
     "unknown": "dim",
 }
 _MAX_SOURCE_BYTES = 1_000_000
-_NOTE = (
-    "Shown rows are gate alerts. A PASS means no rule crossed its threshold, not that the "
-    "tool is safe. Nothing was blocked."
-)
+_NOTE = "The report lists findings only. Nothing was blocked."
 
 
 @dataclass(frozen=True)
@@ -136,7 +133,7 @@ def _location(finding: dict[str, Any], order: str, sites: dict[str, str]) -> str
 
 
 def load_alerts(csv_path: Path, project: Path) -> list[RuntimeAlert]:
-    """Alerts from a gate-results CSV. PASS rows and scan summaries are left out."""
+    """Findings from a gate-results CSV. Rows that are not findings are left out."""
     sites = _tool_sites(project)
     alerts: list[RuntimeAlert] = []
     with csv_path.open(encoding="utf-8", newline="") as stream:
@@ -192,7 +189,7 @@ def filter_severity(alerts: list[RuntimeAlert], min_severity: str) -> list[Runti
 
 def format_report(alerts: list[RuntimeAlert]) -> str:
     if not alerts:
-        return f"No runtime alerts from the enabled gates.\n{_NOTE}"
+        return f"No runtime findings from the enabled gates.\n{_NOTE}"
     lines = [f"Runtime findings · {len(alerts)}", ""]
     for alert in alerts:
         owasp = "; ".join(category_label(item) for item in alert.owasp) or "—"
@@ -212,7 +209,7 @@ def format_report(alerts: list[RuntimeAlert]) -> str:
 def _render_table(alerts: list[RuntimeAlert]) -> None:
     console = Console()
     if not alerts:
-        console.print(Panel(Text(_NOTE), title="[green]No runtime alerts[/green]", border_style="green"))
+        console.print(Panel(Text(_NOTE), title="[green]No runtime findings[/green]", border_style="green"))
         return
     table = Table(title=f"Runtime findings · {len(alerts)}", show_lines=True)
     table.add_column("Severity", no_wrap=True)

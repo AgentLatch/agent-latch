@@ -1,6 +1,6 @@
 # Runtime proxy for MCP (preview)
 
-`agent-latch-runtime proxy` sits between an AI app and one MCP server and records the traffic: the tool list, every tool call and result, and prompt templates. **Preview, monitor only:** it passes every message through unchanged and never blocks anything. `import-logs` then runs ALR04, a preview check for instruction-like content in tool definitions. A PASS means no rule crossed its threshold, not that the tool is safe. Opt-in blocking is planned.
+`agent-latch-runtime proxy` sits between an AI app and one MCP server and records the traffic: the tool list, every tool call and result, and prompt templates. **Preview, monitor only:** it passes every message through unchanged and never blocks anything. `import-logs` then runs ALR04, a preview check that reports findings for instruction-like content in tool definitions. The report lists findings only. Opt-in blocking is planned.
 
 ```
 AI app (MCP client) ──▶ agent-latch-runtime proxy ──▶ real MCP server
@@ -163,7 +163,7 @@ A trace record waits for its payload record (matched on session, request, server
 
 **Gates.** The importer discovers Python modules in `agent_latch.gates` in module-name order. A module exports a unique string `GATE_ID` and `evaluate(event)`, which returns `{"findings": [...]}`. Each gate gets its own copy of the event.
 
-**ALR04 (preview).** The one gate that ships. It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It looks for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Verdicts are FAIL, PASS, and INCONCLUSIVE. Traffic that is not a tool definition is left unevaluated. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. A PASS means no rule crossed its threshold. It does not mean the tool is safe: the rules miss reworded instructions, and they do not look at tool results or what the agent does next. ALR04 never blocks a call.
+**ALR04 (preview).** The one gate that ships. It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. The rules can miss reworded instructions, and they do not look at tool results or what the agent does next. ALR04 never blocks a call.
 
 **gate-results.csv.** Columns are `run_id`, `order`, `gate_id`, `result_json`, and `result_json` always has the same shape: `{"gate_id":"...","status":"ok","findings":[],"error":null}`. If a gate raises, its row has `"status":"error"` and only the exception type in `error`; later gates still run.
 
@@ -173,14 +173,14 @@ A trace record waits for its payload record (matched on session, request, server
 agent-latch --runtime-result
 ```
 
-That prints the same kind of table as `agent-latch scan`: severity, rule, location, OWASP category, and the finding. It reads every gate in the file, not only ALR04. PASS rows and the scan summary are left out. A finding that sets `path` and `line` uses that location. Otherwise, when `entity.tool` matches a function in the project path (the positional argument, default `.`), the location is that function's docstring line, for example `mcp-server/tools/alr04_fixture_tools.py:14`. A tool that comes from a mounted server and has no function in the project is shown as `server/tool #event`. `--plain` prints text instead of the table. `--fail-on` applies to these rows the same way it applies to a scan. The default CSV is `runtime-logs/gate-results.csv`; pass another file as `--runtime-result FILE`.
+That prints the same kind of table as `agent-latch scan`: severity, rule, location, OWASP category, and the finding. It reads every gate in the file, not only ALR04, and it lists findings only. A finding that sets `path` and `line` uses that location. Otherwise, when `entity.tool` matches a function in the project path (the positional argument, default `.`), the location is that function's docstring line, for example `mcp-server/tools/alr04_fixture_tools.py:14`. A tool that comes from a mounted server and has no function in the project is shown as `server/tool #event`. `--plain` prints text instead of the table. `--fail-on` applies to these rows the same way it applies to a scan. The default CSV is `runtime-logs/gate-results.csv`; pass another file as `--runtime-result FILE`.
 
 Restarting the importer skips events and results already in its output files, so rows and lines are not repeated. Malformed lines are logged and skipped. The importer does not block or modify MCP traffic. Its output files can hold payload data, so keep them local and access-controlled (they are created with mode `0600`; `runtime-logs/` is in `.gitignore`).
 
 ## Limits
 
 - It sees only servers whose config entry goes through the proxy. Other servers, the app's built-in tools (for example Claude Code's shell and file edits) and the user's prompts to the model don't pass through it.
-- It records traffic and runs ALR04 on tool definitions. It does not block calls. A quiet trace, or a PASS, is not a security guarantee.
+- It records traffic and runs ALR04 on tool definitions. It reports findings and does not block calls.
 - It sees MCP traffic only, not the agent's requests to its model, so it records what the agent did, not the prompt or reasoning behind it.
 - Payload records cover `tools/list`, `tools/call` and `prompts/get`. Other MCP messages (`resources/list`, `resources/read`, `initialize`, notifications, sampling) pass through without a record, and `prompts/list` is only in the trace. Tool results keep text content only: image, audio and embedded-resource blocks are left out. A failed `prompts/get` writes no record.
 - The payloads file is not rotated and grows with every message (each `tools/call` request repeats the tool's definition). Very large outputs are masked in full before they are cut, which costs CPU on multi-megabyte results.

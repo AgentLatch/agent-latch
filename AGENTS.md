@@ -72,7 +72,7 @@ src/agent_latch/
   action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
   gates/          # runtime gate plugins discovered by the importer (monitor only, never block)
     __init__.py
-    alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; PASS is not "safe")
+    alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; reports findings only)
   runtime/        # MCP traffic recording (preview, monitor only; `[runtime]` extra). Logs go to runtime-logs/, not here.
     events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
     redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file
@@ -80,6 +80,7 @@ src/agent_latch/
     payloads.py   # PayloadTap: full-payload records to sinks; PayloadFile (opt-in --payloads, masked)
     normalizer.py # MCPEventNormalizer: joins a trace record and its payload record into one event
     importer.py   # RuntimeLogImporter: tails trace/payload logs, events.csv + stderr line per event, runs gates
+    results.py    # agent-latch --runtime-result: findings table from gate-results.csv, for every gate
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
     demo_server.py # synthetic MCP server for `demo` and the runtime tests [needs fastmcp]
@@ -90,6 +91,7 @@ tests/test_runtime.py          # runtime tests that need no FastMCP
 tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests (no FastMCP)
 tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
 tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
+tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
 tests/runtime_fixtures/        # demo-server wrapper, plus the ALR04 event dataset and expected outcomes
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
@@ -139,7 +141,7 @@ agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
 agent-latch-runtime demo [--dir DIR]
 ```
 
-`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR04 is installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. A PASS from ALR04 means no rule crossed its threshold, not that the tool is safe. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command.
+`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR04 is installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. ALR04 reports findings only; the runtime report does not clear a tool. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command.
 
 Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them.
 
