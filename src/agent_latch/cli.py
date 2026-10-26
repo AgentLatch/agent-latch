@@ -24,6 +24,7 @@ from agent_latch.rules import (
     audit_requirements,
     scan_project,
 )
+from agent_latch.runtime.results import report_runtime_results
 from agent_latch.suppress import IGNORE_FILE, ConfigError, filter_findings, load_ignore_rules
 
 _EPILOG = """\
@@ -35,6 +36,7 @@ _EPILOG = """\
   [cyan]agent-latch scan . --min-severity medium[/cyan]           hide low and info findings
   [cyan]agent-latch scan --format sarif --output results.sarif[/cyan]
   [cyan]agent-latch --interactive[/cyan]                          guided scan
+  [cyan]agent-latch --runtime-result[/cyan]                       print the runtime gate report
 
 [dim]Scans run locally. Findings are heuristics, not a security certification.[/dim]
 """
@@ -110,6 +112,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     output = parser.add_argument_group("Output")
+    output.add_argument(
+        "--runtime-result",
+        nargs="?",
+        const="runtime-logs/gate-results.csv",
+        metavar="CSV",
+        help=(
+            "Print the runtime gate report from this CSV instead of scanning"
+            " (default: runtime-logs/gate-results.csv). Every gate uses the same"
+            " columns. The path argument is the project searched for a local tool's file and line"
+        ),
+    )
     output.add_argument("--format", choices=("text", "json", "sarif"), default="text", help="Report format (default: text)")
     output.add_argument("--output", metavar="FILE", help="Write report to a file instead of stdout")
     output.add_argument(
@@ -373,6 +386,14 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["scan"]:
         argv = argv[1:]
     args = build_parser().parse_args(argv)
+    if args.runtime_result is not None:
+        return report_runtime_results(
+            Path(args.runtime_result).expanduser(),
+            Path(args.path).expanduser().resolve(),
+            plain=args.plain,
+            min_severity=args.min_severity,
+            fail_on=args.fail_on,
+        )
     if args.interactive:
         return interactive_main()
 

@@ -1,6 +1,6 @@
 # Runtime proxy for MCP (preview)
 
-`agent-latch-runtime proxy` sits between an AI app and one MCP server and records the traffic: the tool list, every tool call and result, and prompt templates. **Preview, monitor only:** it passes every message through unchanged and never blocks anything. Runtime detectors and opt-in blocking are planned.
+`agent-latch-runtime proxy` sits between an AI app and one MCP server and records the traffic: the tool list, every tool call and result, and prompt templates. **Preview, monitor only:** it passes every message through unchanged and never blocks anything. `import-logs` then runs ALR04, a preview check that reports findings for instruction-like content in tool definitions. The report lists findings only. Opt-in blocking is planned.
 
 ```
 AI app (MCP client) ──▶ agent-latch-runtime proxy ──▶ real MCP server
@@ -101,7 +101,7 @@ Where an app's MCP client runs decides how it reaches the proxy:
 | Gemini in Google Antigravity | Local stdio (`~/.gemini/config/mcp_config.json`) | Tested on Windows, Oct 2026 | [docs/clients/antigravity.md](clients/antigravity.md) |
 | OpenAI Codex app | Reuses the ChatGPT plugin (Secure MCP Tunnel) | Codex imports the ChatGPT account's plugins, so no separate setup is needed; it selected the AgentLatch plugin. A tool call through it is not yet verified | [docs/clients/chatgpt.md](clients/chatgpt.md#use-it-from-the-codex-app) |
 
-Each guide uses the test server in `tests/runtime_fixtures/fake_server.py` and its own `--name` (for example `claude-weather`), so one trace file shows which client made each call.
+Each guide copies `tests/runtime_fixtures/fake_server.py` and runs that copy with the AgentLatch virtualenv, under its own `--name` (for example `claude-weather`), so one trace file shows which client made each call. The copy imports `agent_latch.runtime.demo_server`, which is where the practice tools live, including `echo_injection`.
 
 Not supported, as of October 2026:
 
@@ -125,10 +125,125 @@ With `--trace FILE`, each MCP message adds one JSON line (`"schema": "agentlatch
 | `tools/call` failure | Exception type and duration |
 | `prompts/list`, `prompts/get` | Prompt names, argument names and hash, message roles, and a short excerpt |
 
-Argument values and full outputs are never stored. The excerpt is at most `--excerpt-chars` characters (default 200; `0` turns it off), with secret-like values such as API keys, tokens and private keys replaced by `[REDACTED]`. Masking is pattern-based and can miss unusual formats, so treat the trace file as sensitive.
+The trace never stores argument values or full outputs. The excerpt is at most `--excerpt-chars` characters (default 200; `0` turns it off), with secret-like values such as API keys, tokens and private keys replaced by `[REDACTED]`. Masking is pattern-based and can miss unusual formats, so treat the trace file as sensitive.
+
+## Intercepted payloads (opt-in)
+
+The trace says *that* a tool was called. Checking *what* was asked for (the command, path, URL or query, and what came back) needs the payload. The proxy turns each `tools/list`, `tools/call` and `prompts/get` message into a payload record with its full payload: requests before they are forwarded to the server, results before they go back to the app. Today the records are only written to a file. Runtime checks that read them are planned.
+
+`--payloads FILE` writes each record as one JSON line (`"schema": "agentlatch.runtime.payload/1"`), in a file created with mode `0600`. **This file holds argument values and tool output**, so it is off by default:
+
+| Message | Payload |
+|---|---|
+| `tools/list` response | Each tool's name, full description, input schema and annotations (`readOnlyHint`, `destructiveHint`, ...) |
+| `tools/call` request | Tool name, argument values, and the tool's description, schema and annotations from the last `tools/list` (`null` if it was not listed) |
+| `tools/call` response | Error flag, text content, structured content, duration |
+| `tools/call` error | Exception type and message, duration |
+| `prompts/get` request, response | Prompt name and argument values; the rendered messages (role and text) |
+
+Every record also has `record_id`, `seq` (order within the proxy run), `timestamp`, `session_id`, `request_id` (pairs a request with its result), `client_id`, `server`, `method` and `stage`.
+
+Before a record is written, string values under secret-like keys (`api_key`, `password`, `token`, ...) are replaced by `[REDACTED]`, other strings have secret-like values masked as in the trace, and each string is cut to `--payload-max-chars` characters (default 4000). Masking is pattern-based and can miss unusual formats: keep the payloads file local, private and short-lived. Nothing in it is sent anywhere.
+
+## Try it without an app
+
+```sh
+agent-latch-runtime demo
+```
+
+This runs a bundled synthetic MCP server behind the proxy, lists its tools, calls three tools (one returns a fake credential, one fails), gets a prompt, then imports the logs and prints one line per event. Everything stays on your machine. The files land in `runtime-logs/demo/` and are replaced on each run: `trace.jsonl`, `payloads.jsonl`, `events.csv`, `normalized.jsonl` and `proxy.log` (the proxy's own messages).
+
+## Import logs
+
+`agent-latch-runtime import-logs` runs next to the proxy as a separate process. It reads the files the proxy already wrote, so it can neither slow down nor change the MCP flow. It follows the trace file (and the payloads file, if you have one) and, for each message:
+
+1. **Normalizes** it: the trace record and its payload record are joined into one event (below).
+2. **Shows** it: one line on stderr, one row in `events.csv`, and the full event (arguments, payload and response) in `normalized.jsonl`.
+3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR04 ships with the package, so this file is created. It records findings and does not block or change the call.
+
+With no file options it reads and writes in `runtime-logs/`:
+
+```sh
+# Terminal 1: MCP traffic keeps flowing through the proxy.
+agent-latch-runtime proxy --trace runtime-logs/trace.jsonl --payloads runtime-logs/payloads.jsonl -- npx -y @modelcontextprotocol/server-github
+
+# Terminal 2: follow both logs (Ctrl+C to stop).
+agent-latch-runtime import-logs
+```
+
+For a full live run with a real CrewAI agent and this repo's MCP gateway, follow [Part 4 of the gateway setup guide](../mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch).
+
+`--dir DIR` uses another folder. `--trace`, `--payloads`, `--events-csv` and `--output-csv` set single files. When `--trace` is given, payloads are read only if `--payloads` is given too; without them, gates see `payload: null` and only the trace `metadata`. `--normalized-out FILE` moves the full normalized events elsewhere. `--database FILE` also stores each event in a local SQLite file (below); it is off unless you set it. `--once` processes what the files hold now and exits. `--quiet` turns off the per-event lines. `--run-id` overrides the run id.
+
+**events.csv.** One row per event: `run_id`, `order`, `timestamp`, `session_id`, `request_id`, `server`, `method`, `stage`, `name`, `outcome` (`ok`, `error result`, `error (Type)`, or empty for requests), `duration_ms`, `output_bytes`, `has_payload` and the trace's redacted `excerpt`. Argument values are never in it. Cells that a spreadsheet would run as a formula (starting with `=`, `+`, `-` or `@`) get a leading `'`.
+
+### Store events in SQLite
+
+`--database FILE` also saves every normalized event in a local SQLite database, using Python's built-in `sqlite3` (nothing extra to install). The CSV and normalized JSONL outputs are unchanged. Without `--database`, nothing else changes, and nothing is uploaded.
+
+```sh
+agent-latch-runtime import-logs --database ./runtime.db
+```
+
+Each event is one row in the `events` table. `SQLiteEventStore` is the first destination behind the importer's `EventStore` contract (`open`, `save`, `close`). A later destination, such as a warehouse or an opt-in trace exporter, implements that same contract. This file is only the local one.
+
+| Column | From the normalized event |
+|---|---|
+| `run_id`, `event_order` | `run_id`, `order` (the key: an event is stored once) |
+| `timestamp`, `session_id`, `request_id`, `client_id`, `server`, `method`, `stage`, `name` | Same fields |
+| `trace_path`, `trace_line` | `trace` |
+| `payloads_path`, `payloads_line` | `payloads` (`NULL` when there is no payload record) |
+| `metadata` | `metadata`, as JSON text |
+| `payload` | `payload`, as JSON text (`NULL` without `--payloads`) |
+| `imported_at` | When the importer stored the row (UTC) |
+
+- **No duplicates.** Rows are keyed by `run_id` and `event_order` and saved with `INSERT OR IGNORE`, one transaction per pass. Importing the same files again, or restarting the importer, adds only events it has not stored yet.
+- **Live.** Without `--once`, the importer keeps following the logs and saves new events within about a second. If a save fails (for example the database is locked by another program), it logs one warning, keeps the events and retries on the next pass. Events still waiting when it stops are saved on the next run, which re-reads the files.
+- **Trace only.** Without `--payloads`, `payload`, `payloads_path` and `payloads_line` are `NULL` and `metadata` still holds the trace fields.
+- **Schema.** The schema version is kept in `PRAGMA user_version`, and numbered migrations bring an older database up to date when it is opened, each in one transaction. A database from a newer AgentLatch, or a file that is not SQLite, is refused with exit code `2`.
+- **Readable view.** `event_log` shows one line per event: `time`, `server`, `method`, `stage`, `tool_or_prompt`, `client_id`, `is_error`, `duration_ms`, the masked `excerpt` and `has_payload`.
+
+Read it with Python:
+
+```sh
+python -c "import sqlite3; db = sqlite3.connect('runtime.db'); [print(r) for r in db.execute('select time, tool_or_prompt, stage, is_error, excerpt from event_log order by time desc limit 10')]"
+```
+
+**The database is sensitive.** With `--payloads` it holds tool arguments and outputs, masked by pattern only. A new database file is created with mode `0600` on macOS and Linux; on Windows it follows the folder's permissions, so keep it in your user folder. Keep it local and delete it when you no longer need it. The importer makes no network request for this store.
+
+**Normalized event.** Every gate gets this same object, whatever the method:
+
+| Field | Meaning |
+|---|---|
+| `run_id`, `order` | `run_id` is a hash of the first trace line. `order` is the trace line number. Together they identify an event, and both are stable across restarts. |
+| `timestamp`, `session_id`, `request_id`, `client_id`, `server`, `method`, `stage`, `name` | Common envelope. `name` is the tool or prompt name (`null` for list calls). `client_id` comes from the payload record. |
+| `trace`, `payloads` | File name and line number of the source records. `payloads` is `null` when no payload record exists. |
+| `metadata` | The rest of the trace record: hashes, sizes, excerpts, error flags and durations. |
+| `payload` | The full masked payload (as in the payload table above), or `null`. |
+
+A trace record waits for its payload record (matched on session, request, server, method, stage and name). In follow mode it moves on without it after 2 seconds. With `--once`, unmatched records go on without a payload at the end.
+
+**Gates.** The importer discovers Python modules in `agent_latch.gates` in module-name order. A module exports a unique string `GATE_ID` and `evaluate(event)`, which returns `{"findings": [...]}`. Each gate gets its own copy of the event.
+
+**ALR04 (preview).** The one gate that ships. It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. The rules can miss reworded instructions, and they do not look at tool results or what the agent does next. ALR04 never blocks a call.
+
+**gate-results.csv.** Columns are `run_id`, `order`, `gate_id`, `result_json`, and `result_json` always has the same shape: `{"gate_id":"...","status":"ok","findings":[],"error":null}`. If a gate raises, its row has `"status":"error"` and only the exception type in `error`; later gates still run.
+
+**Report.** From the repo root, after `import-logs` has written the CSV:
+
+```sh
+agent-latch --runtime-result
+```
+
+That prints the same kind of table as `agent-latch scan`: severity, rule, location, OWASP category, and the finding. It reads every gate in the file, not only ALR04, and it lists findings only. A finding that sets `path` and `line` uses that location. Otherwise, when `entity.tool` matches a function in the project path (the positional argument, default `.`), the location is that function's docstring line, for example `mcp-server/tools/alr04_fixture_tools.py:14`. A tool that comes from a mounted server and has no function in the project is shown as `server/tool #event`. `--plain` prints text instead of the table. `--fail-on` applies to these rows the same way it applies to a scan. The default CSV is `runtime-logs/gate-results.csv`; pass another file as `--runtime-result FILE`.
+
+Restarting the importer skips events and results already in its output files, so rows and lines are not repeated. Malformed lines are logged and skipped. The importer does not block or modify MCP traffic. Its output files can hold payload data, so keep them local and access-controlled (they are created with mode `0600`; `runtime-logs/` is in `.gitignore`).
 
 ## Limits
 
 - It sees only servers whose config entry goes through the proxy. Other servers, the app's built-in tools (for example Claude Code's shell and file edits) and the user's prompts to the model don't pass through it.
-- It records traffic; it doesn't detect attacks or block calls yet. A quiet trace is not a security guarantee.
+- It records traffic and runs ALR04 on tool definitions. It reports findings and does not block calls.
+- It sees MCP traffic only, not the agent's requests to its model, so it records what the agent did, not the prompt or reasoning behind it.
+- Payload records cover `tools/list`, `tools/call` and `prompts/get`. Other MCP messages (`resources/list`, `resources/read`, `initialize`, notifications, sampling) pass through without a record, and `prompts/list` is only in the trace. Tool results keep text content only: image, audio and embedded-resource blocks are left out. A failed `prompts/get` writes no record.
+- The payloads file is not rotated and grows with every message (each `tools/call` request repeats the tool's definition). Very large outputs are masked in full before they are cut, which costs CPU on multi-megabyte results.
 - Known issues: over HTTP, one tool call can also record an extra `tools/list` entry (FastMCP looks the tool up internally); and `session_id` can change between requests on the same connection (seen over both HTTP and stdio), so don't rely on it to group a session's calls yet.

@@ -70,17 +70,30 @@ src/agent_latch/
   suppress.py     # .agent-latch-ignore, inline ignores, pyproject excludes
   report.py       # text, JSON, and SARIF renderers; severity ordering
   action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
-  runtime/        # runtime checks for MCP traffic (preview, monitor only; `[runtime]` extra)
-    events.py     # ToolCall, ToolOutput, ToolInfo
-    redact.py     # hashes, secret masking, short excerpts (never raw arguments or outputs)
+  gates/          # runtime gate plugins discovered by the importer (monitor only, never block)
+    __init__.py
+    alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; reports findings only)
+  runtime/        # MCP traffic recording (preview, monitor only; `[runtime]` extra). Logs go to runtime-logs/, not here.
+    events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
+    redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file
     trace.py      # TraceLog: one redacted JSONL record per MCP message (agentlatch.runtime.trace/1)
+    payloads.py   # PayloadTap: full-payload records to sinks; PayloadFile (opt-in --payloads, masked)
+    normalizer.py # MCPEventNormalizer: joins a trace record and its payload record into one event
+    importer.py   # RuntimeLogImporter: tails logs, writes events, runs gates; optional EventStore
+    sqlite_store.py # SQLiteEventStore: first EventStore, local SQLite via stdlib sqlite3 (`--database`)
+    results.py    # agent-latch --runtime-result: findings table from gate-results.csv, for every gate
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
-    cli.py        # agent-latch-runtime console script (`proxy` subcommand)
+    demo_server.py # synthetic MCP server for `demo` and the runtime tests [needs fastmcp]
+    demo.py       # `demo`: drives demo_server through the proxy, then imports the logs [needs fastmcp]
+    cli.py        # agent-latch-runtime console script (`proxy`, `import-logs`, `demo`)
 tests/test_scanner.py          # scanner unit tests (synthetic fixtures via tmp_path)
 tests/test_runtime.py          # runtime tests that need no FastMCP
-tests/test_runtime_middleware.py # proxy end-to-end tests (skipped without the [runtime] extra)
-tests/runtime_fixtures/        # synthetic MCP server for the runtime tests
+tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests (no FastMCP)
+tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
+tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
+tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
+tests/runtime_fixtures/        # demo-server wrapper, plus the ALR04 event dataset and expected outcomes
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
@@ -118,13 +131,21 @@ agent-latch scan --format sarif --output agent-latch.sarif
 agent-latch [scan] [path] [--config MANIFEST] [--exclude PATH]... [--ignore-file FILE]
             [--project-ignores] [--dependencies] [-i/--interactive]
             [--format text|json|sarif] [--output FILE] [--plain] [--min-severity LEVEL]
-            [--fail-on none|low|medium|high|critical] [-V]
+            [--fail-on none|low|medium|high|critical]
+            [--runtime-result [CSV]] [-V]
 
-agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N] [--quiet]
+agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
+            [--payloads FILE] [--payload-max-chars N] [--quiet]
             [--http HOST:PORT] (--upstream-url URL | -- SERVER COMMAND...)
+agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
+            [--events-csv FILE] [--output-csv FILE] [--normalized-out FILE]
+            [--database FILE] [--run-id ID] [--once] [--quiet]
+agent-latch-runtime demo [--dir DIR]
 ```
 
-`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode.
+`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR04 is installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. ALR04 reports findings only; the runtime report does not clear a tool. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command.
+
+`--database FILE` is the operator's choice of a local store. It saves each normalized event in a SQLite file (`SQLiteEventStore`) and is off when omitted. The importer talks to that file only through the `EventStore` contract in `importer.py` (`open`, `save`, `close`). SQLite is the first implementation, using the standard-library `sqlite3` module, so it adds no dependency and makes no network request. A later destination (a warehouse or an opt-in trace exporter) implements the same contract and is selected the same way: by a flag on `import-logs`, not by a default. The database can hold payload data, so a new file is created with mode `0600` where the platform supports it. Keep it local. Do not add a vendor client as a required dependency.
 
 Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them.
 
@@ -179,7 +200,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 ## Privacy and security constraints
 
 - Scans must stay local. Do not add LLM calls, telemetry, or uploads.
-- The only network use is the opt-in `--dependencies` audit, which sends package names and versions. Any new network behavior must be opt-in and documented.
+- The only network use is the opt-in `--dependencies` audit, which sends package names and versions. Any new network behavior must be opt-in and documented. `--database` is local SQLite and must stay that way. A destination that sends events off the machine is new network behavior: opt-in, documented, and not a required dependency.
 - Tests must make no network calls. Mock `subprocess` for `pip-audit`.
 - Use synthetic fixtures only. Never commit real secrets or proprietary code.
 - Report vulnerabilities in AgentLatch itself as described in `SECURITY.md`.
@@ -214,7 +235,7 @@ Before building a check, look at how established open-source tools handle it. Bo
 - `docs/RULES.md`: per-rule detection, OWASP mapping, blind spots
 - `docs/runtime.md`: runtime proxy for MCP (preview, monitor only): install, connecting an app, supported clients, what is recorded, limits
 - `docs/clients/`: tested, step-by-step proxy setup for one client per file (`claude-desktop.md`, `chatgpt.md`, `cursor.md`, `vscode-copilot.md`, `antigravity.md`); `docs/runtime.md` links to them
-- `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions; `mcp-server/README.md` is an overview that links to it
+- `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions, including starting `import-logs --database` before a live CrewAI or Claude Desktop run; `mcp-server/README.md` is an overview that links to it
 - `CONTRIBUTING.md`, `SECURITY.md`, `llms.txt`
 
 When behavior changes, update the relevant docs in the same change.
