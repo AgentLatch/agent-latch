@@ -19,6 +19,7 @@ Key facts:
 - [Agent manifests](https://github.com/AgentLatch/agent-latch/blob/main/docs/agent-manifest.md): `agent-manifest.yaml` format and the checks it enables
 - [pre-commit and CI](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md): pre-commit hook, GitHub Action inputs and outputs, other CI systems
 - [Detection rules](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md): every rule, its OWASP mapping, and known blind spots
+- [Gates](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md): security outcomes (`ALR01`–`ALR14`); every rule and runtime check belongs to one gate, reported as `PY001 (ALR06)`
 - [Runtime proxy (preview)](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md): install, connecting an MCP client, what is recorded, limits
 
 ## Examples

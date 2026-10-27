@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from agent_latch import cli
+from agent_latch import catalog, cli
 from agent_latch.manifest import ManifestError, scan_manifest
 from agent_latch.owasp import ASI_CATEGORIES, RULE_CATEGORIES, coverage
 from agent_latch.report import json_report, sarif_report, text_report
@@ -300,10 +300,11 @@ def test_scan_subcommand_uses_config_and_fail_on(tmp_path: Path, monkeypatch, ca
 
     captured = capsys.readouterr()
     assert exit_code == 1
-    assert "AGENTLATCH-MAN001" in captured.out
+    assert "MAN001 (ALR09)" in captured.out
+    assert "Gate: ALR09 Human approval for sensitive actions" in captured.out
     assert f"Manifest: {manifest}" in captured.out
     assert "Failing (exit 1): 1 finding(s) at or above --fail-on high" in captured.err
-    assert f"AGENTLATCH-MAN001  {manifest.name}:" in captured.err
+    assert f"MAN001 (ALR09)  {manifest.name}:" in captured.err
 
 
 def test_fail_on_summary_goes_to_stderr_when_writing_sarif(tmp_path: Path, capsys) -> None:
@@ -319,7 +320,7 @@ def test_fail_on_summary_goes_to_stderr_when_writing_sarif(tmp_path: Path, capsy
     assert exit_code == 1
     assert captured.out == ""
     assert f"to {output}" in captured.err
-    assert "AGENTLATCH-MAN001" in captured.err
+    assert "MAN001 (ALR09)" in captured.err
     json.loads(output.read_text(encoding="utf-8"))
 
 
@@ -327,7 +328,7 @@ def test_scan_auto_discovers_manifest_in_target(tmp_path: Path, capsys) -> None:
     _write_manifest(tmp_path, "tools:\n  - name: files\n    permissions: ['*']\n")
 
     assert cli.main([str(tmp_path)]) == 0
-    assert "AGENTLATCH-MAN002" in capsys.readouterr().out
+    assert "MAN002 (ALR07)" in capsys.readouterr().out
 
 
 def test_excludes_from_flag_and_pyproject(tmp_path: Path, capsys) -> None:
@@ -487,6 +488,69 @@ def test_every_rule_maps_only_to_known_owasp_categories() -> None:
     for rule_id, categories in emitted.items():
         assert categories <= set(RULE_CATEGORIES[rule_id]), rule_id
     assert {cid for cats in RULE_CATEGORIES.values() for cid in cats} <= set(ASI_CATEGORIES)
+
+
+def test_every_detector_belongs_to_one_gate_within_its_owasp_categories() -> None:
+    import re
+
+    from agent_latch.gates import alr04
+
+    assert [gate.id for gate in catalog.GATES] == [f"ALR{n:02d}" for n in range(1, 15)]
+    assert len(catalog.DETECTORS_BY_ID) == len(catalog.DETECTORS)
+    for rule_id in RULE_CATEGORIES:
+        assert (rule_id in catalog.DETECTORS_BY_ID) != (rule_id in catalog.DIAGNOSTICS), rule_id
+    runtime = {d.id for d in catalog.DETECTORS if not d.id.startswith("AGENTLATCH-")}
+    assert {d.id for d in catalog.detectors_for("ALR04")} == set(alr04.RULE_IDS.values())
+    assert {alr04.RULE_COVERAGE, alr04.RULE_SUMMARY} <= set(catalog.DIAGNOSTICS)
+    assert alr04.OWASP == list(catalog.gate("ALR04").owasp)
+    for detector in catalog.DETECTORS:
+        gate = catalog.gate(detector.gate)
+        assert set(catalog.detector_owasp(detector)) <= set(gate.owasp), detector.id
+        if detector.id in runtime:
+            assert re.fullmatch(r"ALR\d{2}-(\d{3}|[SR]\d{2})", detector.id), detector.id
+            assert detector.id.startswith(gate.id), detector.id
+        else:
+            assert detector.id in RULE_CATEGORIES, detector.id
+    for gate in catalog.GATES:
+        assert set(gate.owasp) <= set(ASI_CATEGORIES), gate.id
+        assert set(gate.eu_ai_act) <= set(catalog.EU_AI_ACT_ARTICLES), gate.id
+    assert {cid for gate in catalog.GATES for cid in gate.owasp} == set(ASI_CATEGORIES)
+
+
+def test_gates_doc_is_generated_from_the_catalog() -> None:
+    doc = Path(__file__).resolve().parents[1] / "docs" / "GATES.md"
+    assert doc.read_text(encoding="utf-8") == catalog.render_markdown(), (
+        "run: python -I -m agent_latch.catalog > docs/GATES.md"
+    )
+
+
+def test_reports_show_short_ids_with_their_gate_and_keep_full_rule_ids(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text("eval('x')\n", encoding="utf-8")
+    findings = scan_project(tmp_path)
+
+    finding = json.loads(json_report(findings, str(tmp_path)))["findings"][0]
+    assert finding["rule_id"] == "AGENTLATCH-PY001"
+    assert finding["short_id"] == "PY001"
+    assert finding["gate"] == {"id": "ALR06", "name": "Code execution containment"}
+    run = json.loads(sarif_report(findings, str(tmp_path)))["runs"][0]
+    assert run["results"][0]["ruleId"] == "AGENTLATCH-PY001"
+    assert run["results"][0]["properties"]["gate"]["id"] == "ALR06"
+    assert "ALR06" in run["tool"]["driver"]["rules"][0]["properties"]["tags"]
+    text = text_report(findings, str(tmp_path))
+    assert "PY001 (ALR06) " in text and "Gate: ALR06 Code execution containment" in text
+    assert catalog.display_id("ALR04-004") == "ALR04-004"
+    assert catalog.display_id("AGENTLATCH-MAN000") == "MAN000"
+
+
+def test_ignore_file_accepts_gate_named_detector_ids() -> None:
+    rules = parse_ignore_file("ALR13-S01 agent.py\nalr04-r01 b.py\n")
+    assert [rule.rule for rule in rules] == ["ALR13-S01", "ALR04-R01"]
+    try:
+        parse_ignore_file("ALR13-X01 agent.py\n")
+    except ConfigError:
+        pass
+    else:
+        raise AssertionError("Expected a config error")
 
 
 def test_reports_name_owasp_categories_and_flag_uncovered_ones(tmp_path: Path) -> None:
@@ -789,7 +853,7 @@ def test_action_summary_has_totals_and_escapes_untrusted_text(tmp_path: Path) ->
 
     assert summary.startswith("## ❌ AgentLatch: 2 finding(s) at or above `high`")
     assert "| 0 | 2 | 0 | 1 | **3** |" in summary
-    assert "### Findings by rule" in summary and "| `PY001` |" in summary
+    assert "### Findings by rule" in summary and "| `PY001 (ALR06)` |" in summary
     assert "ASI06 | Memory & Context Poisoning | _no checks yet_" in summary
     assert "### Blocking findings (2)" in summary
     assert "<summary>Other findings (1)</summary>" in summary

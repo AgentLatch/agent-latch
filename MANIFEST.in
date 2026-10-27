@@ -1,2 +1,3 @@
 # The sdist ships the tests, so it must also ship the data they read.
 graft tests/runtime_fixtures
+include docs/GATES.md

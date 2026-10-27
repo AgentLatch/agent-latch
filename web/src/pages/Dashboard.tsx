@@ -7,9 +7,9 @@ const stats = [
 ];
 
 const riskRows = [
-  { rule: "AGENTLATCH-PY002", where: "tools.py:10", level: "high" as const, text: "Shell command injection" },
-  { rule: "AGENTLATCH-AG004", where: "orchestrator.py:9", level: "medium" as const, text: "Tool writes files, no approval" },
-  { rule: "AGENTLATCH-AG003", where: "tools.py:21", level: "low" as const, text: "Unfenced web content into prompt" },
+  { rule: "PY002 (ALR06)", where: "tools.py:10", level: "high" as const, text: "Shell command injection" },
+  { rule: "AG004 (ALR09)", where: "orchestrator.py:9", level: "medium" as const, text: "Tool writes files, no approval" },
+  { rule: "AG003 (ALR05)", where: "tools.py:21", level: "low" as const, text: "Unfenced web content into prompt" },
 ];
 
 export function Dashboard() {

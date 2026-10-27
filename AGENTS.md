@@ -36,20 +36,29 @@ AgentLatch is often run on agents someone else wrote, so nothing inside the scan
 - The mapping is informational. Never claim OWASP compliance, certification, or endorsement.
 - The PDF is an OWASP publication. Don't copy large passages into code or docs. Paraphrase it and link to https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/.
 
-| ID | Category | Current rules |
-|---|---|---|
-| ASI01 | Agent Goal Hijack | `AG003`, `PRM001`, `PRM002` |
-| ASI02 | Tool Misuse and Exploitation | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003` |
-| ASI03 | Identity and Privilege Abuse | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003` |
-| ASI04 | Agentic Supply Chain Vulnerabilities | `SEC001`, `DEP001` |
-| ASI05 | Unexpected Code Execution (RCE) | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001` |
-| ASI06 | Memory & Context Poisoning | none yet |
-| ASI07 | Insecure Inter-Agent Communication | none yet |
-| ASI08 | Cascading Failures | `AG007` (partial) |
-| ASI09 | Human-Agent Trust Exploitation | `AG004`, `AG006`, `MAN001` (partial) |
-| ASI10 | Rogue Agents | none yet |
+| ID | Category | Gates | Current rules |
+|---|---|---|---|
+| ASI01 | Agent Goal Hijack | `ALR01`, `ALR04`, `ALR05` | `AG003`, `PRM001`, `PRM002` |
+| ASI02 | Tool Misuse and Exploitation | `ALR02`, `ALR03`, `ALR04`, `ALR06`, `ALR07`, `ALR09`, `ALR12` | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003` |
+| ASI03 | Identity and Privilege Abuse | `ALR03`, `ALR07`, `ALR09`, `ALR10` | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003` |
+| ASI04 | Agentic Supply Chain Vulnerabilities | `ALR02`, `ALR03`, `ALR04`, `ALR10`, `ALR11` | `SEC001`, `DEP001` |
+| ASI05 | Unexpected Code Execution (RCE) | `ALR06`, `ALR07`, `ALR09` | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001` |
+| ASI06 | Memory & Context Poisoning | `ALR13` | none yet |
+| ASI07 | Insecure Inter-Agent Communication | `ALR03`, `ALR12` | none yet |
+| ASI08 | Cascading Failures | `ALR08` | `AG007` (partial) |
+| ASI09 | Human-Agent Trust Exploitation | `ALR09` | `AG004`, `AG006`, `MAN001` (partial) |
+| ASI10 | Rogue Agents | `ALR14` | none yet |
 
 Keep this table up to date whenever a rule is added or its OWASP mapping changes.
+
+### Gates
+
+A gate is a security outcome (for example `ALR09` Human approval for sensitive actions). Every detector, a static rule or a runtime check, belongs to exactly one gate. `src/agent_latch/catalog.py` is the single source for gates (`GATES`), detector-to-gate assignments with the reason (`DETECTORS`), and framework references per gate: OWASP IDs from `owasp.py` and EU AI Act articles (`EU_AI_ACT_ARTICLES`). ISO/IEC 42001 is not mapped yet.
+
+- A detector's OWASP IDs must be a subset of its gate's. A test checks this, and that every rule in `RULE_CATEGORIES` and every ALR04 rule ID has a gate (or is listed in `DIAGNOSTICS`).
+- `docs/GATES.md` is generated: `python -I -m agent_latch.catalog > docs/GATES.md`. A test fails when it is out of date.
+- Framework mappings are informational. Never claim compliance with the EU AI Act, ISO/IEC 42001 or OWASP.
+- `agent_latch/gates/` holds runtime gate plugins only (one module per gate, `GATE_ID` = the gate ID). Keep the catalog out of that package: the importer loads every module in it as a plugin.
 
 ## Repository layout
 
@@ -67,6 +76,7 @@ src/agent_latch/
   yamlload.py     # line-aware YAML loading (SafeLoader subclass)
   manifest.py     # Manifest loading and MAN* rules; PRM* on manifest prompts
   owasp.py        # ASI01–ASI10 category IDs/names, rule→category map, coverage summary
+  catalog.py      # gates ALR01–ALR14, detector→gate map, EU AI Act refs; renders docs/GATES.md
   suppress.py     # .agent-latch-ignore, inline ignores, pyproject excludes
   report.py       # text, JSON, and SARIF renderers; severity ordering
   action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
@@ -153,36 +163,36 @@ Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown
 
 ## Rules
 
-| ID | Where | Detects |
-|---|---|---|
-| `AGENTLATCH-PY001` | `rules.py` | `eval()` / `exec()` |
-| `AGENTLATCH-PY002` | `rules.py` | `subprocess.*(..., shell=True)` |
-| `AGENTLATCH-PY003` | `rules.py` | literal `verify=False` |
-| `AGENTLATCH-AG001` | `rules.py` | CrewAI `Agent(allow_delegation=True)` |
-| `AGENTLATCH-AG002` | `rules.py` | LangChain `create_pandas_dataframe_agent` |
-| `AGENTLATCH-AG003` | `taint.py` | web/HTTP/tool output flowing unfenced into LLM messages |
-| `AGENTLATCH-AG004` | `agent_code.py` | model-exposed tool that runs commands, writes files/DB, sends email or HTTP writes, with no approval gate |
-| `AGENTLATCH-AG005` | `agent_code.py` | unrestricted built-in tool (`ShellTool`, `PythonREPLTool`, unscoped `FileManagementToolkit`, ...) |
-| `AGENTLATCH-AG006` | `oversight.py` | human approval disabled (`human_input_mode="NEVER"` with code execution, `auto_approve=True`, ...) |
-| `AGENTLATCH-AG007` | `oversight.py` | agent loop without an effective limit (`max_iterations=None`, huge limits, endless `while True`) |
-| `AGENTLATCH-SEC001` | `rules.py` | credential-like quoted assignments (value redacted) |
-| `AGENTLATCH-DEP001` | `rules.py` | `pip-audit` advisories in `requirements*.txt` |
-| `AGENTLATCH-MAN001` | `manifest.py` | high-risk tool capability without an approval gate |
-| `AGENTLATCH-MAN002` | `manifest.py` | wildcard tool permissions |
-| `AGENTLATCH-MAN003` | `manifest.py` | remote tool endpoint without auth |
-| `AGENTLATCH-PRM001` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | prompt-injection signatures in prompts |
-| `AGENTLATCH-PRM002` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | user-input placeholder in a system prompt |
+| ID | Gate | Where | Detects |
+|---|---|---|---|
+| `PY001` | `ALR06` | `rules.py` | `eval()` / `exec()` |
+| `PY002` | `ALR06` | `rules.py` | `subprocess.*(..., shell=True)` |
+| `PY003` | `ALR12` | `rules.py` | literal `verify=False` |
+| `AG001` | `ALR07` | `rules.py` | CrewAI `Agent(allow_delegation=True)` |
+| `AG002` | `ALR06` | `rules.py` | LangChain `create_pandas_dataframe_agent` |
+| `AG003` | `ALR05` | `taint.py` | web/HTTP/tool output flowing unfenced into LLM messages |
+| `AG004` | `ALR09` | `agent_code.py` | model-exposed tool that runs commands, writes files/DB, sends email or HTTP writes, with no approval gate |
+| `AG005` | `ALR07` | `agent_code.py` | unrestricted built-in tool (`ShellTool`, `PythonREPLTool`, unscoped `FileManagementToolkit`, ...) |
+| `AG006` | `ALR09` | `oversight.py` | human approval disabled (`human_input_mode="NEVER"` with code execution, `auto_approve=True`, ...) |
+| `AG007` | `ALR08` | `oversight.py` | agent loop without an effective limit (`max_iterations=None`, huge limits, endless `while True`) |
+| `SEC001` | `ALR10` | `rules.py` | credential-like quoted assignments (value redacted) |
+| `DEP001` | `ALR11` | `rules.py` | `pip-audit` advisories in `requirements*.txt` |
+| `MAN001` | `ALR09` | `manifest.py` | high-risk tool capability without an approval gate |
+| `MAN002` | `ALR07` | `manifest.py` | wildcard tool permissions |
+| `MAN003` | `ALR03` | `manifest.py` | remote tool endpoint without auth |
+| `PRM001` | `ALR01` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | prompt-injection signatures in prompts |
+| `PRM002` | `ALR01` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | user-input placeholder in a system prompt |
 
 Full behavior and blind spots: `docs/RULES.md`.
 
 ### Adding or changing a rule
 
-1. Give it a stable, unique ID (`AGENTLATCH-XXX000`, matching `suppress._RULE_ID`) and a focused title. Never reuse or renumber an existing ID.
+1. Pick its gate in `catalog.GATES` (add a gate only for a new outcome) and give it a stable, unique ID named after that gate: `ALRnn-Snn` for a static rule, `ALRnn-Rnn` for a runtime check (matching `suppress._RULE_ID`), plus a focused title. Existing `AGENTLATCH-XXX000` IDs keep their names. Never reuse or renumber an existing ID.
 2. Make it work without a manifest unless it is a `MAN*` rule (see the design principle above).
-3. Emit a `findings.Finding` with `rule_id`, `title`, `severity`, `message`, `path` (relative POSIX), `line`, `column`, `owasp` (ASI IDs only), `confidence`, and concise `evidence`. Register the rule in `owasp.RULE_CATEGORIES`.
+3. Emit a `findings.Finding` with `rule_id`, `title`, `severity`, `message`, `path` (relative POSIX), `line`, `column`, `owasp` (ASI IDs only), `confidence`, and concise `evidence`. Register the rule in `owasp.RULE_CATEGORIES` and in `catalog.DETECTORS` with its gate and a one-line reason. Its OWASP IDs must fit inside the gate's.
 4. **Never put secret values in evidence, messages, or reports.**
 5. Add a positive test and, where relevant, a negative (non-finding) test in `tests/test_scanner.py` using `tmp_path` fixtures.
-6. Document the rule in `docs/RULES.md` and in the rule tables in `README.md` and this file.
+6. Document the rule in `docs/RULES.md` and in the rule tables in `README.md` and this file (with its gate), and regenerate `docs/GATES.md`.
 7. If the demo project should show it, update `examples/vulnerable-agent/` (code, README, and `agent-latch.sarif`).
 8. Make sure the repo's own self-scan (`agent-latch scan . --fail-on high --project-ignores`) still passes. Add any intentional test fixtures to `.agent-latch-ignore` instead of weakening rules.
 
@@ -196,6 +206,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 - `--min-severity` filters what is reported, never what fails: the CLI rejects a `--min-severity` above `--fail-on`, keeps unknown severity, and every report counts hidden findings.
 - Use `astutil.walk` instead of `ast.walk` for whole-file or whole-function traversals; every rule walks the same tree.
 - Sort findings deterministically (path, line, rule ID) so reports and SARIF stay stable.
+- People read rule IDs short with their gate (`catalog.display_id`: `PY001 (ALR06)`) in the terminal, text report and job summary. SARIF `ruleId` and JSON `rule_id` keep the full ID (`AGENTLATCH-PY001`) because code-scanning alert history is keyed on it; JSON and SARIF also carry `gate` and the short ID. Do not change the full IDs.
 - Suppressions are handled in `suppress.py`: `.agent-latch-ignore` (path / rule / `path:line`), inline `# agent-latch: ignore[RULE]`, and `[tool.agent-latch] exclude` in `pyproject.toml`, all applied only with `--project-ignores`, plus `--exclude` and `--ignore-file`, which always apply. Reports must state how many findings were suppressed. This repo's own self-scan, pre-commit hook, and CI job pass `--project-ignores`.
 - When the CLI writes a report to a file or stdout, send human-facing summaries to stderr so machine-readable output stays clean.
 
@@ -237,6 +248,7 @@ Before building a check, look at how established open-source tools handle it. Bo
 - `docs/agent-manifest.md`: manifest schema and checks
 - `docs/ci.md`: pre-commit, GitHub Action inputs and outputs, other CI
 - `docs/RULES.md`: per-rule detection, OWASP mapping, blind spots
+- `docs/GATES.md`: gates, their detectors and framework references (generated from `catalog.py`)
 - `docs/runtime.md`: runtime proxy for MCP (preview, monitor only): install, connecting an app, supported clients, what is recorded, limits
 - `docs/clients/chatgpt.md`: ChatGPT reaches the proxy through OpenAI's Secure MCP Tunnel. Local apps use the config change in `docs/runtime.md`
 - `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions, including starting `import-logs --database` before a live CrewAI or Claude Desktop run; `mcp-server/README.md` is an overview that links to it
