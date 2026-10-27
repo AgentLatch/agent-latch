@@ -14,6 +14,7 @@ from rich.text import Text
 from rich_argparse import RawDescriptionRichHelpFormatter
 
 from agent_latch import __version__
+from agent_latch.catalog import display_id
 from agent_latch.findings import dedupe
 from agent_latch.manifest import ManifestError, find_manifest, scan_manifest
 from agent_latch.owasp import OWASP_AGENTIC_TITLE, category_label, coverage, coverage_status
@@ -197,7 +198,7 @@ def _render_findings(console: Console, findings: list[Finding]) -> None:
         detail.append("\nEvidence: " + finding.evidence, style="dim")
         table.add_row(
             Text(finding.severity.upper(), style=style),
-            Text(finding.rule_id),
+            Text(display_id(finding.rule_id)),
             Text(f"{finding.path}:{finding.line}:{finding.column}"),
             Text("\n".join(category_label(cid) for cid in finding.owasp) or "—"),
             detail,
@@ -210,7 +211,7 @@ def _render_findings(console: Console, findings: list[Finding]) -> None:
 def _print_fail_summary(blocking: list[Finding], fail_on: str) -> None:
     # stderr keeps machine-readable stdout (json/sarif) intact; color only on a terminal.
     console = Console(stderr=True, highlight=False, soft_wrap=True)
-    rule_width = max(len(finding.rule_id) for finding in blocking)
+    rule_width = max(len(display_id(finding.rule_id)) for finding in blocking)
     locations = [f"{finding.path}:{finding.line}" for finding in blocking]
     location_width = max(len(location) for location in locations)
     console.print(
@@ -220,7 +221,7 @@ def _print_fail_summary(blocking: list[Finding], fail_on: str) -> None:
     for finding, location in zip(blocking, locations):
         line = Text("  ")
         line.append(f"{finding.severity.upper():<8}", style=SEVERITY_STYLES.get(finding.severity, "white"))
-        line.append(f" {finding.rule_id:<{rule_width}}  ")
+        line.append(f" {display_id(finding.rule_id):<{rule_width}}  ")
         line.append(f"{location:<{location_width}}", style="cyan")
         line.append(f"  {finding.title}")
         console.print(line)

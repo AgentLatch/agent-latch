@@ -16,6 +16,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from agent_latch.catalog import display_id
 from agent_latch.owasp import OWASP_AGENTIC_TITLE, coverage_status
 
 SEVERITIES = ("critical", "high", "medium", "low", "info", "unknown")
@@ -80,15 +81,11 @@ def is_blocking(severity: str, fail_on: str) -> bool:
     return severity == "unknown" or _RANK.get(severity, 99) <= _FAIL_RANK[fail_on]
 
 
-def _short_rule(rule_id: str) -> str:
-    return rule_id.removeprefix("AGENTLATCH-")
-
-
 def _finding_table(rows: list[dict[str, str]], limit: int) -> list[str]:
     lines = ["| Severity | Rule | Location | Finding | Evidence |", "|---|---|---|---|---|"]
     for row in rows[:limit]:
         lines.append(
-            f"| {_ICONS[row['severity']]} {row['severity'].upper()} | `{_short_rule(row['rule'])}` "
+            f"| {_ICONS[row['severity']]} {row['severity'].upper()} | `{display_id(row['rule'])}` "
             f"| {code(row['location'])} | {cell(row['title'], 80)} | {cell(row['evidence'], 100)} |"
         )
     if len(rows) > limit:
@@ -141,7 +138,7 @@ def render_summary(run: dict[str, Any], fail_on: str, exit_code: str) -> str:
         lines += ["### Findings by rule", "", "| Rule | Title | Highest severity | Count |", "|---|---|---|---:|"]
         for rule, entry in sorted(by_rule.items(), key=lambda item: (_RANK[item[1]["worst"]], -item[1]["count"])):
             lines.append(
-                f"| `{_short_rule(rule)}` | {cell(entry['title'], 80)} "
+                f"| `{display_id(rule)}` | {cell(entry['title'], 80)} "
                 f"| {_ICONS[entry['worst']]} {entry['worst'].upper()} | {entry['count']} |"
             )
         lines.append("")

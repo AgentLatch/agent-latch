@@ -41,8 +41,11 @@ from threading import RLock
 from typing import Any
 from urllib.parse import unquote
 
+from agent_latch.catalog import gate
+
 GATE_ID = "ALR04"
-OWASP = ["ASI01", "ASI02", "ASI04"]
+# Every ALR04 check cites its gate's OWASP categories (agent_latch.catalog).
+OWASP = list(gate(GATE_ID).owasp)
 
 MIN_COVERAGE = 0.90
 MAX_TOOLS = 256

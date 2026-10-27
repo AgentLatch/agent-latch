@@ -197,27 +197,29 @@ The **trace** keeps argument names, sizes, SHA-256 hashes and a short secret-mas
 
 ## What the scanner checks today
 
-| Rule | Detection | OWASP Agentic mapping |
-|---|---|---|
-| `AGENTLATCH-PY001` | Direct Python `eval()` and `exec()` calls | ASI05 Unexpected Code Execution (RCE); ASI02 Tool Misuse and Exploitation |
-| `AGENTLATCH-PY002` | `subprocess.*(..., shell=True)` calls | ASI05 Unexpected Code Execution (RCE); ASI02 Tool Misuse and Exploitation |
-| `AGENTLATCH-PY003` | Calls with a literal `verify=False` argument | ASI02 Tool Misuse and Exploitation |
-| `AGENTLATCH-AG001` | CrewAI `Agent(..., allow_delegation=True)` review hint | ASI02 Tool Misuse and Exploitation; ASI03 Identity and Privilege Abuse |
-| `AGENTLATCH-AG002` | LangChain `create_pandas_dataframe_agent(...)` code-execution capability | ASI05 Unexpected Code Execution (RCE); ASI02 Tool Misuse and Exploitation |
-| `AGENTLATCH-AG003` | Web-search, web-loader, or HTTP output flowing unfenced into an LLM message (indirect prompt injection) | ASI01 Agent Goal Hijack |
-| `AGENTLATCH-AG004` | Function exposed to the model as a tool that runs commands, writes files, sends email, or writes data, with no human-approval gate | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03; ASI09 |
-| `AGENTLATCH-AG005` | Agent given an unrestricted built-in tool (shell, Python REPL, unscoped file access) | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03 |
-| `AGENTLATCH-AG006` | Human approval turned off for agent actions (`human_input_mode="NEVER"` with code execution, `auto_approve=True`, `permission_mode="bypassPermissions"`) | ASI09 Human-Agent Trust Exploitation; ASI05 / ASI02 |
-| `AGENTLATCH-AG007` | Agent loop with no effective limit (`max_iterations=None`, very high limits, `while True` around an agent call) | ASI08 Cascading Failures |
-| `AGENTLATCH-SEC001` | Credential-like quoted assignments; matched value is redacted | ASI03 Identity and Privilege Abuse; ASI04 Agentic Supply Chain Vulnerabilities |
-| `AGENTLATCH-DEP001` | Known advisory for a package in an audited requirements file | ASI04 Agentic Supply Chain Vulnerabilities |
-| `AGENTLATCH-MAN001` | Manifest tool with a high-risk capability and no human-approval gate | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03; ASI09 |
-| `AGENTLATCH-MAN002` | Manifest tool with wildcard permissions | ASI02 Tool Misuse and Exploitation; ASI03 Identity and Privilege Abuse |
-| `AGENTLATCH-MAN003` | Manifest tool calling a remote endpoint without authentication | ASI03 Identity and Privilege Abuse; ASI02 Tool Misuse and Exploitation |
-| `AGENTLATCH-PRM001` | Prompt-injection signatures in prompts in code, YAML, prompt template files, and manifests | ASI01 Agent Goal Hijack |
-| `AGENTLATCH-PRM002` | User-input placeholder interpolated into a system prompt | ASI01 Agent Goal Hijack |
+| Rule | Gate | Detection | OWASP Agentic mapping |
+|---|---|---|---|
+| `PY001` | `ALR06` | Direct Python `eval()` and `exec()` calls | ASI05 Unexpected Code Execution (RCE); ASI02 Tool Misuse and Exploitation |
+| `PY002` | `ALR06` | `subprocess.*(..., shell=True)` calls | ASI05 Unexpected Code Execution (RCE); ASI02 Tool Misuse and Exploitation |
+| `PY003` | `ALR12` | Calls with a literal `verify=False` argument | ASI02 Tool Misuse and Exploitation |
+| `AG001` | `ALR07` | CrewAI `Agent(..., allow_delegation=True)` review hint | ASI02 Tool Misuse and Exploitation; ASI03 Identity and Privilege Abuse |
+| `AG002` | `ALR06` | LangChain `create_pandas_dataframe_agent(...)` code-execution capability | ASI05 Unexpected Code Execution (RCE); ASI02 Tool Misuse and Exploitation |
+| `AG003` | `ALR05` | Web-search, web-loader, or HTTP output flowing unfenced into an LLM message (indirect prompt injection) | ASI01 Agent Goal Hijack |
+| `AG004` | `ALR09` | Function exposed to the model as a tool that runs commands, writes files, sends email, or writes data, with no human-approval gate | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03; ASI09 |
+| `AG005` | `ALR07` | Agent given an unrestricted built-in tool (shell, Python REPL, unscoped file access) | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03 |
+| `AG006` | `ALR09` | Human approval turned off for agent actions (`human_input_mode="NEVER"` with code execution, `auto_approve=True`, `permission_mode="bypassPermissions"`) | ASI09 Human-Agent Trust Exploitation; ASI05 / ASI02 |
+| `AG007` | `ALR08` | Agent loop with no effective limit (`max_iterations=None`, very high limits, `while True` around an agent call) | ASI08 Cascading Failures |
+| `SEC001` | `ALR10` | Credential-like quoted assignments; matched value is redacted | ASI03 Identity and Privilege Abuse; ASI04 Agentic Supply Chain Vulnerabilities |
+| `DEP001` | `ALR11` | Known advisory for a package in an audited requirements file | ASI04 Agentic Supply Chain Vulnerabilities |
+| `MAN001` | `ALR09` | Manifest tool with a high-risk capability and no human-approval gate | ASI02 Tool Misuse and Exploitation; ASI05 / ASI03; ASI09 |
+| `MAN002` | `ALR07` | Manifest tool with wildcard permissions | ASI02 Tool Misuse and Exploitation; ASI03 Identity and Privilege Abuse |
+| `MAN003` | `ALR03` | Manifest tool calling a remote endpoint without authentication | ASI03 Identity and Privilege Abuse; ASI02 Tool Misuse and Exploitation |
+| `PRM001` | `ALR01` | Prompt-injection signatures in prompts in code, YAML, prompt template files, and manifests | ASI01 Agent Goal Hijack |
+| `PRM002` | `ALR01` | User-input placeholder interpolated into a system prompt | ASI01 Agent Goal Hijack |
 
 Rule behavior and known blind spots are documented in [docs/RULES.md](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md).
+
+Every rule belongs to one **gate**: the security outcome it checks, such as `ALR09` Human approval for sensitive actions. Reports show a rule with its gate, for example `AG006 (ALR09)`. SARIF and JSON keep the full rule ID (`AGENTLATCH-AG006`), and suppressions accept either form. [docs/GATES.md](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md) lists every gate, its detectors (static rules and runtime checks such as ALR04), and how it maps to OWASP and the EU AI Act. These mappings are informational, not a compliance claim.
 
 ## OWASP Agentic Top 10 coverage
 
@@ -246,6 +248,7 @@ Every scan report ends with the same ASI01–ASI10 summary and marks the uncover
 | [Agent manifests](https://github.com/AgentLatch/agent-latch/blob/main/docs/agent-manifest.md) | Declaring agents, tools, permissions, and prompts in `agent-manifest.yaml`, and what is checked |
 | [pre-commit and CI](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
 | [Detection rules](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
+| [Gates](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md) | The security outcomes AgentLatch checks, which rules and runtime checks belong to each, and their OWASP and EU AI Act references |
 | [Vulnerable example](https://github.com/AgentLatch/agent-latch/tree/main/examples/vulnerable-agent) | A demo project and the findings it should produce |
 | [Runtime proxy for MCP (preview)](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md) | Install, connecting an app, what is recorded, `import-logs` and `demo`, limits. Optional local SQLite: [Store events in SQLite](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#store-events-in-sqlite) |
 | [MCP gateway](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients, and [live runs through the runtime proxy](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) |

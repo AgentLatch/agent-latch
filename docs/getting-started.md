@@ -247,7 +247,7 @@ agent-latch scan --format json --output report.json
 agent-latch scan --format sarif --output results.sarif
 ```
 
-Each finding includes a rule ID, severity, confidence, file, line, column, OWASP Agentic Top 10 mapping, a message, and evidence. Detected secret values are redacted from evidence. Reports still contain file paths and code context, so review them before sharing.
+Each finding includes a rule ID and its gate (see [GATES.md](GATES.md)), severity, confidence, file, line, column, OWASP Agentic Top 10 mapping, a message, and evidence. Detected secret values are redacted from evidence. Reports still contain file paths and code context, so review them before sharing.
 
 ## Exit codes
 
@@ -261,9 +261,9 @@ When the scan exits `1`, it prints the findings that caused the failure (severit
 
 ```text
 ✗ Failing (exit 1): 3 finding(s) at or above --fail-on high
-  HIGH     AGENTLATCH-MAN001  agent-manifest.yaml:29  High-risk tool without human approval
-  HIGH     AGENTLATCH-MAN002  agent-manifest.yaml:40  Tool grants wildcard permissions
-  HIGH     AGENTLATCH-PY002   tools.py:10             Subprocess uses shell=True
+  HIGH     MAN001 (ALR09)  agent-manifest.yaml:29  High-risk tool without human approval
+  HIGH     MAN002 (ALR07)  agent-manifest.yaml:40  Tool grants wildcard permissions
+  HIGH     PY002 (ALR06)   tools.py:10             Subprocess uses shell=True
 ```
 
 ## Dependency audit
