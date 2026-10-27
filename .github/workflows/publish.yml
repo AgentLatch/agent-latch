@@ -1,0 +1,77 @@
+name: Publish to PyPI
+
+# Publishes with PyPI Trusted Publishing (OIDC), so no API token is stored.
+# Register this workflow as a trusted publisher on pypi.org and test.pypi.org:
+#   owner AgentLatch, repository agent-latch, workflow publish.yml,
+#   environment pypi (PyPI) or testpypi (TestPyPI).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Where to publish a manual run"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check distributions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check that the release tag matches the package version
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          pyproject=$(python -I -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          package=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/agent_latch/__init__.py)
+          echo "tag=$TAG pyproject=$pyproject __init__=$package"
+          test "$TAG" = "v$pyproject" && test "$pyproject" = "$package"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - name: Smoke test the wheel in a clean environment
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/python -m pip install dist/*.whl
+          /tmp/smoke/bin/agent-latch --version
+          /tmp/smoke/bin/agent-latch scan examples/vulnerable-agent --plain --fail-on none
+          /tmp/smoke/bin/agent-latch-runtime --help
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to ${{ github.event_name == 'release' && 'pypi' || inputs.repository }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'release' && 'pypi' || inputs.repository }}
+      url: https://${{ (github.event_name == 'release' || inputs.repository == 'pypi') && 'pypi.org' || 'test.pypi.org' }}/project/agentlatch-security/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: ${{ (github.event_name == 'workflow_dispatch' && inputs.repository == 'testpypi') && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}

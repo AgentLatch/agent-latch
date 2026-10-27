@@ -13,52 +13,72 @@ This guide covers installing AgentLatch, running scans, reading results, and the
 
 ## Install
 
-Requires Python 3.11 or newer. Install AgentLatch in its own virtual environment, not into the project you are scanning.
+Requires Python 3.11 or newer. Install AgentLatch in its own environment, not into the project you are scanning. The package on PyPI is [`agentlatch-security`](https://pypi.org/project/agentlatch-security/), and it installs the `agent-latch` command. The PyPI package named `agentlatch` is a separate project.
 
-### Linux, macOS, and WSL
+### With pipx (recommended)
+
+[pipx](https://pipx.pypa.io) installs command-line tools into their own environment and puts the command on your `PATH`, so `agent-latch` works from any folder:
 
 ```sh
-git clone https://github.com/AgentLatch/agent-latch.git
-cd agent-latch
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
+pipx install agentlatch-security
 ```
 
-On a fresh Ubuntu or WSL install you may first need `sudo apt install -y python3 python3-venv git`.
+### With pip in a virtual environment
+
+Linux, macOS, and WSL:
+
+```sh
+python3 -m venv ~/agentlatch
+source ~/agentlatch/bin/activate
+python -m pip install --upgrade pip
+python -m pip install agentlatch-security
+```
+
+On a fresh Ubuntu or WSL install you may first need `sudo apt install -y python3 python3-venv`.
 
 ### Windows PowerShell
 
 ```powershell
-git clone https://github.com/AgentLatch/agent-latch.git
-Set-Location agent-latch
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+py -3 -m venv $HOME\agentlatch
+& $HOME\agentlatch\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e .
+python -m pip install agentlatch-security
 ```
 
 ### Optional extras
 
 | Extra | Install | Adds |
 |---|---|---|
-| `audit` | `python -m pip install -e ".[audit]"` | `pip-audit`, needed for `--dependencies` |
-| `dev` | `python -m pip install -e ".[dev]"` | `pytest` and `ruff` for contributing |
-| `runtime` | `python -m pip install -e ".[runtime]"` | FastMCP, needed for the [runtime proxy](runtime.md) (preview) |
+| `audit` | `python -m pip install "agentlatch-security[audit]"` | `pip-audit`, needed for `--dependencies` |
+| `runtime` | `python -m pip install "agentlatch-security[runtime]"` | FastMCP, needed for the [runtime proxy](runtime.md) (preview) |
+| `dev` | `python -m pip install -e ".[dev]"` from a clone | `pytest` and `ruff` for contributing |
+
+With pipx, use `pipx install "agentlatch-security[audit]"`, or `pipx inject agentlatch-security pip-audit` to add it later.
+
+### From source
+
+To run the latest unreleased code or to contribute:
+
+```sh
+git clone https://github.com/AgentLatch/agent-latch.git
+cd agent-latch
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev,audit,runtime]"
+```
 
 ### Using AgentLatch from any folder
 
-The `agent-latch` command is available wherever its virtual environment is active. In a new terminal:
+pipx puts `agent-latch` on your `PATH`. With a virtual environment, the command is available wherever that environment is active. In a new terminal:
 
 ```sh
-source ~/path/to/agent-latch/.venv/bin/activate
+source ~/agentlatch/bin/activate
 ```
 
 Or skip activation with an alias in `~/.bashrc`:
 
 ```sh
-echo 'alias agent-latch="$HOME/path/to/agent-latch/.venv/bin/agent-latch"' >> ~/.bashrc
+echo 'alias agent-latch="$HOME/agentlatch/bin/agent-latch"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -249,7 +269,7 @@ When the scan exits `1`, it prints the findings that caused the failure (severit
 ## Dependency audit
 
 ```sh
-python -m pip install -e ".[audit]"   # once
+python -m pip install "agentlatch-security[audit]"   # once
 agent-latch scan ~/projects/my-agent --dependencies
 ```
 

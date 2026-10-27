@@ -11,14 +11,21 @@ To the app, the proxy looks like an MCP server. To the real server, it looks lik
 
 ## Install
 
-Requires Python 3.11 or newer. Install it in its own virtual environment, pinned to a release tag. AgentLatch is **not on PyPI**, so don't run `pip install agent-latch`: a package with that name on PyPI would not be ours.
+Requires Python 3.11 or newer. Install it from PyPI in its own environment, with the `runtime` extra. The package is `agentlatch-security`. The PyPI package named `agentlatch` is a separate project.
 
-Linux, macOS and WSL:
+With [pipx](https://pipx.pypa.io):
+
+```sh
+pipx install "agentlatch-security[runtime]"
+agent-latch-runtime proxy --help
+```
+
+Or in a virtual environment on Linux, macOS and WSL:
 
 ```sh
 python3 -m venv ~/agentlatch-runtime
 source ~/agentlatch-runtime/bin/activate
-python -m pip install "agent-latch[runtime] @ git+https://github.com/AgentLatch/agent-latch.git@v0.3.0"
+python -m pip install "agentlatch-security[runtime]"
 agent-latch-runtime proxy --help
 ```
 
@@ -27,7 +34,7 @@ Windows PowerShell:
 ```powershell
 py -3 -m venv $HOME\agentlatch-runtime
 & $HOME\agentlatch-runtime\Scripts\Activate.ps1
-python -m pip install "agent-latch[runtime] @ git+https://github.com/AgentLatch/agent-latch.git@v0.3.0"
+python -m pip install "agentlatch-security[runtime]"
 agent-latch-runtime proxy --help
 ```
 
