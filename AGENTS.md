@@ -101,6 +101,8 @@ action.yml                     # composite GitHub Action (isolated venv, SARIF p
 .pre-commit-hooks.yaml         # pre-commit hook definition (`agent-latch scan --fail-on high`)
 .agent-latch-ignore            # suppressions for the repo's own self-scan
 .github/workflows/tests.yml    # CI: tests + ruff (py3.11–3.14), runtime tests, action smoke test, self-scan
+.github/workflows/publish.yml  # PyPI release via Trusted Publishing (on GitHub release; manual run → TestPyPI)
+MANIFEST.in                    # sdist extras (test fixtures the shipped tests read)
 llms.txt                       # LLM-oriented project summary
 ```
 
@@ -224,7 +226,9 @@ Before building a check, look at how established open-source tools handle it. Bo
 ## Releasing
 
 - Bump the version in **both** `pyproject.toml` and `src/agent_latch/__init__.py`.
-- Add `docs/release-notes/vX.Y.Z.md`, and update version references in `README.md`, `docs/ci.md`, and `llms.txt` (for example `AgentLatch/agent-latch@vX.Y.Z`).
+- Add `docs/release-notes/vX.Y.Z.md`, and update version references in `README.md`, `docs/ci.md`, and `llms.txt` (for example `AgentLatch/agent-latch@vX.Y.Z` and `agent-latch==X.Y.Z`).
+- The package is published to PyPI as `agent-latch` by `.github/workflows/publish.yml` using Trusted Publishing (no API token). Run it manually first to publish to TestPyPI and check `pipx install` from there. Publishing a GitHub release tagged `vX.Y.Z` then uploads to PyPI; the workflow fails if the tag does not match both version files.
+- PyPI versions cannot be replaced or reused, even after deletion, so fix problems with a new patch release.
 
 ## Documentation map
 

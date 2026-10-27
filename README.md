@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/agentlatch-logo-dark.png">
-    <img alt="AgentLatch logo" src="docs/assets/brand/agentlatch-logo-light.png" width="440">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/brand/agentlatch-logo-dark.png">
+    <img alt="AgentLatch logo" src="https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/brand/agentlatch-logo-light.png" width="440">
   </picture>
 </p>
 
@@ -9,7 +9,7 @@
 
 [![CI](https://github.com/AgentLatch/agent-latch/actions/workflows/tests.yml/badge.svg)](https://github.com/AgentLatch/agent-latch/actions/workflows/tests.yml)
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-AgentLatch%20scan-blue?logo=github)](https://github.com/marketplace/actions/agentlatch-scan)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/AgentLatch/agent-latch/blob/main/LICENSE)
 [![Demo video](https://img.shields.io/badge/Demo-YouTube-red?logo=youtube)](https://youtu.be/4FrRWlApDpo)
 
 **Find selected security risks in AI-agent projects before you run them, and see what your agent does with its MCP tools while it runs.** AgentLatch is an open-source, local-first AI agent security toolkit with two parts:
@@ -17,7 +17,7 @@
 - **Static scanner** (`agent-latch scan`): checks Python agent code, agent manifests (tools, permissions, authentication) and prompt templates, optionally audits pinned Python dependencies, and reports evidence in your terminal, JSON or SARIF. Run it from the command line, as a pre-commit hook or as a GitHub Action.
 - **Runtime proxy for MCP, preview** (`agent-latch-runtime`): sits between an AI agent and a Model Context Protocol (MCP) server and records every tool list, tool call, result and prompt, with secrets masked. Monitor only: it never blocks or changes traffic.
 
-![Example AgentLatch scan showing detected security findings](docs/assets/gent-latch-scan-example.png)
+![Example AgentLatch scan showing detected security findings](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/gent-latch-scan-example.png)
 
 > **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs one preview gate, ALR04, on MCP tool definitions. It reports findings and does not block calls.
 
@@ -39,14 +39,20 @@
 
 ## Quick start: scan an agent project
 
-Requires Python 3.11+. Install AgentLatch in its own virtual environment (Windows: see [Getting started](docs/getting-started.md#windows-powershell)):
+Requires Python 3.11+. Install AgentLatch from PyPI with [pipx](https://pipx.pypa.io), which keeps it in its own environment (Windows and other options: see [Getting started](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md#install)):
 
 ```sh
-git clone https://github.com/AgentLatch/agent-latch.git
-cd agent-latch
-python3 -m venv .venv && source .venv/bin/activate
-python -m pip install -e .
+pipx install agent-latch
 ```
+
+Or install it into a virtual environment with pip:
+
+```sh
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install agent-latch
+```
+
+The package name is `agent-latch`, with a hyphen. A package called `agentlatch` on PyPI is a separate project, not AgentLatch.
 
 Scan an agent project:
 
@@ -56,15 +62,16 @@ agent-latch scan /path/to/my-agent
 
 No configuration or agent manifest is needed: every folder and text file is scanned. Suppressions inside the scanned project (`.agent-latch-ignore`, inline ignore comments) are not applied unless you add `--project-ignores`, so a project you scan cannot hide its own findings.
 
-Try it on the bundled, deliberately insecure example:
+Try it on the deliberately insecure example in this repository:
 
 ```sh
-agent-latch scan examples/vulnerable-agent
+git clone https://github.com/AgentLatch/agent-latch.git
+agent-latch scan agent-latch/examples/vulnerable-agent
 ```
 
 Watch the demo: scanning the example and failing CI with `--fail-on high`.
 
-[![AgentLatch demo video: scanning a vulnerable AI agent](docs/assets/demo-video-thumbnail.png)](https://youtu.be/4FrRWlApDpo)
+[![AgentLatch demo video: scanning a vulnerable AI agent](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/demo-video-thumbnail.png)](https://youtu.be/4FrRWlApDpo)
 
 More ways to run it:
 
@@ -79,7 +86,7 @@ agent-latch scan . --format sarif --output results.sarif
 agent-latch --interactive                            # guided mode
 ```
 
-Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-commit-hook) or the GitHub Action ([setup guide](docs/ci.md#github-actions), [Marketplace listing](https://github.com/marketplace/actions/agentlatch-scan)):
+Block risky changes automatically with the [pre-commit hook](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md#pre-commit-hook) or the GitHub Action ([setup guide](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md#github-actions), [Marketplace listing](https://github.com/marketplace/actions/agentlatch-scan)):
 
 ```yaml
 - uses: AgentLatch/agent-latch@v0.3.0
@@ -89,7 +96,7 @@ Block risky changes automatically with the [pre-commit hook](docs/ci.md#pre-comm
     # project-ignores: "true"   # apply your repo's .agent-latch-ignore (see the note below)
 ```
 
-> **Upgrading from v0.1.0:** the project's own `.agent-latch-ignore`, `pyproject.toml` excludes, and inline ignore comments are no longer applied by default. If your repository relies on them, add `project-ignores: "true"` to the Action or `--project-ignores` on the command line. See the [v0.2.0 release notes](docs/release-notes/v0.2.0.md).
+> **Upgrading from v0.1.0:** the project's own `.agent-latch-ignore`, `pyproject.toml` excludes, and inline ignore comments are no longer applied by default. If your repository relies on them, add `project-ignores: "true"` to the Action or `--project-ignores` on the command line. See the [v0.2.0 release notes](https://github.com/AgentLatch/agent-latch/blob/main/docs/release-notes/v0.2.0.md).
 
 ## How it works
 
@@ -121,13 +128,13 @@ The scanner never imports or runs the code it checks. The proxy passes every MCP
 Install with the `runtime` extra, which adds FastMCP:
 
 ```sh
-python -m pip install -e ".[runtime]"
+pipx install "agent-latch[runtime]"      # or: python -m pip install "agent-latch[runtime]"
 agent-latch-runtime demo
 ```
 
 `demo` starts a bundled synthetic MCP server behind the real proxy, lists its tools, calls three of them (one returns a fake credential, one fails), gets a prompt, then imports the logs. This is real output:
 
-![Output of agent-latch-runtime demo: ten MCP events, from tools/list to prompts/get, each joined with its payload](docs/assets/runtime-demo.svg)
+![Output of agent-latch-runtime demo: ten MCP events, from tools/list to prompts/get, each joined with its payload](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/runtime-demo.svg)
 
 The files land in `runtime-logs/demo/` (git-ignored). The fake credential appears only as `[REDACTED]` in every one of them.
 
@@ -144,7 +151,7 @@ agent-latch-runtime proxy --trace runtime-logs/trace.jsonl --payloads runtime-lo
 agent-latch-runtime import-logs
 ```
 
-Run both from the repository root, with the repository virtualenv active (`source .venv/bin/activate`). `mcp-server/.venv` does not provide `agent-latch-runtime`.
+Run both from the same folder, in the environment where AgentLatch is installed. `mcp-server/.venv` does not provide `agent-latch-runtime`.
 
 To also keep a queryable copy, name a local SQLite file. That flag is the choice of store. Leave it off and nothing is written except the CSV and JSONL files. Nothing is uploaded.
 
@@ -152,7 +159,7 @@ To also keep a queryable copy, name a local SQLite file. That flag is the choice
 agent-latch-runtime import-logs --database runtime-logs/runtime.db
 ```
 
-SQLite is the first store. The importer calls it through a small `EventStore` interface, so a later destination can be selected the same way without becoming part of the default install. Details: [Store events in SQLite](docs/runtime.md#store-events-in-sqlite).
+SQLite is the first store. The importer calls it through a small `EventStore` interface, so a later destination can be selected the same way without becoming part of the default install. Details: [Store events in SQLite](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#store-events-in-sqlite).
 
 ```mermaid
 sequenceDiagram
@@ -171,9 +178,9 @@ sequenceDiagram
 
 Step-by-step guides with expected output at each step:
 
-- [Connect an app](docs/runtime.md#connect-an-app) (Claude Code, Claude Desktop, Cursor, or any MCP config)
-- [Live run with a CrewAI agent, plus 20 test scenarios](mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) (normal calls, errors, fake secrets, SSRF attempts, injection-shaped input)
-- [Claude Desktop on Windows with the MCP server in WSL](mcp-server/SETUP.md#4b-claude-desktop-on-windows-with-the-gateway-in-wsl)
+- [Connect an app](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#connect-an-app) (Claude Code, Claude Desktop, Cursor, or any MCP config)
+- [Live run with a CrewAI agent, plus 20 test scenarios](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) (normal calls, errors, fake secrets, SSRF attempts, injection-shaped input)
+- [Claude Desktop on Windows with the MCP server in WSL](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md#4b-claude-desktop-on-windows-with-the-gateway-in-wsl)
 
 ### What the proxy records
 
@@ -186,7 +193,7 @@ Step-by-step guides with expected output at each step:
 
 The **trace** keeps argument names, sizes, SHA-256 hashes and a short secret-masked excerpt, never raw values. The opt-in **payloads** file keeps full argument values and tool output, secret-masked and cut to `--payload-max-chars`. `import-logs` joins the two into one event per message.
 
-**Not recorded yet:** `resources/list` and `resources/read`, `initialize`, `sampling/createMessage`, notifications (including `tools/list_changed`), image, audio and embedded-resource content in tool results, and a failed `prompts/get`. These pass through the proxy unchanged with no record. The proxy also never sees the user's chat with the model, an app's built-in tools, or servers not routed through it. Details: [docs/runtime.md](docs/runtime.md#limits).
+**Not recorded yet:** `resources/list` and `resources/read`, `initialize`, `sampling/createMessage`, notifications (including `tools/list_changed`), image, audio and embedded-resource content in tool results, and a failed `prompts/get`. These pass through the proxy unchanged with no record. The proxy also never sees the user's chat with the model, an app's built-in tools, or servers not routed through it. Details: [docs/runtime.md](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#limits).
 
 ## What the scanner checks today
 
@@ -210,7 +217,7 @@ The **trace** keeps argument names, sizes, SHA-256 hashes and a short secret-mas
 | `AGENTLATCH-PRM001` | Prompt-injection signatures in prompts in code, YAML, prompt template files, and manifests | ASI01 Agent Goal Hijack |
 | `AGENTLATCH-PRM002` | User-input placeholder interpolated into a system prompt | ASI01 Agent Goal Hijack |
 
-Rule behavior and known blind spots are documented in [docs/RULES.md](docs/RULES.md).
+Rule behavior and known blind spots are documented in [docs/RULES.md](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md).
 
 ## OWASP Agentic Top 10 coverage
 
@@ -235,13 +242,13 @@ Every scan report ends with the same ASI01–ASI10 summary and marks the uncover
 
 | Guide | Covers |
 |---|---|
-| [Getting started](docs/getting-started.md) | Install on Linux, macOS, WSL, and Windows; scanning; options; [ignoring false positives with `.agent-latch-ignore`](docs/getting-started.md#ignoring-false-positives-and-known-findings); output formats; exit codes; dependency audit; troubleshooting |
-| [Agent manifests](docs/agent-manifest.md) | Declaring agents, tools, permissions, and prompts in `agent-manifest.yaml`, and what is checked |
-| [pre-commit and CI](docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
-| [Detection rules](docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
-| [Vulnerable example](examples/vulnerable-agent) | A demo project and the findings it should produce |
-| [Runtime proxy for MCP (preview)](docs/runtime.md) | Install, connecting an app, what is recorded, `import-logs` and `demo`, limits. Optional local SQLite: [Store events in SQLite](docs/runtime.md#store-events-in-sqlite) |
-| [MCP gateway](mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients, and [live runs through the runtime proxy](mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) |
+| [Getting started](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md) | Install on Linux, macOS, WSL, and Windows; scanning; options; [ignoring false positives with `.agent-latch-ignore`](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md#ignoring-false-positives-and-known-findings); output formats; exit codes; dependency audit; troubleshooting |
+| [Agent manifests](https://github.com/AgentLatch/agent-latch/blob/main/docs/agent-manifest.md) | Declaring agents, tools, permissions, and prompts in `agent-manifest.yaml`, and what is checked |
+| [pre-commit and CI](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
+| [Detection rules](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
+| [Vulnerable example](https://github.com/AgentLatch/agent-latch/tree/main/examples/vulnerable-agent) | A demo project and the findings it should produce |
+| [Runtime proxy for MCP (preview)](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md) | Install, connecting an app, what is recorded, `import-logs` and `demo`, limits. Optional local SQLite: [Store events in SQLite](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#store-events-in-sqlite) |
+| [MCP gateway](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients, and [live runs through the runtime proxy](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) |
 
 ## Why AgentLatch?
 
@@ -259,7 +266,7 @@ These layers will remain clearly distinguished: detecting a risky pattern is not
 ## Reports and data handling
 
 - Scans run locally. They do not call an LLM or upload your source code.
-- The one exception is the opt-in dependency audit (`--dependencies`), which sends package names and versions to an advisory service. See [Dependency audit](docs/getting-started.md#dependency-audit).
+- The one exception is the opt-in dependency audit (`--dependencies`), which sends package names and versions to an advisory service. See [Dependency audit](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md#dependency-audit).
 - Detected secret values are redacted from evidence, but reports still include paths, line numbers, and code context. Review them before sharing.
 - Every folder and every text file under the target is scanned, and no manifest is required. Only `.git`, installed environments (a folder with `pyvenv.cfg`, or an installed `node_modules`), symlinks, binary files, and files over 1 MB are skipped.
 - The runtime proxy and importer write only to local files and send nothing anywhere. Their logs can hold tool arguments and output: secrets are masked by pattern, which can miss unusual formats, so keep `runtime-logs/` local and private (files are created with mode `0600`). `--database` adds another local file, SQLite, with the same rule: it can hold payloads, it is created with mode `0600` on macOS and Linux, and it is written only when you pass the flag.
@@ -282,7 +289,7 @@ Install AgentLatch and run `agent-latch scan /path/to/agent`. It checks Python a
 
 ### How do I monitor the MCP tool calls my AI agent makes?
 
-Put `agent-latch-runtime proxy` in front of the MCP server, either in your app's MCP config or as an HTTP proxy, and run `agent-latch-runtime import-logs` next to it from the repository root. Every tool list, tool call, result and prompt is recorded with secrets masked, and shown as one event per message. Add `--database runtime-logs/runtime.db` when you want those events in a local SQLite file as well. Run `agent-latch-runtime demo` to see the whole flow first. See [Runtime monitoring for MCP](#runtime-monitoring-for-mcp-preview).
+Put `agent-latch-runtime proxy` in front of the MCP server, either in your app's MCP config or as an HTTP proxy, and run `agent-latch-runtime import-logs` next to it from the same folder. Every tool list, tool call, result and prompt is recorded with secrets masked, and shown as one event per message. Add `--database runtime-logs/runtime.db` when you want those events in a local SQLite file as well. Run `agent-latch-runtime demo` to see the whole flow first. See [Runtime monitoring for MCP](#runtime-monitoring-for-mcp-preview).
 
 ### Can AgentLatch block a dangerous MCP tool call?
 
@@ -298,7 +305,7 @@ The source rules work on any Python code. Framework-specific checks cover CrewAI
 
 ### How do I check AI agent security in CI or GitHub Actions?
 
-Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) (`uses: AgentLatch/agent-latch@v0.3.0`) to scan every push and pull request and show findings in GitHub code scanning, or the [pre-commit hook](docs/ci.md#pre-commit-hook) to block risky commits. Any other CI can run `agent-latch scan --fail-on high`, which exits with code 1 when high-severity findings exist.
+Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) (`uses: AgentLatch/agent-latch@v0.3.0`) to scan every push and pull request and show findings in GitHub code scanning, or the [pre-commit hook](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md#pre-commit-hook) to block risky commits. Any other CI can run `agent-latch scan --fail-on high`, which exits with code 1 when high-severity findings exist.
 
 ### Does AgentLatch upload my code or call an LLM?
 
@@ -310,7 +317,7 @@ Each finding lists the related categories, for example ASI01 Agent Goal Hijack f
 
 ### How do I handle false positives?
 
-List accepted findings in a [`.agent-latch-ignore`](docs/getting-started.md#ignoring-false-positives-and-known-findings) file, by path, rule, or exact line, or add an inline `# agent-latch: ignore[RULE]` comment, and scan with `--project-ignores`. These are off by default so a project you scan cannot hide its own findings. Every report states how many findings were suppressed.
+List accepted findings in a [`.agent-latch-ignore`](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md#ignoring-false-positives-and-known-findings) file, by path, rule, or exact line, or add an inline `# agent-latch: ignore[RULE]` comment, and scan with `--project-ignores`. These are off by default so a project you scan cannot hide its own findings. Every report states how many findings were suppressed.
 
 ### Does a clean scan mean my agent is secure?
 
@@ -319,12 +326,14 @@ No. AgentLatch runs a focused set of static checks. A clean scan means only that
 ## Development and tests
 
 ```sh
+git clone https://github.com/AgentLatch/agent-latch.git && cd agent-latch
+python3 -m venv .venv && source .venv/bin/activate
 python -m pip install -e ".[dev,audit,runtime]"
 python -m pytest
 ruff check .
 ```
 
-Tests use synthetic fixtures and mock the dependency-audit subprocess, so they make no network calls. Runtime tests that need FastMCP are skipped without the `runtime` extra. See [CONTRIBUTING.md](CONTRIBUTING.md) for writing new rules.
+Tests use synthetic fixtures and mock the dependency-audit subprocess, so they make no network calls. Runtime tests that need FastMCP are skipped without the `runtime` extra. See [CONTRIBUTING.md](https://github.com/AgentLatch/agent-latch/blob/main/CONTRIBUTING.md) for writing new rules.
 
 ## Roadmap
 
@@ -339,7 +348,7 @@ The project will not claim to be an industry standard or a universal security gu
 
 ## Contributing and security reports
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and rule authoring, and [SECURITY.md](SECURITY.md) for responsible vulnerability reporting. Please submit synthetic test fixtures rather than real secrets or confidential source code.
+See [CONTRIBUTING.md](https://github.com/AgentLatch/agent-latch/blob/main/CONTRIBUTING.md) for development and rule authoring, and [SECURITY.md](https://github.com/AgentLatch/agent-latch/blob/main/SECURITY.md) for responsible vulnerability reporting. Please submit synthetic test fixtures rather than real secrets or confidential source code.
 
 ## Name and standards references
 

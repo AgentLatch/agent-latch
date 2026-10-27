@@ -128,7 +128,7 @@ AgentLatch is a normal command-line tool, so any CI system can run it. Fail on t
 agent-latch:
   image: python:3.12
   script:
-    - pip install "git+https://github.com/AgentLatch/agent-latch.git@v0.3.0"
+    - pip install "agent-latch==0.3.0"
     - agent-latch scan --fail-on high --plain --project-ignores
     - agent-latch scan --format sarif --output agent-latch.sarif
   artifacts:

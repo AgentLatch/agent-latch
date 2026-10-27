@@ -4,7 +4,7 @@
 
 Key facts:
 
-- Install: clone https://github.com/AgentLatch/agent-latch, then `python -m pip install -e .` (Python 3.11+).
+- Install: `pipx install agent-latch` or `python -m pip install agent-latch` (Python 3.11+); add the `[runtime]` extra for the MCP proxy and `[audit]` for `--dependencies`. The PyPI package is `agent-latch`; `agentlatch` is an unrelated project.
 - Scan: `agent-latch scan /path/to/agent`; audit a manifest with `--config agent-manifest.yaml`; fail CI with `--fail-on high`; a manifest is optional, and every folder and text file is scanned. Suppressions inside the scanned project (`.agent-latch-ignore`, inline ignore comments) apply only with `--project-ignores`.
 - GitHub Action: `uses: AgentLatch/agent-latch@v0.3.0` (https://github.com/marketplace/actions/agentlatch-scan).
 - Frameworks with specific checks: CrewAI, LangChain, LangGraph. Generic rules apply to any Python code. JavaScript/TypeScript are not scanned.
