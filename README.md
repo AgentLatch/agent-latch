@@ -42,17 +42,17 @@
 Requires Python 3.11+. Install AgentLatch from PyPI with [pipx](https://pipx.pypa.io), which keeps it in its own environment (Windows and other options: see [Getting started](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md#install)):
 
 ```sh
-pipx install agent-latch
+pipx install agentlatch-security
 ```
 
 Or install it into a virtual environment with pip:
 
 ```sh
 python3 -m venv .venv && source .venv/bin/activate
-python -m pip install agent-latch
+python -m pip install agentlatch-security
 ```
 
-The package name is `agent-latch`, with a hyphen. A package called `agentlatch` on PyPI is a separate project, not AgentLatch.
+On PyPI, AgentLatch is published as `agentlatch-security`. It installs the `agent-latch` and `agent-latch-runtime` commands. The PyPI package named `agentlatch` is a separate project.
 
 Scan an agent project:
 
@@ -128,7 +128,7 @@ The scanner never imports or runs the code it checks. The proxy passes every MCP
 Install with the `runtime` extra, which adds FastMCP:
 
 ```sh
-pipx install "agent-latch[runtime]"      # or: python -m pip install "agent-latch[runtime]"
+pipx install "agentlatch-security[runtime]"      # or: python -m pip install "agentlatch-security[runtime]"
 agent-latch-runtime demo
 ```
 

@@ -187,7 +187,7 @@ def _proxy(args: argparse.Namespace) -> int:
     except ImportError:
         print(
             "agent-latch-runtime: FastMCP is missing. Install AgentLatch with the runtime extra,"
-            ' for example python -m pip install "agent-latch[runtime]" (see docs/runtime.md)',
+            ' for example python -m pip install "agentlatch-security[runtime]" (see docs/runtime.md)',
             file=sys.stderr,
         )
         return 2
@@ -279,7 +279,7 @@ def _demo(args: argparse.Namespace) -> int:
     except ImportError:
         print(
             "agent-latch-runtime: FastMCP is missing. Install AgentLatch with the runtime extra,"
-            ' for example python -m pip install "agent-latch[runtime]" (see docs/runtime.md)',
+            ' for example python -m pip install "agentlatch-security[runtime]" (see docs/runtime.md)',
             file=sys.stderr,
         )
         return 2

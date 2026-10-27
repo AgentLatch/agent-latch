@@ -13,14 +13,14 @@ This guide covers installing AgentLatch, running scans, reading results, and the
 
 ## Install
 
-Requires Python 3.11 or newer. Install AgentLatch in its own environment, not into the project you are scanning. The package on PyPI is [`agent-latch`](https://pypi.org/project/agent-latch/), with a hyphen. A package called `agentlatch` is a separate project.
+Requires Python 3.11 or newer. Install AgentLatch in its own environment, not into the project you are scanning. The package on PyPI is [`agentlatch-security`](https://pypi.org/project/agentlatch-security/), and it installs the `agent-latch` command. The PyPI package named `agentlatch` is a separate project.
 
 ### With pipx (recommended)
 
 [pipx](https://pipx.pypa.io) installs command-line tools into their own environment and puts the command on your `PATH`, so `agent-latch` works from any folder:
 
 ```sh
-pipx install agent-latch
+pipx install agentlatch-security
 ```
 
 ### With pip in a virtual environment
@@ -31,7 +31,7 @@ Linux, macOS, and WSL:
 python3 -m venv ~/agentlatch
 source ~/agentlatch/bin/activate
 python -m pip install --upgrade pip
-python -m pip install agent-latch
+python -m pip install agentlatch-security
 ```
 
 On a fresh Ubuntu or WSL install you may first need `sudo apt install -y python3 python3-venv`.
@@ -42,18 +42,18 @@ On a fresh Ubuntu or WSL install you may first need `sudo apt install -y python3
 py -3 -m venv $HOME\agentlatch
 & $HOME\agentlatch\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install agent-latch
+python -m pip install agentlatch-security
 ```
 
 ### Optional extras
 
 | Extra | Install | Adds |
 |---|---|---|
-| `audit` | `python -m pip install "agent-latch[audit]"` | `pip-audit`, needed for `--dependencies` |
-| `runtime` | `python -m pip install "agent-latch[runtime]"` | FastMCP, needed for the [runtime proxy](runtime.md) (preview) |
+| `audit` | `python -m pip install "agentlatch-security[audit]"` | `pip-audit`, needed for `--dependencies` |
+| `runtime` | `python -m pip install "agentlatch-security[runtime]"` | FastMCP, needed for the [runtime proxy](runtime.md) (preview) |
 | `dev` | `python -m pip install -e ".[dev]"` from a clone | `pytest` and `ruff` for contributing |
 
-With pipx, use `pipx install "agent-latch[audit]"`, or `pipx inject agent-latch pip-audit` to add it later.
+With pipx, use `pipx install "agentlatch-security[audit]"`, or `pipx inject agentlatch-security pip-audit` to add it later.
 
 ### From source
 
@@ -269,7 +269,7 @@ When the scan exits `1`, it prints the findings that caused the failure (severit
 ## Dependency audit
 
 ```sh
-python -m pip install "agent-latch[audit]"   # once
+python -m pip install "agentlatch-security[audit]"   # once
 agent-latch scan ~/projects/my-agent --dependencies
 ```
 

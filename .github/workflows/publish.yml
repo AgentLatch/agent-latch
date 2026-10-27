@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: ${{ github.event_name == 'release' && 'pypi' || inputs.repository }}
-      url: https://${{ (github.event_name == 'release' || inputs.repository == 'pypi') && 'pypi.org' || 'test.pypi.org' }}/project/agent-latch/
+      url: https://${{ (github.event_name == 'release' || inputs.repository == 'pypi') && 'pypi.org' || 'test.pypi.org' }}/project/agentlatch-security/
     permissions:
       id-token: write
     steps:
