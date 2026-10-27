@@ -13,7 +13,7 @@ Guidance for AI coding agents (and humans) working in this repository.
 
 It reports findings as a terminal table / plain text, JSON, or SARIF, and runs as a CLI, a pre-commit hook, or a composite GitHub Action. Findings map to the OWASP Top 10 for Agentic Applications (informational only).
 
-Status: **early proof of concept (v0.3.0)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
+Status: **early proof of concept (v0.4.0)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
 
 ## Design principle: the scanned project is untrusted
 
