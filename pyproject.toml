@@ -53,10 +53,10 @@ agent-latch = "agent_latch.cli:main"
 agent-latch-runtime = "agent_latch.runtime.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9", "ruff>=0.8,<1"]
+dev = ["pytest>=9,<10", "ruff>=0.8,<1"]
 audit = ["pip-audit>=2.10,<3"]
 # Runtime checks for MCP tool traffic. Same pin as mcp-server/requirements.txt.
-runtime = ["fastmcp==4.1.0"]
+runtime = ["fastmcp==4.1.4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
