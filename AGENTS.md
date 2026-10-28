@@ -111,6 +111,7 @@ action.yml                     # composite GitHub Action (isolated venv, SARIF p
 .pre-commit-hooks.yaml         # pre-commit hook definition (`agent-latch scan --fail-on high`)
 .agent-latch-ignore            # suppressions for the repo's own self-scan
 .github/workflows/tests.yml    # CI: tests + ruff (py3.11–3.14), runtime tests, action smoke test, self-scan
+.github/workflows/code-quality.yml # CI: ruff check across the repo, npm audit --audit-level=high for web/
 .github/workflows/publish.yml  # PyPI release via Trusted Publishing (on GitHub release; manual run → TestPyPI)
 MANIFEST.in                    # sdist extras (test fixtures the shipped tests read)
 llms.txt                       # LLM-oriented project summary
