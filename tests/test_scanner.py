@@ -324,6 +324,39 @@ def test_fail_on_summary_goes_to_stderr_when_writing_sarif(tmp_path: Path, capsy
     json.loads(output.read_text(encoding="utf-8"))
 
 
+def test_report_write_failure_to_a_directory_reports_an_error(tmp_path: Path, capsys) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "agent.py").write_text("x = 1\n", encoding="utf-8")
+    output = tmp_path / "reports"
+    output.mkdir()
+
+    exit_code = cli.main([str(project), "--format", "json", "--output", str(output)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert f"Error: could not write the json report to {output}" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_report_write_failure_when_parent_component_is_a_file(tmp_path: Path, capsys) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    blocker = project / "blocker.py"
+    blocker.write_text("x = 1\n", encoding="utf-8")
+    output = blocker / "report.json"
+
+    exit_code = cli.main([str(project), "--output", str(output)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert f"Error: could not write the text report to {output}" in captured.err
+    assert "Traceback" not in captured.err
+    assert not output.exists()
+
+
 def test_scan_auto_discovers_manifest_in_target(tmp_path: Path, capsys) -> None:
     _write_manifest(tmp_path, "tools:\n  - name: files\n    permissions: ['*']\n")
 

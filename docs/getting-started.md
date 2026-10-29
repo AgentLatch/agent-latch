@@ -255,7 +255,7 @@ Each finding includes a rule ID and its gate (see [GATES.md](GATES.md)), severit
 |---|---|
 | `0` | Scan completed and nothing met the `--fail-on` threshold. |
 | `1` | At least one finding at or above `--fail-on`. Unknown-severity dependency findings also count. |
-| `2` | Scan error: missing target, missing or invalid manifest, invalid `.agent-latch-ignore` or `[tool.agent-latch]` settings, or dependency audit failure. |
+| `2` | Scan error: missing target, missing or invalid manifest, invalid `.agent-latch-ignore` or `[tool.agent-latch]` settings, dependency audit failure, or a report that could not be written to the `--output` destination. |
 
 When the scan exits `1`, it prints the findings that caused the failure (severity, rule, `path:line`, and title) to stderr, so JSON or SARIF on stdout stays valid:
 
