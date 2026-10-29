@@ -476,8 +476,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.output:
         output = Path(args.output).expanduser()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(report + "\n", encoding="utf-8")
+        try:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(report + "\n", encoding="utf-8")
+        except OSError as exc:
+            print(
+                f"Error: could not write the {args.format} report to {output}: {exc}",
+                file=sys.stderr,
+            )
+            return 2
         print(f"Wrote {args.format} report with {len(findings)} finding(s) to {output}", file=sys.stderr)
     else:
         print(report)
