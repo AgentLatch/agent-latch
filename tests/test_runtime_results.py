@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 
 from agent_latch.cli import main
+from agent_latch.runtime.ledger import FileAnchor, Ledger, point_for
+from agent_latch.runtime.trace import TraceLog
 
 
 def _csv(path: Path, rows: list[dict]) -> None:
@@ -99,3 +101,64 @@ def test_runtime_result_fail_on_and_missing_file(tmp_path: Path, capsys) -> None
     missing = tmp_path / "nope.csv"
     assert main([str(tmp_path), "--runtime-result", str(missing)]) == 2
     assert "does not exist" in capsys.readouterr().err
+
+
+# ------------------------------------------------------------------- audit trail
+def _sealed(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A trace sealed into a ledger and anchored, the way an operator would."""
+    trace, ledger = tmp_path / "trace.jsonl", tmp_path / "trace.ledger.jsonl"
+    log = TraceLog(trace, summary=None, ledger=Ledger(ledger))
+    for index in range(1, 3):
+        log.write({
+            "session_id": "s-1", "request_id": f"r-{index}", "server": "filesystem",
+            "method": "tools/call", "stage": "request", "tool": "read_file",
+        })
+    log.close()
+    anchor = tmp_path / "anchors.jsonl"
+    head = Ledger.read_head(ledger)
+    assert head is not None
+    FileAnchor(anchor).publish(
+        point_for(ledger, seq=head.seq, digest=head.digest, records=head.seq)
+    )
+    return trace, ledger, anchor
+
+
+def test_runtime_result_leads_with_an_intact_trail(tmp_path: Path, capsys) -> None:
+    _, ledger, anchor = _sealed(tmp_path)
+    csv_path = tmp_path / "gate-results.csv"
+    _csv(csv_path, [])
+
+    assert main([str(tmp_path), "--runtime-result", str(csv_path), "--plain",
+                 "--ledger", str(ledger), "--anchor", str(anchor)]) == 0
+    report = capsys.readouterr().out
+    assert report.startswith("AUDIT TRAIL INTACT")
+    assert "No runtime findings" in report
+
+
+def test_a_tampered_trail_fails_even_with_fail_on_none(tmp_path: Path, capsys) -> None:
+    _, ledger, anchor = _sealed(tmp_path)
+    lines = ledger.read_text(encoding="utf-8").splitlines()
+    edited = json.loads(lines[0])
+    edited["stage"] = "response"
+    lines[0] = json.dumps(edited)
+    ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    csv_path = tmp_path / "gate-results.csv"
+    _csv(csv_path, [])
+
+    code = main([str(tmp_path), "--runtime-result", str(csv_path), "--plain",
+                 "--ledger", str(ledger), "--anchor", str(anchor), "--fail-on", "none"])
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out.startswith("AUDIT TRAIL TAMPERED")
+    assert "the runtime log cannot be trusted" in captured.err
+
+
+def test_a_missing_ledger_is_a_usage_error(tmp_path: Path, capsys) -> None:
+    csv_path = tmp_path / "gate-results.csv"
+    _csv(csv_path, [])
+    code = main([str(tmp_path), "--runtime-result", str(csv_path), "--plain",
+                 "--ledger", str(tmp_path / "nope.jsonl")])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "no audit ledger" in captured.err
+    assert "NO AUDIT TRAIL" in captured.out

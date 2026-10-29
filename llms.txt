@@ -10,7 +10,8 @@ Key facts:
 - Frameworks with specific checks: CrewAI, LangChain, LangGraph, AutoGen, smolagents, and common memory and vector-store clients. Generic rules apply to any Python code. JavaScript/TypeScript are not scanned.
 - Privacy: scans run locally and never call an LLM. Only the opt-in `--dependencies` audit sends package names and versions to an advisory service.
 - Runtime proxy (preview): `agent-latch-runtime proxy -- <MCP server command>` sits between an AI app and an MCP server and records tool lists, tool calls, results and prompts (argument names and hashes, secret-masked excerpts). `agent-latch-runtime import-logs` joins those logs into one event per message (printed, plus `events.csv` and `normalized.jsonl` under `runtime-logs/`) and runs the ALR04 gate, which flags instruction-like content in tool definitions and writes `gate-results.csv`. `--database FILE` also keeps those events in a local SQLite file; it is off unless set, and it does not upload them. `agent-latch-runtime demo` runs the whole flow against a bundled synthetic server. Monitor only: it reports findings and never blocks a call. `agent-latch --runtime-result` prints every gate's findings from `runtime-logs/gate-results.csv` in the scan table, with a local tool's file and line when the project defines that function. The report lists findings only.
-- Limits: the scanner uses static heuristics; there is no runtime enforcement or model-behavior testing. A clean scan is not a security guarantee.
+- Tamper-evident audit ledger (preview): `agent-latch-runtime proxy --ledger trace.ledger.jsonl` seals every trace record into a local SHA-256 hash chain; `agent-latch-runtime anchor --ledger … --to /mnt/audit/anchors.jsonl` publishes one short digest where the agent cannot write, and `agent-latch-runtime verify --ledger … [--trace …] [--anchor …]` returns `intact`, `unanchored`, `tampered`, `deleted`, `rewritten` or `missing`. `agent-latch --runtime-result --ledger … --anchor …` prints that verdict in bold above the findings, and a failed trail exits 1 even with `--fail-on none`. Standard library only, local, never in the request path; the gate is ALR15 (ASI10).
+- Limits: the scanner uses static heuristics; there is no runtime enforcement or model-behavior testing. A clean scan is not a security guarantee. The audit ledger proves a log was not changed after recording, not that what it recorded was safe; without an anchor it cannot catch a full rebuild.
 
 ## Docs
 
@@ -19,7 +20,8 @@ Key facts:
 - [Agent manifests](https://github.com/AgentLatch/agent-latch/blob/main/docs/agent-manifest.md): `agent-manifest.yaml` format and the checks it enables
 - [pre-commit and CI](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md): pre-commit hook, GitHub Action inputs and outputs, other CI systems
 - [Detection rules](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md): every rule, its OWASP mapping, and known blind spots
-- [Gates](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md): security outcomes (`ALR01`–`ALR14`); every rule and runtime check belongs to one gate, reported as `PY001 (ALR06)`
+- [Gates](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md): security outcomes (`ALR01`–`ALR15`); every rule and runtime check belongs to one gate, reported as `PY001 (ALR06)`
+- [Audit ledger](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md): making the runtime log tamper-evident — hash chain, anchors, the six verdicts, limits; then [setup](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-setup.md), [reference](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-reference.md), [operations](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md)
 - [Runtime proxy (preview)](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md): install, connecting an MCP client, what is recorded, limits
 
 ## Examples

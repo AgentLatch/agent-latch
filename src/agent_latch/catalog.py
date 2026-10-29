@@ -29,6 +29,7 @@ from agent_latch.owasp import (
 
 EU_AI_ACT_TITLE = "EU AI Act (Regulation (EU) 2024/1689)"
 EU_AI_ACT_ARTICLES: dict[str, str] = {
+    "Art. 12": "Record-keeping",
     "Art. 14": "Human oversight",
     "Art. 15": "Accuracy, robustness and cybersecurity",
 }
@@ -266,6 +267,18 @@ GATES: tuple[Gate, ...] = (
              "Persistence brings the agent back after it is stopped, outside a user's view"),
             ("ALR14-S03", "static",
              "Installing packages at runtime pulls unreviewed code into the agent process"),
+        ),
+    ),
+    Gate(
+        "ALR15",
+        "Tamper-evident audit trail",
+        "The record of what the agent did cannot be altered, deleted or rebuilt unnoticed",
+        ("ASI10",),
+        ("Art. 12", "Art. 15"),
+        detectors=(
+            ("ALR15-R01", "runtime",
+             ("An agent, or whoever holds its account, can hide what it did by editing or "
+              "rebuilding its own audit log")),
         ),
     ),
 )

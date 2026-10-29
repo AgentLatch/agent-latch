@@ -124,6 +124,22 @@ def build_parser() -> argparse.ArgumentParser:
             " columns. The path argument is the project searched for a local tool's file and line"
         ),
     )
+    output.add_argument(
+        "--ledger",
+        metavar="FILE",
+        help=(
+            "With --runtime-result: check the audit ledger written by `agent-latch-runtime proxy"
+            " --ledger` and print the verdict in bold above the findings"
+        ),
+    )
+    output.add_argument(
+        "--anchor",
+        metavar="PATH",
+        help=(
+            "With --ledger: also compare the ledger head with the newest anchor point, so a"
+            " rewritten log is caught and not only an edited one"
+        ),
+    )
     output.add_argument("--format", choices=("text", "json", "sarif"), default="text", help="Report format (default: text)")
     output.add_argument("--output", metavar="FILE", help="Write report to a file instead of stdout")
     output.add_argument(
@@ -387,6 +403,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["scan"]:
         argv = argv[1:]
     args = build_parser().parse_args(argv)
+    if args.anchor is not None and args.ledger is None:
+        print("Error: --anchor needs --ledger", file=sys.stderr)
+        return 2
     if args.runtime_result is not None:
         return report_runtime_results(
             Path(args.runtime_result).expanduser(),
@@ -394,6 +413,8 @@ def main(argv: list[str] | None = None) -> int:
             plain=args.plain,
             min_severity=args.min_severity,
             fail_on=args.fail_on,
+            ledger=Path(args.ledger).expanduser() if args.ledger else None,
+            anchor=Path(args.anchor).expanduser() if args.anchor else None,
         )
     if args.interactive:
         return interactive_main()

@@ -14,6 +14,14 @@ from rich_argparse import RawDescriptionRichHelpFormatter
 
 from agent_latch import __version__
 from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
+from agent_latch.runtime.ledger import (
+    Ledger,
+    LedgerError,
+    describe,
+    make_anchor,
+    point_for,
+    verify_ledger,
+)
 from agent_latch.runtime.payloads import DEFAULT_PAYLOAD_MAX_CHARS, PayloadFile, PayloadTap
 from agent_latch.runtime.sqlite_store import SQLiteEventStore
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
@@ -24,6 +32,9 @@ _EPILOG = """\
 [bold bright_cyan]EXAMPLES:[/bold bright_cyan]
   [cyan]agent-latch-runtime proxy --trace trace.jsonl -- npx -y @modelcontextprotocol/server-github[/cyan]
   [cyan]agent-latch-runtime proxy --http 127.0.0.1:8770 --upstream-url https://tools.example.com/mcp[/cyan]
+  [cyan]agent-latch-runtime proxy --trace t.jsonl --ledger t.ledger.jsonl -- npx -y @modelcontextprotocol/server-github[/cyan]
+  [cyan]agent-latch-runtime anchor --ledger t.ledger.jsonl --to ~/offbox/anchors.jsonl[/cyan]
+  [cyan]agent-latch-runtime verify --ledger t.ledger.jsonl --anchor ~/offbox/anchors.jsonl[/cyan]
   [cyan]agent-latch-runtime demo[/cyan]   (try it with a synthetic server, no setup)
 
 In an MCP config, put [cyan]agent-latch-runtime[/cyan] as the command and move the real server
@@ -79,6 +90,13 @@ def _parser() -> argparse.ArgumentParser:
         metavar="N",
         help=f"cut each string in --payloads to N characters (default {DEFAULT_PAYLOAD_MAX_CHARS})",
     )
+    proxy.add_argument(
+        "--ledger",
+        type=Path,
+        metavar="FILE",
+        help="seal every trace record into a hash chain (JSONL) so edits, deletions and rewrites"
+        " are detectable; verify it later with `agent-latch-runtime verify`. Off unless set",
+    )
     proxy.add_argument("--quiet", action="store_true", help="no per-message summary on stderr")
     proxy.add_argument(
         "command",
@@ -133,6 +151,38 @@ def _parser() -> argparse.ArgumentParser:
         "--once", action="store_true",
         help="process what the files hold now and exit instead of following new lines",
     )
+
+    verify = commands.add_parser(
+        "verify",
+        help="check the audit ledger for edits, deletions and rewrites",
+        description=(
+            "Recompute the hash chain, compare each block with the trace line it sealed when"
+            " --trace is given, and compare the head with the last published anchor when"
+            " --anchor is given. Reads only; never writes. Exit codes: 0 intact or unanchored,"
+            " 1 altered, deleted or rewritten, 2 no ledger or a usage error."
+        ),
+    )
+    verify.add_argument("--ledger", type=Path, required=True, metavar="FILE",
+                        help="the ledger written by proxy --ledger")
+    verify.add_argument("--trace", type=Path, metavar="FILE",
+                        help="also compare every block with its trace line")
+    verify.add_argument("--anchor", type=Path, metavar="PATH",
+                        help="also compare the head with the newest anchor point in this file")
+
+    anchor = commands.add_parser(
+        "anchor",
+        help="publish the current ledger head to a file outside the agent's reach",
+        description=(
+            "Append one anchor point (sequence, digest, record count, time) for the current head"
+            " of the ledger. Put the file somewhere the agent cannot write: another host, a"
+            " mounted share, or a bucket that syncs to write-once storage."
+        ),
+    )
+    anchor.add_argument("--ledger", type=Path, required=True, metavar="FILE",
+                        help="the ledger written by proxy --ledger")
+    anchor.add_argument("--to", type=Path, required=True, metavar="PATH",
+                        help="where the anchor points go (appended, one JSON line each)")
+    anchor.add_argument("--quiet", action="store_true", help="no confirmation on stderr")
 
     demo = commands.add_parser(
         "demo",
@@ -195,13 +245,30 @@ def _proxy(args: argparse.Namespace) -> int:
     # stdout carries the MCP protocol in stdio mode, so logging goes to stderr.
     logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
     name = args.name or _default_name(command, args.upstream_url)
+    if args.ledger is not None and args.trace is None:
+        print(
+            "agent-latch-runtime: --ledger needs --trace; nothing would be sealed otherwise",
+            file=sys.stderr,
+        )
+        return 2
+    ledger: Ledger | None = None
+    if args.ledger is not None:
+        try:
+            ledger = Ledger(args.ledger)
+        except (LedgerError, OSError) as error:
+            print(f"agent-latch-runtime: cannot open ledger file: {error}", file=sys.stderr)
+            return 2
     try:
         trace = TraceLog(
             args.trace,
             summary=None if args.quiet else sys.stderr,
             excerpt_chars=args.excerpt_chars,
+            ledger=ledger,
+            warn=None if args.quiet else sys.stderr,
         )
     except OSError as error:
+        if ledger is not None:
+            ledger.close()
         print(f"agent-latch-runtime: cannot open trace file: {error}", file=sys.stderr)
         return 2
     payloads: PayloadFile | None = None
@@ -272,6 +339,43 @@ def _import_logs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _verify(args: argparse.Namespace) -> int:
+    ledger: Path = args.ledger
+    if not ledger.is_file():
+        print(f"agent-latch-runtime: no ledger file at {ledger}", file=sys.stderr)
+        return 2
+    verification = verify_ledger(
+        ledger, trace_path=args.trace, anchor_path=args.anchor
+    )
+    for line in describe(verification):
+        print(line)
+    return 1 if verification.failed else 0
+
+
+def _anchor(args: argparse.Namespace) -> int:
+    ledger: Path = args.ledger
+    if not ledger.is_file():
+        print(f"agent-latch-runtime: no ledger file at {ledger}", file=sys.stderr)
+        return 2
+    try:
+        head = Ledger.read_head(ledger)
+        if head is None:
+            print(f"agent-latch-runtime: {ledger} has no blocks to anchor", file=sys.stderr)
+            return 2
+        destination = make_anchor(args.to)
+        point = point_for(ledger, seq=head.seq, digest=head.digest, records=head.seq)
+        destination.publish(point)
+    except (LedgerError, OSError, ValueError) as error:
+        print(f"agent-latch-runtime: cannot anchor: {error}", file=sys.stderr)
+        return 2
+    if not args.quiet:
+        print(
+            f"agent-latch-runtime: anchored #{point.seq} {point.digest[:12]}… to {destination.path}",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def _demo(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
     try:
@@ -305,6 +409,10 @@ def main(argv: list[str] | None = None) -> int:
         return _proxy(args)
     if args.subcommand == "import-logs":
         return _import_logs(args)
+    if args.subcommand == "verify":
+        return _verify(args)
+    if args.subcommand == "anchor":
+        return _anchor(args)
     if args.subcommand == "demo":
         return _demo(args)
     return 2
