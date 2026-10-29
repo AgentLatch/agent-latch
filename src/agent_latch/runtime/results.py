@@ -23,6 +23,14 @@ from rich.text import Text
 
 from agent_latch.owasp import category_label
 from agent_latch.rules import iter_project_files
+from agent_latch.runtime.ledger import (
+    STATUS_INTACT,
+    STATUS_MISSING,
+    STATUS_UNANCHORED,
+    Verification,
+    describe,
+    verify_ledger,
+)
 
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 _SEVERITY_STYLE = {
@@ -206,6 +214,28 @@ def format_report(alerts: list[RuntimeAlert]) -> str:
     return "\n".join(lines)
 
 
+def format_audit_status(verification: Verification) -> str:
+    """The verdict as plain lines, for --plain output, logs and pipes."""
+    return "\n".join(describe(verification))
+
+
+def _render_audit_status(verification: Verification) -> None:
+    """The verdict in bold above the findings table: the first thing a reader sees."""
+    console = Console()
+    if verification.status == STATUS_INTACT:
+        color = "green"
+    elif verification.status == STATUS_UNANCHORED:
+        color = "yellow"
+    else:
+        color = "red"
+    body = Text(verification.headline(), style=f"bold {color}")
+    for line in describe(verification)[1:]:
+        body.append("\n" + line.strip(), style="dim")
+    console.print(
+        Panel(body, border_style=color, title="[bold]Audit trail[/bold]", title_align="left")
+    )
+
+
 def _render_table(alerts: list[RuntimeAlert]) -> None:
     console = Console()
     if not alerts:
@@ -241,23 +271,47 @@ def report_runtime_results(
     plain: bool,
     min_severity: str,
     fail_on: str,
+    ledger: Path | None = None,
+    anchor: Path | None = None,
 ) -> int:
-    """Print the report. Returns 0, 1 when --fail-on matches, or 2 on a bad file."""
+    """Print the report. Returns 0, 1 when the trail failed or --fail-on matches, or 2.
+
+    A trail that fails verification always returns 1: log integrity is not a severity threshold,
+    so ``--fail-on none`` does not opt out of it. Without a ledger the exit code is unchanged.
+    """
     if not csv_path.is_file():
         print(f"Error: runtime results file does not exist: {csv_path}", file=sys.stderr)
         return 2
     if not project.exists():
         print(f"Error: project path does not exist: {project}", file=sys.stderr)
         return 2
+    verification = verify_ledger(ledger, anchor_path=anchor) if ledger is not None else None
     try:
         alerts = filter_severity(load_alerts(csv_path, project), min_severity)
     except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 2
     if plain or not sys.stdout.isatty():
+        if verification is not None:
+            print(format_audit_status(verification))
+            print()
         print(format_report(alerts))
     else:
+        if verification is not None:
+            _render_audit_status(verification)
         _render_table(alerts)
+    if verification is not None and verification.status == STATUS_MISSING:
+        print(
+            f"Error: no audit ledger at {ledger}; pass the file written by proxy --ledger",
+            file=sys.stderr,
+        )
+        return 2
+    if verification is not None and verification.failed:
+        print(
+            f"audit trail {verification.status}: the runtime log cannot be trusted",
+            file=sys.stderr,
+        )
+        return 1
     if fail_on == "none":
         return 0
     threshold = _SEVERITY_RANK[fail_on]

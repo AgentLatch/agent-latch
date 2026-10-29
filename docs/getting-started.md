@@ -257,6 +257,8 @@ Each finding includes a rule ID and its gate (see [GATES.md](GATES.md)), severit
 | `1` | At least one finding at or above `--fail-on`. Unknown-severity dependency findings also count. |
 | `2` | Scan error: missing target, missing or invalid manifest, invalid `.agent-latch-ignore` or `[tool.agent-latch]` settings, dependency audit failure, or a report that could not be written to the `--output` destination. |
 
+With `--runtime-result --ledger FILE`, the audit trail counts too: a trail that fails verification exits `1` even when `--fail-on none`, and a ledger path with nothing at it exits `2`. See [the audit ledger](ledger.md).
+
 When the scan exits `1`, it prints the findings that caused the failure (severity, rule, `path:line`, and title) to stderr, so JSON or SARIF on stdout stays valid:
 
 ```text

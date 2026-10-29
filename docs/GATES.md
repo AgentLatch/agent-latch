@@ -26,6 +26,7 @@ A gate is a security outcome AgentLatch checks for, such as "destructive actions
 | `ALR12` | Secure transport | TLS is verified and agent or tool traffic does not use plain HTTP | `PY003` | `ASI02`, `ASI07` | Art. 15 | partial |
 | `ALR13` | Memory and context integrity | Untrusted content is not written to agent memory or vector stores | none | `ASI06` | Art. 15 | no checks yet |
 | `ALR14` | Rogue agent containment | Agents cannot modify their own prompts or config, or spawn agents without limits | none | `ASI10` | Art. 14, Art. 15 | no checks yet |
+| `ALR15` | Tamper-evident audit trail | The record of what the agent did cannot be altered, deleted or rebuilt unnoticed | `ALR15-001` | `ASI10` | Art. 12, Art. 15 | preview (runtime) |
 
 ## Detectors
 
@@ -59,6 +60,7 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `SEC001` | `ALR10` | static | A secret in the project can be read by the agent, its prompts or anyone with the code | `ASI03`, `ASI04` |
 | `DEP001` | `ALR11` | dependency audit (opt-in) | A known-vulnerable package is part of the agent's supply chain | `ASI04` |
 | `PY003` | `ALR12` | static | Disabled TLS checks let anyone on the network read or alter the agent's traffic | `ASI02` |
+| `ALR15-001` | `ALR15` | runtime | An agent, or whoever holds its account, can hide what it did by editing or rebuilding its own audit log | `ASI10` |
 
 Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary.
 
@@ -67,5 +69,5 @@ Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest c
 These mappings are informational. They show where a gate may provide evidence relevant to a framework. They are not a compliance assessment, certification, or endorsement.
 
 - [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/): ASI01 Agent Goal Hijack; ASI02 Tool Misuse and Exploitation; ASI03 Identity and Privilege Abuse; ASI04 Agentic Supply Chain Vulnerabilities; ASI05 Unexpected Code Execution (RCE); ASI06 Memory & Context Poisoning; ASI07 Insecure Inter-Agent Communication; ASI08 Cascading Failures; ASI09 Human-Agent Trust Exploitation; ASI10 Rogue Agents.
-- EU AI Act (Regulation (EU) 2024/1689): Art. 14 Human oversight; Art. 15 Accuracy, robustness and cybersecurity. These articles set requirements for high-risk AI systems; whether they apply depends on the system and its use.
+- EU AI Act (Regulation (EU) 2024/1689): Art. 12 Record-keeping; Art. 14 Human oversight; Art. 15 Accuracy, robustness and cybersecurity. These articles set requirements for high-risk AI systems; whether they apply depends on the system and its use.
 - ISO/IEC 42001: not mapped yet.

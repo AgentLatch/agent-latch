@@ -254,10 +254,35 @@ That prints the same kind of table as `agent-latch scan`: severity, rule, locati
 
 Restarting the importer skips events and results already in its output files, so rows and lines are not repeated. Malformed lines are logged and skipped. The importer does not block or modify MCP traffic. Its output files can hold payload data, so keep them local and access-controlled (they are created with mode `0600`; `runtime-logs/` is in `.gitignore`).
 
+## Tamper-evident audit ledger (preview)
+
+A trace file is only evidence if nobody can quietly rewrite it. `--ledger FILE` seals every trace record into a local hash chain, and `anchor` publishes one short digest where the agent cannot write, so an edit, a deletion or a full rebuild shows up when you verify.
+
+```sh
+agent-latch-runtime proxy --trace runtime-logs/trace.jsonl \
+  --ledger runtime-logs/trace.ledger.jsonl -- <server command>
+
+agent-latch-runtime anchor --ledger runtime-logs/trace.ledger.jsonl --to /mnt/audit/anchors.jsonl
+agent-latch-runtime verify --ledger runtime-logs/trace.ledger.jsonl \
+  --trace runtime-logs/trace.jsonl --anchor /mnt/audit/anchors.jsonl
+```
+
+`agent-latch --runtime-result FILE --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl` prints the verdict as the first thing in the report, in bold in a terminal:
+
+```
+AUDIT TRAIL TAMPERED — a record was altered; the log cannot be trusted.
+  #2: the block's digest does not match its content
+```
+
+The verdicts are `intact`, `unanchored`, `tampered`, `deleted`, `rewritten` and `missing`. A failed trail exits `1` even with `--fail-on none`; a missing ledger at a path you gave exits `2`. It is off unless you pass `--ledger`, it never blocks a call, it uses the standard library only, and it makes no network request. `--ledger` requires `--trace`.
+
+Start here: [the audit ledger](ledger.md) (the model and the verdicts), [setup](ledger-setup.md) (ten minutes, including where to put the anchor), [reference](ledger-reference.md) (formats and API) and [operations](ledger-operations.md) (schedule, retention, incidents). The gate is `ALR15`.
+
 ## Limits
 
 - It sees only servers whose config entry goes through the proxy. Other servers, the app's built-in tools (for example Claude Code's shell and file edits) and the user's prompts to the model don't pass through it.
 - It records traffic and runs ALR04 on tool definitions. It reports findings and does not block calls.
+- The audit ledger proves a log was not changed after it was recorded. It says nothing about whether what was recorded was safe, and a chain without an anchor cannot catch a full rewrite. See [the audit ledger](ledger.md).
 - It sees MCP traffic only, not the agent's requests to its model, so it records what the agent did, not the prompt or reasoning behind it.
 - Payload records cover `tools/list`, `tools/call` and `prompts/get`. Other MCP messages (`resources/list`, `resources/read`, `initialize`, notifications, sampling) pass through without a record, and `prompts/list` is only in the trace. Tool results keep text content only: image, audio and embedded-resource blocks are left out. A failed `prompts/get` writes no record.
 - The payloads file is not rotated and grows with every message (each `tools/call` request repeats the tool's definition). Very large outputs are masked in full before they are cut, which costs CPU on multi-megabyte results.

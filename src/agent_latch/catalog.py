@@ -27,6 +27,7 @@ from agent_latch.owasp import (
 
 EU_AI_ACT_TITLE = "EU AI Act (Regulation (EU) 2024/1689)"
 EU_AI_ACT_ARTICLES: dict[str, str] = {
+    "Art. 12": "Record-keeping",
     "Art. 14": "Human oversight",
     "Art. 15": "Accuracy, robustness and cybersecurity",
 }
@@ -92,6 +93,9 @@ GATES: tuple[Gate, ...] = (
     Gate("ALR14", "Rogue agent containment",
          "Agents cannot modify their own prompts or config, or spawn agents without limits",
          ("ASI10",), ("Art. 14", "Art. 15")),
+    Gate("ALR15", "Tamper-evident audit trail",
+         "The record of what the agent did cannot be altered, deleted or rebuilt unnoticed",
+         ("ASI10",), ("Art. 12", "Art. 15")),
 )
 
 _ALR04_RUNTIME = (
@@ -145,6 +149,9 @@ DETECTORS: tuple[Detector, ...] = (
              "A known-vulnerable package is part of the agent's supply chain"),
     Detector("AGENTLATCH-PY003", "ALR12", "static",
              "Disabled TLS checks let anyone on the network read or alter the agent's traffic"),
+    Detector("ALR15-001", "ALR15", "runtime",
+             "An agent, or whoever holds its account, can hide what it did by editing or "
+             "rebuilding its own audit log"),
 )
 
 # Records that report on the scan itself rather than a security outcome; they belong to no gate.

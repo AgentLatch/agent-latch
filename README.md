@@ -161,6 +161,21 @@ agent-latch-runtime import-logs --database runtime-logs/runtime.db
 
 SQLite is the first store. The importer calls it through a small `EventStore` interface, so a later destination can be selected the same way without becoming part of the default install. Details: [Store events in SQLite](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#store-events-in-sqlite).
 
+### Make the log tamper-evident
+
+A log the agent can rewrite is not evidence. `--ledger FILE` seals every trace record into a local hash chain, and one short digest per batch leaves the machine as an anchor, so an edit, a deletion or a full rebuild is visible when you verify:
+
+```sh
+agent-latch-runtime proxy --trace runtime-logs/trace.jsonl \
+  --ledger runtime-logs/trace.ledger.jsonl -- npx -y @modelcontextprotocol/server-github
+
+agent-latch-runtime anchor --ledger runtime-logs/trace.ledger.jsonl --to /mnt/audit/anchors.jsonl
+agent-latch-runtime verify --ledger runtime-logs/trace.ledger.jsonl --trace runtime-logs/trace.jsonl \
+  --anchor /mnt/audit/anchors.jsonl
+```
+
+`agent-latch --runtime-result --ledger … --anchor …` then leads the report with the verdict (`intact`, `unanchored`, `tampered`, `deleted`, `rewritten`, `missing`). A failed trail exits `1` even with `--fail-on none`. Off unless you ask for it, standard library only, no network, never in the request path. Start with [the audit ledger](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md).
+
 ```mermaid
 sequenceDiagram
     participant A as AI agent
@@ -249,6 +264,7 @@ Every scan report ends with the same ASI01–ASI10 summary and marks the uncover
 | [pre-commit and CI](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
 | [Detection rules](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
 | [Gates](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md) | The security outcomes AgentLatch checks, which rules and runtime checks belong to each, and their OWASP and EU AI Act references |
+| [Audit ledger](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md) | Making the runtime log tamper-evident: the hash chain, anchors, the six verdicts, and what it cannot catch. Then [setup](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-setup.md), [reference](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-reference.md) and [operations](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md) |
 | [Vulnerable example](https://github.com/AgentLatch/agent-latch/tree/main/examples/vulnerable-agent) | A demo project and the findings it should produce |
 | [Runtime proxy for MCP (preview)](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md) | Install, connecting an app, what is recorded, `import-logs` and `demo`, limits. Optional local SQLite: [Store events in SQLite](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#store-events-in-sqlite) |
 | [MCP gateway](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients, and [live runs through the runtime proxy](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) |
