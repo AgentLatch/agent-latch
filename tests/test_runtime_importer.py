@@ -237,9 +237,9 @@ def test_importer_rejects_bad_setup(tmp_path: Path) -> None:
         RuntimeLogImporter(trace_path, None, [], events_csv=out, follow=False).run()
 
 
-def test_run_id_is_stable_and_gate_discovery_finds_alr04() -> None:
+def test_run_id_is_stable_and_gate_discovery_finds_the_installed_gates() -> None:
     assert run_id_for("abc\n") == run_id_for("abc") and len(run_id_for("abc")) == 16
-    assert [plugin.gate_id for plugin in discover_gates()] == ["ALR04"]
+    assert [plugin.gate_id for plugin in discover_gates()] == ["ALR03", "ALR04"]
 
 
 def test_events_are_visible_without_any_gate(tmp_path: Path) -> None:
@@ -294,7 +294,7 @@ def test_import_logs_cli_uses_the_log_folder_by_default(
     events = (tmp_path / "normalized.jsonl").read_text(encoding="utf-8").splitlines()
     assert json.loads(events[2])["payload"]["arguments"] == {"command": "rm -rf /"}
     gate_rows = _rows(tmp_path / "gate-results.csv")
-    assert len(gate_rows) == 4 and {row["gate_id"] for row in gate_rows} == {"ALR04"}
+    assert len(gate_rows) == 8 and {row["gate_id"] for row in gate_rows} == {"ALR03", "ALR04"}
     findings = [
         finding
         for row in gate_rows
@@ -302,7 +302,7 @@ def test_import_logs_cli_uses_the_log_folder_by_default(
     ]
     assert findings and not any(finding.get("outcome") == "FAIL" for finding in findings)
     err = capsys.readouterr().err
-    assert "with 1 gate(s)" in err and "#4 demo: tools/call run_command -> ok" in err
+    assert "with 2 gate(s)" in err and "#4 demo: tools/call run_command -> ok" in err
 
     (tmp_path / "events.csv").write_text("wrong,header\n", encoding="utf-8")
     assert cli.main(["import-logs", "--dir", str(tmp_path), "--once"]) == 2

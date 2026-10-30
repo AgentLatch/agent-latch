@@ -58,6 +58,26 @@ class PayloadTap:
             {"tools": [_definition(tool) | {"name": tool.name} for tool in tools]},
         )
 
+    def initialized(
+        self,
+        *,
+        session_id: str,
+        request_id: str,
+        client_id: str | None,
+        server: str,
+        protocol_version: Any,
+        client: Mapping[str, str],
+        server_info: Mapping[str, str],
+    ) -> PayloadEvent:
+        return self._emit(
+            session_id, request_id, client_id, server, "initialize", "response",
+            {
+                "protocol_version": protocol_version if isinstance(protocol_version, str) else None,
+                "client": dict(client),
+                "server_info": dict(server_info),
+            },
+        )
+
     def call_request(self, call: ToolCall) -> PayloadEvent:
         tool = self._tools.get((call.server, call.tool))
         return self._call(call, "request", {

@@ -15,7 +15,7 @@ from agent_latch.runtime.events import PAYLOAD_SCHEMA
 from agent_latch.runtime.trace import TRACE_SCHEMA
 
 # Messages that also produce a payload record when ``--payloads`` is on.
-PAYLOAD_METHODS = frozenset({"tools/list", "tools/call", "prompts/get"})
+PAYLOAD_METHODS = frozenset({"initialize", "tools/list", "tools/call", "prompts/get"})
 
 EventKey = tuple[str, str, str, str, str, str | None]
 

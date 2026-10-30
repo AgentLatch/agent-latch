@@ -87,6 +87,7 @@ src/agent_latch/
   action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
   gates/          # runtime gate plugins discovered by the importer (monitor only, never block)
     __init__.py
+    alr03.py      # ALR03: endpoint trust from the recorded handshake (preview; reports findings only)
     alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; reports findings only)
   runtime/        # MCP traffic recording (preview, monitor only; `[runtime]` extra). Logs go to runtime-logs/, not here.
     events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
@@ -100,12 +101,14 @@ src/agent_latch/
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
     demo_server.py # synthetic MCP server for `demo` and the runtime tests [needs fastmcp]
+    rogue_server.py # synthetic server that hides its handshake identity, for `demo --rogue` [needs fastmcp]
     demo.py       # `demo`: drives demo_server through the proxy, then imports the logs [needs fastmcp]
     cli.py        # agent-latch-runtime console script (`proxy`, `import-logs`, `demo`)
 tests/test_scanner.py          # scanner unit tests (synthetic fixtures via tmp_path)
 tests/test_runtime.py          # runtime tests that need no FastMCP
 tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests (no FastMCP)
 tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
+tests/test_alr03.py            # ALR03 endpoint-trust gate: identification and identity change
 tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
 tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
 tests/runtime_fixtures/        # demo-server wrapper, plus the ALR04 event dataset and expected outcomes
@@ -203,6 +206,10 @@ Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown
 | `ALR14-S03` | `ALR14` | `rogue.py` | agent installs packages at runtime |
 
 Full behavior and blind spots: `docs/RULES.md`.
+
+### Runtime gates
+
+Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per gate, `GATE_ID` = the gate ID, `evaluate(event)`), discovered by the importer and run on every normalized event. They report findings and never block. Today two ship: `alr03.py` (endpoint trust from the recorded handshake: server identification `ALR03-001`, identity change `ALR03-002`) and `alr04.py` (tool schema injection). Register a runtime gate's detectors in its gate's `detectors` group in `catalog.GATES` (IDs `ALRnn-0nn`), add its coverage/summary IDs to `catalog.DIAGNOSTICS`, and regenerate `docs/GATES.md`.
 
 ### Adding or changing a rule
 

@@ -146,6 +146,10 @@ def _parser() -> argparse.ArgumentParser:
         "--dir", type=Path, default=Path(DEFAULT_LOG_DIR) / "demo", metavar="DIR",
         help=f"folder for the demo's files, replaced on each run (default {DEFAULT_LOG_DIR}/demo)",
     )
+    demo.add_argument(
+        "--rogue", action="store_true",
+        help="use a server that hides its identity, so ALR03 reports a finding",
+    )
     return parser
 
 
@@ -286,7 +290,7 @@ def _demo(args: argparse.Namespace) -> int:
     from agent_latch.runtime.demo import run_demo
 
     try:
-        run_demo(args.dir)
+        run_demo(args.dir, rogue=args.rogue)
     except KeyboardInterrupt:
         return 0
     except Exception as error:  # noqa: BLE001 - report any demo failure as a setup error

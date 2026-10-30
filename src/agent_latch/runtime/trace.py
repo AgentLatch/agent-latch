@@ -78,6 +78,27 @@ class TraceLog:
             ],
         })
 
+    def initialized(
+        self,
+        *,
+        session_id: str,
+        request_id: str,
+        server: str,
+        protocol_version: Any,
+        client: Mapping[str, str],
+        server_info: Mapping[str, str],
+    ) -> dict[str, Any]:
+        return self.write({
+            "session_id": session_id,
+            "request_id": request_id,
+            "server": server,
+            "method": "initialize",
+            "stage": "response",
+            "protocol_version": protocol_version if isinstance(protocol_version, str) else None,
+            "client": dict(client),
+            "server_info": dict(server_info),
+        })
+
     def call_request(self, call: ToolCall) -> dict[str, Any]:
         return self.write({
             **_call_fields(call),
@@ -180,6 +201,11 @@ def _call_fields(call: ToolCall) -> dict[str, Any]:
 def summarize_record(record: Mapping[str, Any]) -> str:
     """One short human-readable line for a trace record (no argument values or output)."""
     method, stage = record.get("method", "?"), record.get("stage", "?")
+    if method == "initialize":
+        info = record.get("server_info") or {}
+        name = info.get("name") or "?"
+        version = info.get("version") or "?"
+        return f"initialize -> {name} {version} (protocol {record.get('protocol_version')})"
     if method == "tools/list":
         return f"tools/list -> {len(record.get('tools', []))} tool(s)"
     if method == "prompts/list":

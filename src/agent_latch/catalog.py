@@ -116,6 +116,10 @@ GATES: tuple[Gate, ...] = (
               "unauthenticated")),
             ("ALR03-S01", "static",
              "A server on every interface lets any reachable peer call the agent and its tools"),
+            ("ALR03-001", "runtime",
+             "An endpoint that does not identify itself cannot be told apart from an impostor"),
+            ("ALR03-002", "runtime",
+             "A server whose name or version changed may be compromised or swapped"),
         ),
     ),
     Gate(
@@ -280,6 +284,8 @@ DETECTORS: tuple[Detector, ...] = tuple(
 # Records that report on the scan itself rather than a security outcome; they belong to no gate.
 DIAGNOSTICS: dict[str, str] = {
     "AGENTLATCH-MAN000": "Manifest could not be read or has an invalid field",
+    "ALR03-090": "ALR03 could not fully identify an endpoint from its handshake (coverage)",
+    "ALR03-099": "ALR03 per-scan summary",
     "ALR04-090": "ALR04 could not inspect enough of a tool definition (coverage)",
     "ALR04-099": "ALR04 per-scan summary",
 }
