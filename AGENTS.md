@@ -38,22 +38,22 @@ AgentLatch is often run on agents someone else wrote, so nothing inside the scan
 
 | ID | Category | Gates | Current rules |
 |---|---|---|---|
-| ASI01 | Agent Goal Hijack | `ALR01`, `ALR04`, `ALR05` | `AG003`, `PRM001`, `PRM002` |
-| ASI02 | Tool Misuse and Exploitation | `ALR02`, `ALR03`, `ALR04`, `ALR06`, `ALR07`, `ALR09`, `ALR12` | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003` |
-| ASI03 | Identity and Privilege Abuse | `ALR03`, `ALR07`, `ALR09`, `ALR10` | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003` |
-| ASI04 | Agentic Supply Chain Vulnerabilities | `ALR02`, `ALR03`, `ALR04`, `ALR10`, `ALR11` | `SEC001`, `DEP001` |
-| ASI05 | Unexpected Code Execution (RCE) | `ALR06`, `ALR07`, `ALR09` | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001` |
-| ASI06 | Memory & Context Poisoning | `ALR13` | none yet |
-| ASI07 | Insecure Inter-Agent Communication | `ALR03`, `ALR12` | none yet |
-| ASI08 | Cascading Failures | `ALR08` | `AG007` (partial) |
+| ASI01 | Agent Goal Hijack | `ALR01`, `ALR04`, `ALR05` | `AG003`, `PRM001`, `PRM002`, `ALR01-S01` |
+| ASI02 | Tool Misuse and Exploitation | `ALR02`, `ALR03`, `ALR04`, `ALR06`, `ALR07`, `ALR09`, `ALR12` | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003`, `ALR06-S02`, `ALR12-S01` |
+| ASI03 | Identity and Privilege Abuse | `ALR03`, `ALR07`, `ALR09`, `ALR10` | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003`, `ALR03-S01` |
+| ASI04 | Agentic Supply Chain Vulnerabilities | `ALR02`, `ALR03`, `ALR04`, `ALR10`, `ALR11` | `SEC001`, `DEP001`, `ALR11-S01` |
+| ASI05 | Unexpected Code Execution (RCE) | `ALR06`, `ALR07`, `ALR09` | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `ALR06-S01`, `ALR06-S02` |
+| ASI06 | Memory & Context Poisoning | `ALR13` | `ALR13-S01`, `ALR13-S02` (partial) |
+| ASI07 | Insecure Inter-Agent Communication | `ALR03`, `ALR12` | `ALR03-S01`, `ALR12-S01` (partial) |
+| ASI08 | Cascading Failures | `ALR08` | `AG007`, `ALR08-S01`, `ALR08-S02` (partial) |
 | ASI09 | Human-Agent Trust Exploitation | `ALR09` | `AG004`, `AG006`, `MAN001` (partial) |
-| ASI10 | Rogue Agents | `ALR14` | none yet |
+| ASI10 | Rogue Agents | `ALR14` | `ALR14-S01`, `ALR14-S02`, `ALR14-S03` (partial) |
 
 Keep this table up to date whenever a rule is added or its OWASP mapping changes.
 
 ### Gates
 
-A gate is a security outcome (for example `ALR09` Human approval for sensitive actions). Every detector, a static rule or a runtime check, belongs to exactly one gate. `src/agent_latch/catalog.py` is the single source for gates (`GATES`), detector-to-gate assignments with the reason (`DETECTORS`), and framework references per gate: OWASP IDs from `owasp.py` and EU AI Act articles (`EU_AI_ACT_ARTICLES`). ISO/IEC 42001 is not mapped yet.
+A gate is a security outcome (for example `ALR09` Human approval for sensitive actions). Every detector, a static rule or a runtime check, belongs to exactly one gate. `src/agent_latch/catalog.py` is the single source for gates (`GATES`, which groups each gate's detectors as `(id, mode, reason)`), detector-to-gate assignments with the reason (`DETECTORS`, derived from those groups), and framework references per gate: OWASP IDs from `owasp.py` and EU AI Act articles (`EU_AI_ACT_ARTICLES`). ISO/IEC 42001 is not mapped yet.
 
 - A detector's OWASP IDs must be a subset of its gate's. A test checks this, and that every rule in `RULE_CATEGORIES` and every ALR04 rule ID has a gate (or is listed in `DIAGNOSTICS`).
 - `docs/GATES.md` is generated: `python -I -m agent_latch.catalog > docs/GATES.md`. A test fails when it is out of date.
@@ -70,9 +70,14 @@ src/agent_latch/
   rules.py        # PY*/AG001/AG002/SEC001 rules, project walker, prompt-file scan, pip-audit integration
   agent_code.py   # manifest-free agent checks: prompts in code/YAML (PRM*), AG004, AG005
   oversight.py    # AG006 human approval disabled (ASI09), AG007 unbounded agent loops (ASI08)
+  memory.py       # ALR13: untrusted memory writes (ASI06), memory shared across sessions
+  endpoints.py    # ALR12-S01 plaintext endpoints, ALR03-S01 server bound to all interfaces (ASI07)
+  resilience.py   # ALR08-S01 missing timeout, ALR08-S02 unbounded retry (ASI08)
+  rogue.py        # ALR14: self-modification, persistence, runtime installs (ASI10)
+  sandbox.py      # ALR06 unsafe deserialization and unsandboxed code, ALR11-S01 trust_remote_code
   astutil.py      # cached ast.walk shared by the rule modules
-  taint.py        # AG003: untrusted web/HTTP/tool output flowing into LLM messages
-  prompts.py      # PRM001/PRM002 text checks shared by code, YAML, prompt files, and manifests
+  taint.py        # AG003/ALR13-S01: untrusted web/HTTP/tool output flowing into messages or memory
+  prompts.py      # PRM001/PRM002/ALR01-S01 text checks shared by code, YAML, prompt files, manifests
   yamlload.py     # line-aware YAML loading (SafeLoader subclass)
   manifest.py     # Manifest loading and MAN* rules; PRM* on manifest prompts
   owasp.py        # ASI01–ASI10 category IDs/names, rule→category map, coverage summary
@@ -183,6 +188,19 @@ Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown
 | `MAN003` | `ALR03` | `manifest.py` | remote tool endpoint without auth |
 | `PRM001` | `ALR01` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | prompt-injection signatures in prompts |
 | `PRM002` | `ALR01` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | user-input placeholder in a system prompt |
+| `ALR01-S01` | `ALR01` | `prompts.py` | invisible, bidi, or zero-width characters in a prompt |
+| `ALR03-S01` | `ALR03` | `endpoints.py` | agent or MCP server bound to every interface |
+| `ALR06-S01` | `ALR06` | `sandbox.py` | unsafe deserialization (`yaml.load`, `pickle`, `torch.load`, dangerous loader options) |
+| `ALR06-S02` | `ALR06` | `sandbox.py` | model-written code runs without a sandbox |
+| `ALR08-S01` | `ALR08` | `resilience.py` | outbound HTTP call without a timeout |
+| `ALR08-S02` | `ALR08` | `resilience.py` | retry without a limit |
+| `ALR11-S01` | `ALR11` | `sandbox.py` | `trust_remote_code=True` on a model or dataset loader |
+| `ALR12-S01` | `ALR12` | `endpoints.py` | plaintext `http://` or `ws://` endpoint |
+| `ALR13-S01` | `ALR13` | `memory.py` | web/tool output written to memory without validation |
+| `ALR13-S02` | `ALR13` | `memory.py` | memory shared across sessions (module-level store) |
+| `ALR14-S01` | `ALR14` | `rogue.py` | agent writes to its own prompts or settings |
+| `ALR14-S02` | `ALR14` | `rogue.py` | agent installs persistence on the host |
+| `ALR14-S03` | `ALR14` | `rogue.py` | agent installs packages at runtime |
 
 Full behavior and blind spots: `docs/RULES.md`.
 
@@ -203,7 +221,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 - Use `from __future__ import annotations`, type hints, and `pathlib.Path` throughout. Use frozen dataclasses for value types.
 - Rules are static heuristics. Parse with `ast` and never import or execute scanned code. Load YAML only with `yaml.SafeLoader` (see `manifest._LineLoader`).
 - The project walker (`rules.iter_project_files` / `scan_project`) visits every folder and every text file (see the design principle above). By file type: `.py` gets source, agent, and prompt rules; `.yaml`/`.yml` (except manifests, which `manifest.py` handles) gets YAML prompt checks; prompt templates (`rules.PROMPT_SUFFIXES`, and `.md`/`.txt` under a `prompts/` folder) get prompt rules; every text file gets `SEC001`. Keep these limits intentional and documented in `docs/getting-started.md`.
-- Noisy rules report findings in test files at low severity instead of dropping them, so real problems in tests stay visible: `SEC001` itself, and `findings.TEST_DEMOTED_RULES` (`PY001`, `AG004`, `AG006`, `AG007`) through `demote_test_findings`.
+- Noisy rules report findings in test files at low severity instead of dropping them, so real problems in tests stay visible: `SEC001` itself, and `findings.TEST_DEMOTED_RULES` (`PY001`, `AG004`, `AG006`, `AG007`, `ALR14-S01`) through `demote_test_findings`.
 - `--min-severity` filters what is reported, never what fails: the CLI rejects a `--min-severity` above `--fail-on`, keeps unknown severity, and every report counts hidden findings.
 - Use `astutil.walk` instead of `ast.walk` for whole-file or whole-function traversals; every rule walks the same tree.
 - Sort findings deterministically (path, line, rule ID) so reports and SARIF stay stable.

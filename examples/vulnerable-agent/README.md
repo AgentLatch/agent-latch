@@ -27,6 +27,7 @@ The manifest is found automatically. Every finding below except `MAN*` also appe
 | MEDIUM | `AG003` | `tools.py` | A fetched web page goes straight into the LLM message. |
 | MEDIUM | `AG004` | `orchestrator.py` | The `write_report` tool writes files with no approval step. |
 | MEDIUM | `AG007` | `orchestrator.py` | `AgentExecutor(max_iterations=None)` has no step limit. |
+| MEDIUM | `ALR06-S02` | `orchestrator.py` | AutoGen runs model-written code with `use_docker=False`, so it runs unsandboxed on the host. |
 
 `agent-latch scan examples/vulnerable-agent --fail-on high` exits with code 1, which is how CI would block this project.
 

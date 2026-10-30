@@ -12,20 +12,20 @@ A gate is a security outcome AgentLatch checks for, such as "destructive actions
 
 | Gate | Name | Outcome | Detectors | OWASP Agentic | EU AI Act | Status |
 |---|---|---|---|---|---|---|
-| `ALR01` | Prompt integrity | System prompts carry no injected instructions or raw user input | `PRM001`, `PRM002` | `ASI01` | Art. 15 | partial |
+| `ALR01` | Prompt integrity | System prompts carry no injected instructions or raw user input | `PRM001`, `PRM002`, `ALR01-S01` | `ASI01` | Art. 15 | partial |
 | `ALR02` | Tool definition integrity | Tool definitions are pinned and changes are detected | none | `ASI02`, `ASI04` | Art. 15 | no checks yet |
-| `ALR03` | Tool and agent endpoint trust | Remote tools, MCP servers and peer agents are identified and authenticated | `MAN003` | `ASI02`, `ASI03`, `ASI04`, `ASI07` | Art. 15 | partial |
+| `ALR03` | Tool and agent endpoint trust | Remote tools, MCP servers and peer agents are identified and authenticated | `MAN003`, `ALR03-S01` | `ASI02`, `ASI03`, `ASI04`, `ASI07` | Art. 15 | partial |
 | `ALR04` | Tool schema injection | Tool definitions contain no instruction-like or hidden content | `ALR04-001`, `ALR04-002`, `ALR04-003`, `ALR04-004`, `ALR04-005`, `ALR04-006`, `ALR04-007`, `ALR04-008`, `ALR04-009` | `ASI01`, `ASI02`, `ASI04` | Art. 15 | preview (runtime) |
 | `ALR05` | Untrusted content isolation | Web, HTTP and tool output reaches the model fenced as data | `AG003` | `ASI01` | Art. 15 | partial |
-| `ALR06` | Code execution containment | No unsandboxed eval, shell or model-driven code execution | `PY001`, `PY002`, `AG002` | `ASI02`, `ASI05` | Art. 15 | partial |
+| `ALR06` | Code execution containment | No unsandboxed eval, shell or model-driven code execution | `PY001`, `PY002`, `AG002`, `ALR06-S01`, `ALR06-S02` | `ASI02`, `ASI05` | Art. 15 | partial |
 | `ALR07` | Least-privilege tools | Tools and delegation are scoped, not wildcard or unrestricted | `AG001`, `AG005`, `MAN002` | `ASI02`, `ASI03`, `ASI05` | Art. 15 | partial |
-| `ALR08` | Bounded execution | Agent loops and recursion have effective limits | `AG007` | `ASI08` | Art. 15 | partial |
+| `ALR08` | Bounded execution | Agent loops and recursion have effective limits | `AG007`, `ALR08-S01`, `ALR08-S02` | `ASI08` | Art. 15 | partial |
 | `ALR09` | Human approval for sensitive actions | Destructive or outward-facing actions need human approval | `AG004`, `AG006`, `MAN001` | `ASI02`, `ASI03`, `ASI05`, `ASI09` | Art. 14 | partial |
 | `ALR10` | Secret hygiene | No credentials in source, config or prompts | `SEC001` | `ASI03`, `ASI04` | Art. 15 | partial |
-| `ALR11` | Dependency integrity | Pinned dependencies have no known advisories | `DEP001` | `ASI04` | Art. 15 | partial |
-| `ALR12` | Secure transport | TLS is verified and agent or tool traffic does not use plain HTTP | `PY003` | `ASI02`, `ASI07` | Art. 15 | partial |
-| `ALR13` | Memory and context integrity | Untrusted content is not written to agent memory or vector stores | none | `ASI06` | Art. 15 | no checks yet |
-| `ALR14` | Rogue agent containment | Agents cannot modify their own prompts or config, or spawn agents without limits | none | `ASI10` | Art. 14, Art. 15 | no checks yet |
+| `ALR11` | Dependency integrity | Pinned dependencies have no known advisories | `DEP001`, `ALR11-S01` | `ASI04` | Art. 15 | partial |
+| `ALR12` | Secure transport | TLS is verified and agent or tool traffic does not use plain HTTP | `PY003`, `ALR12-S01` | `ASI02`, `ASI07` | Art. 15 | partial |
+| `ALR13` | Memory and context integrity | Untrusted content is not written to agent memory or vector stores | `ALR13-S01`, `ALR13-S02` | `ASI06` | Art. 15 | partial |
+| `ALR14` | Rogue agent containment | Agents cannot modify their own prompts or config, or spawn agents without limits | `ALR14-S01`, `ALR14-S02`, `ALR14-S03` | `ASI10` | Art. 14, Art. 15 | partial |
 
 ## Detectors
 
@@ -35,7 +35,9 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 |---|---|---|---|---|
 | `PRM001` | `ALR01` | static | Injected text inside a prompt the author ships breaks the prompt itself | `ASI01` |
 | `PRM002` | `ALR01` | static | User text placed in the system prompt gains system-level authority over the agent's goal | `ASI01` |
+| `ALR01-S01` | `ALR01` | static | Invisible or direction-control characters hide instructions from the reviewer while the model still reads them | `ASI01` |
 | `MAN003` | `ALR03` | manifest | The agent cannot tell a real remote tool from an impostor if the endpoint is unauthenticated | `ASI03`, `ASI02` |
+| `ALR03-S01` | `ALR03` | static | A server on every interface lets any reachable peer call the agent and its tools | `ASI03`, `ASI07` |
 | `ALR04-001` | `ALR04` | runtime | The tool definition tells the model to ignore its instructions | `ASI01`, `ASI02`, `ASI04` |
 | `ALR04-002` | `ALR04` | runtime | The tool definition claims to speak for the system, developer or user | `ASI01`, `ASI02`, `ASI04` |
 | `ALR04-003` | `ALR04` | runtime | The tool definition asks the model to hide actions from the user | `ASI01`, `ASI02`, `ASI04` |
@@ -49,16 +51,27 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `PY001` | `ALR06` | static | Runs arbitrary code inside the agent process | `ASI05`, `ASI02` |
 | `PY002` | `ALR06` | static | Model-influenced strings can become shell commands | `ASI05`, `ASI02` |
 | `AG002` | `ALR06` | static | The agent writes Python and the framework executes it | `ASI05`, `ASI02` |
+| `ALR06-S01` | `ALR06` | static | A loader that builds objects turns a crafted file into code in the agent process | `ASI05` |
+| `ALR06-S02` | `ALR06` | static | Model-written code without a sandbox runs with the agent's own access | `ASI05`, `ASI02` |
 | `AG001` | `ALR07` | static | The agent can hand work to other agents, and with it their tools | `ASI02`, `ASI03` |
 | `AG005` | `ALR07` | static | The tool has no scope limit, so the agent holds full shell or file access | `ASI02`, `ASI03`, `ASI05` |
 | `MAN002` | `ALR07` | manifest | The manifest grants everything instead of what the tool needs | `ASI02`, `ASI03` |
 | `AG007` | `ALR08` | static | An unbounded loop turns one bad step into runaway cost or repeated actions | `ASI08` |
+| `ALR08-S01` | `ALR08` | static | One stalled peer without a timeout holds up every step queued behind it | `ASI08` |
+| `ALR08-S02` | `ALR08` | static | A retry without a limit never gives up, so a failing dependency stalls the step | `ASI08` |
 | `AG004` | `ALR09` | static | The model can delete, write, send or pay without a human confirming | `ASI02`, `ASI03`, `ASI05`, `ASI09` |
 | `AG006` | `ALR09` | static | Approval exists in the framework but the code switches it off | `ASI09`, `ASI02`, `ASI05` |
 | `MAN001` | `ALR09` | manifest | The manifest declares a dangerous capability with no approval step | `ASI02`, `ASI03`, `ASI05`, `ASI09` |
 | `SEC001` | `ALR10` | static | A secret in the project can be read by the agent, its prompts or anyone with the code | `ASI03`, `ASI04` |
 | `DEP001` | `ALR11` | dependency audit (opt-in) | A known-vulnerable package is part of the agent's supply chain | `ASI04` |
+| `ALR11-S01` | `ALR11` | static | Trusting remote model code makes a hub repository part of the agent's supply chain | `ASI04` |
 | `PY003` | `ALR12` | static | Disabled TLS checks let anyone on the network read or alter the agent's traffic | `ASI02` |
+| `ALR12-S01` | `ALR12` | static | Plaintext endpoints let anyone on the path read or rewrite peer traffic | `ASI02`, `ASI07` |
+| `ALR13-S01` | `ALR13` | static | Untrusted text written to memory comes back as context the agent trusts | `ASI06` |
+| `ALR13-S02` | `ALR13` | static | One memory shared by every session lets one user's context reach another | `ASI06` |
+| `ALR14-S01` | `ALR14` | static | An agent that rewrites its own prompts or settings keeps instructions after the session | `ASI10` |
+| `ALR14-S02` | `ALR14` | static | Persistence brings the agent back after it is stopped, outside a user's view | `ASI10` |
+| `ALR14-S03` | `ALR14` | static | Installing packages at runtime pulls unreviewed code into the agent process | `ASI10` |
 
 Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary.
 

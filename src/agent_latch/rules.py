@@ -16,7 +16,7 @@ from agent_latch.agent_code import scan_agent_code, scan_prompt_yaml
 from agent_latch.astutil import walk
 from agent_latch.findings import Finding, demote_test_findings, is_test_path
 from agent_latch.prompts import check_prompt_text
-from agent_latch.taint import find_untrusted_prompt_flows
+from agent_latch.taint import analyze_untrusted_flows
 
 __all__ = ["DependencyAuditError", "Finding", "audit_requirements", "scan_project"]
 
@@ -184,7 +184,8 @@ def scan_python(path: Path, root: Path, source: str) -> list[Finding]:
                 )
             )
 
-    for flow in find_untrusted_prompt_flows(tree):
+    flows = analyze_untrusted_flows(tree)
+    for flow in flows.prompts:
         findings.append(
             Finding(
                 rule_id="AGENTLATCH-AG003",
@@ -205,7 +206,7 @@ def scan_python(path: Path, root: Path, source: str) -> list[Finding]:
             )
         )
 
-    findings.extend(scan_agent_code(tree, _relative(path, root)))
+    findings.extend(scan_agent_code(tree, _relative(path, root), flows.memories))
     return demote_test_findings(findings, _relative(path, root))
 
 

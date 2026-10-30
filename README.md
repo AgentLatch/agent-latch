@@ -216,6 +216,19 @@ The **trace** keeps argument names, sizes, SHA-256 hashes and a short secret-mas
 | `MAN003` | `ALR03` | Manifest tool calling a remote endpoint without authentication | ASI03 Identity and Privilege Abuse; ASI02 Tool Misuse and Exploitation |
 | `PRM001` | `ALR01` | Prompt-injection signatures in prompts in code, YAML, prompt template files, and manifests | ASI01 Agent Goal Hijack |
 | `PRM002` | `ALR01` | User-input placeholder interpolated into a system prompt | ASI01 Agent Goal Hijack |
+| `ALR01-S01` | `ALR01` | Invisible, bidi, or zero-width characters in a prompt | ASI01 Agent Goal Hijack |
+| `ALR03-S01` | `ALR03` | Agent or MCP server bound to every interface (`host="0.0.0.0"`) | ASI03 Identity and Privilege Abuse; ASI07 |
+| `ALR06-S01` | `ALR06` | Unsafe deserialization (`yaml.load` without a safe loader, `pickle`, `torch.load` without `weights_only`) | ASI05 Unexpected Code Execution (RCE) |
+| `ALR06-S02` | `ALR06` | Model-written code runs without a sandbox (`use_docker=False`, `code_execution_mode="unsafe"`, local executor) | ASI05 Unexpected Code Execution (RCE); ASI02 |
+| `ALR08-S01` | `ALR08` | Outbound HTTP call without a timeout | ASI08 Cascading Failures |
+| `ALR08-S02` | `ALR08` | Unbounded retry (`@retry` without `stop`, `Retry(total=None)`, `max_retries=None`) | ASI08 Cascading Failures |
+| `ALR11-S01` | `ALR11` | Model or dataset loaded with `trust_remote_code=True` | ASI04 Agentic Supply Chain Vulnerabilities |
+| `ALR12-S01` | `ALR12` | Agent, tool, or model endpoint on plaintext `http://` or `ws://` | ASI02 Tool Misuse and Exploitation; ASI07 |
+| `ALR13-S01` | `ALR13` | Web or tool output written to agent memory or a vector store without validation | ASI06 Memory & Context Poisoning |
+| `ALR13-S02` | `ALR13` | Memory or vector store created once at module level, shared by every session | ASI06 Memory & Context Poisoning |
+| `ALR14-S01` | `ALR14` | Agent writes to its own prompts, instructions, or settings | ASI10 Rogue Agents |
+| `ALR14-S02` | `ALR14` | Agent installs persistence (cron, systemd, launchd, shell profile, SSH keys) | ASI10 Rogue Agents |
+| `ALR14-S03` | `ALR14` | Agent installs packages at runtime | ASI10 Rogue Agents |
 
 Rule behavior and known blind spots are documented in [docs/RULES.md](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md).
 
@@ -227,16 +240,16 @@ How the scanner's rules map to the [OWASP Top 10 for Agentic Applications 2026](
 
 | ID | Category | Coverage | Rules |
 |---|---|---|---|
-| ASI01 | Agent Goal Hijack | ✅ checks | `AG003`, `PRM001`, `PRM002` |
-| ASI02 | Tool Misuse and Exploitation | ✅ checks | `PY001`–`PY003`, `AG001`, `AG002`, `AG004`–`AG006`, `MAN001`–`MAN003` |
-| ASI03 | Identity and Privilege Abuse | ✅ checks | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`–`MAN003` |
-| ASI04 | Agentic Supply Chain Vulnerabilities | ✅ checks | `SEC001`, `DEP001` |
-| ASI05 | Unexpected Code Execution (RCE) | ✅ checks | `PY001`, `PY002`, `AG002`, `AG004`–`AG006`, `MAN001` |
-| ASI06 | Memory & Context Poisoning | ⬜ no checks yet | |
-| ASI07 | Insecure Inter-Agent Communication | ⬜ no checks yet | |
-| ASI08 | Cascading Failures | 🟨 partial | `AG007` |
+| ASI01 | Agent Goal Hijack | ✅ checks | `AG003`, `PRM001`, `PRM002`, `ALR01-S01` |
+| ASI02 | Tool Misuse and Exploitation | ✅ checks | `PY001`–`PY003`, `AG001`, `AG002`, `AG004`–`AG006`, `MAN001`–`MAN003`, `ALR06-S02`, `ALR12-S01` |
+| ASI03 | Identity and Privilege Abuse | ✅ checks | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`–`MAN003`, `ALR03-S01` |
+| ASI04 | Agentic Supply Chain Vulnerabilities | ✅ checks | `SEC001`, `DEP001`, `ALR11-S01` |
+| ASI05 | Unexpected Code Execution (RCE) | ✅ checks | `PY001`, `PY002`, `AG002`, `AG004`–`AG006`, `MAN001`, `ALR06-S01`, `ALR06-S02` |
+| ASI06 | Memory & Context Poisoning | 🟨 partial | `ALR13-S01`, `ALR13-S02` |
+| ASI07 | Insecure Inter-Agent Communication | 🟨 partial | `ALR03-S01`, `ALR12-S01` |
+| ASI08 | Cascading Failures | 🟨 partial | `AG007`, `ALR08-S01`, `ALR08-S02` |
 | ASI09 | Human-Agent Trust Exploitation | 🟨 partial | `AG004`, `AG006`, `MAN001` |
-| ASI10 | Rogue Agents | ⬜ no checks yet | |
+| ASI10 | Rogue Agents | 🟨 partial | `ALR14-S01`, `ALR14-S02`, `ALR14-S03` |
 
 Every scan report ends with the same ASI01–ASI10 summary and marks the uncovered categories as `no checks yet`, so they aren't mistaken for clean results. A ✅ means some checks exist, not that the category is fully covered. The mapping is informational, not an OWASP endorsement or certification.
 
