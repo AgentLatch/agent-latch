@@ -1,10 +1,12 @@
 """AgentLatch gates: the security outcomes that every detector reports against.
 
 A gate is a stable outcome, for example "ALR09 Human approval for sensitive actions". Each
-detector, a static rule or a runtime check, belongs to exactly one gate. Framework references are
-mapped per gate: OWASP Agentic IDs come from owasp.py and EU AI Act articles from
-EU_AI_ACT_ARTICLES. A detector's OWASP IDs are always a subset of its gate's (tested).
-Every mapping is informational, never a compliance claim. ISO/IEC 42001 is not mapped yet.
+detector, a static rule or a runtime check, belongs to exactly one gate and is listed in that
+gate's `detectors` group in GATES. DETECTORS is derived from those groups, so a new detector is
+added in one place, next to the outcome it provides evidence for. Framework references are mapped
+per gate: OWASP Agentic IDs come from owasp.py and EU AI Act articles from EU_AI_ACT_ARTICLES. A
+detector's OWASP IDs are always a subset of its gate's (tested). Every mapping is informational,
+never a compliance claim. ISO/IEC 42001 is not mapped yet.
 
 IDs: `ALRnn` is a gate. New static detectors are `ALRnn-Snn` and new runtime detectors
 `ALRnn-Rnn`. Existing detectors keep their IDs (`AGENTLATCH-PRM001`, `ALR04-001`). Reports show
@@ -31,6 +33,10 @@ EU_AI_ACT_ARTICLES: dict[str, str] = {
     "Art. 15": "Accuracy, robustness and cybersecurity",
 }
 
+# (detector id, mode, reason). A detector is declared inside its gate group, so the catalog reads
+# as gate -> detectors and the gate a detector belongs to cannot drift from a second list.
+DetectorSpec = tuple[str, str, str]
+
 
 @dataclass(frozen=True)
 class Gate:
@@ -39,6 +45,7 @@ class Gate:
     outcome: str
     owasp: tuple[str, ...]
     eu_ai_act: tuple[str, ...]
+    detectors: tuple[DetectorSpec, ...]
 
 
 @dataclass(frozen=True)
@@ -49,102 +56,225 @@ class Detector:
     reason: str
 
 
+# The ALR04 runtime checks are a single family; they are expanded into the gate below.
+_ALR04_RUNTIME: tuple[DetectorSpec, ...] = (
+    ("ALR04-001", "runtime",
+     "The tool definition tells the model to ignore its instructions"),
+    ("ALR04-002", "runtime",
+     "The tool definition claims to speak for the system, developer or user"),
+    ("ALR04-003", "runtime",
+     "The tool definition asks the model to hide actions from the user"),
+    ("ALR04-004", "runtime",
+     "The tool definition steers the model toward secrets or private files"),
+    ("ALR04-005", "runtime",
+     "The tool definition asks the model to send data somewhere"),
+    ("ALR04-006", "runtime",
+     "The tool definition changes how the model uses other tools"),
+    ("ALR04-007", "runtime",
+     "Instructions are hidden with encoding or invisible characters"),
+    ("ALR04-008", "runtime",
+     "The tool definition pushes the model to always pick this tool"),
+    ("ALR04-009", "runtime",
+     "The tool definition demands a harmful step before it can be used"),
+)
+
 GATES: tuple[Gate, ...] = (
-    Gate("ALR01", "Prompt integrity",
-         "System prompts carry no injected instructions or raw user input",
-         ("ASI01",), ("Art. 15",)),
-    Gate("ALR02", "Tool definition integrity",
-         "Tool definitions are pinned and changes are detected",
-         ("ASI02", "ASI04"), ("Art. 15",)),
-    Gate("ALR03", "Tool and agent endpoint trust",
-         "Remote tools, MCP servers and peer agents are identified and authenticated",
-         ("ASI02", "ASI03", "ASI04", "ASI07"), ("Art. 15",)),
-    Gate("ALR04", "Tool schema injection",
-         "Tool definitions contain no instruction-like or hidden content",
-         ("ASI01", "ASI02", "ASI04"), ("Art. 15",)),
-    Gate("ALR05", "Untrusted content isolation",
-         "Web, HTTP and tool output reaches the model fenced as data",
-         ("ASI01",), ("Art. 15",)),
-    Gate("ALR06", "Code execution containment",
-         "No unsandboxed eval, shell or model-driven code execution",
-         ("ASI02", "ASI05"), ("Art. 15",)),
-    Gate("ALR07", "Least-privilege tools",
-         "Tools and delegation are scoped, not wildcard or unrestricted",
-         ("ASI02", "ASI03", "ASI05"), ("Art. 15",)),
-    Gate("ALR08", "Bounded execution",
-         "Agent loops and recursion have effective limits",
-         ("ASI08",), ("Art. 15",)),
-    Gate("ALR09", "Human approval for sensitive actions",
-         "Destructive or outward-facing actions need human approval",
-         ("ASI02", "ASI03", "ASI05", "ASI09"), ("Art. 14",)),
-    Gate("ALR10", "Secret hygiene",
-         "No credentials in source, config or prompts",
-         ("ASI03", "ASI04"), ("Art. 15",)),
-    Gate("ALR11", "Dependency integrity",
-         "Pinned dependencies have no known advisories",
-         ("ASI04",), ("Art. 15",)),
-    Gate("ALR12", "Secure transport",
-         "TLS is verified and agent or tool traffic does not use plain HTTP",
-         ("ASI02", "ASI07"), ("Art. 15",)),
-    Gate("ALR13", "Memory and context integrity",
-         "Untrusted content is not written to agent memory or vector stores",
-         ("ASI06",), ("Art. 15",)),
-    Gate("ALR14", "Rogue agent containment",
-         "Agents cannot modify their own prompts or config, or spawn agents without limits",
-         ("ASI10",), ("Art. 14", "Art. 15")),
-)
-
-_ALR04_RUNTIME = (
-    ("ALR04-001", "The tool definition tells the model to ignore its instructions"),
-    ("ALR04-002", "The tool definition claims to speak for the system, developer or user"),
-    ("ALR04-003", "The tool definition asks the model to hide actions from the user"),
-    ("ALR04-004", "The tool definition steers the model toward secrets or private files"),
-    ("ALR04-005", "The tool definition asks the model to send data somewhere"),
-    ("ALR04-006", "The tool definition changes how the model uses other tools"),
-    ("ALR04-007", "Instructions are hidden with encoding or invisible characters"),
-    ("ALR04-008", "The tool definition pushes the model to always pick this tool"),
-    ("ALR04-009", "The tool definition demands a harmful step before it can be used"),
-)
-
-DETECTORS: tuple[Detector, ...] = (
-    Detector("AGENTLATCH-PRM001", "ALR01", "static",
+    Gate(
+        "ALR01",
+        "Prompt integrity",
+        "System prompts carry no injected instructions or raw user input",
+        ("ASI01",),
+        ("Art. 15",),
+        detectors=(
+            ("AGENTLATCH-PRM001", "static",
              "Injected text inside a prompt the author ships breaks the prompt itself"),
-    Detector("AGENTLATCH-PRM002", "ALR01", "static",
-             "User text placed in the system prompt gains system-level authority over the "
-             "agent's goal"),
-    Detector("AGENTLATCH-MAN003", "ALR03", "manifest",
-             "The agent cannot tell a real remote tool from an impostor if the endpoint is "
-             "unauthenticated"),
-    *(Detector(rule_id, "ALR04", "runtime", reason) for rule_id, reason in _ALR04_RUNTIME),
-    Detector("AGENTLATCH-AG003", "ALR05", "static",
+            ("AGENTLATCH-PRM002", "static",
+             ("User text placed in the system prompt gains system-level authority over the "
+              "agent's goal")),
+            ("ALR01-S01", "static",
+             ("Invisible or direction-control characters hide instructions from the reviewer "
+              "while the model still reads them")),
+        ),
+    ),
+    Gate(
+        "ALR02",
+        "Tool definition integrity",
+        "Tool definitions are pinned and changes are detected",
+        ("ASI02", "ASI04"),
+        ("Art. 15",),
+        detectors=(),
+    ),
+    Gate(
+        "ALR03",
+        "Tool and agent endpoint trust",
+        "Remote tools, MCP servers and peer agents are identified and authenticated",
+        ("ASI02", "ASI03", "ASI04", "ASI07"),
+        ("Art. 15",),
+        detectors=(
+            ("AGENTLATCH-MAN003", "manifest",
+             ("The agent cannot tell a real remote tool from an impostor if the endpoint is "
+              "unauthenticated")),
+            ("ALR03-S01", "static",
+             "A server on every interface lets any reachable peer call the agent and its tools"),
+        ),
+    ),
+    Gate(
+        "ALR04",
+        "Tool schema injection",
+        "Tool definitions contain no instruction-like or hidden content",
+        ("ASI01", "ASI02", "ASI04"),
+        ("Art. 15",),
+        detectors=_ALR04_RUNTIME,
+    ),
+    Gate(
+        "ALR05",
+        "Untrusted content isolation",
+        "Web, HTTP and tool output reaches the model fenced as data",
+        ("ASI01",),
+        ("Art. 15",),
+        detectors=(
+            ("AGENTLATCH-AG003", "static",
              "Content from outside reaches the model as if it were instructions, not data"),
-    Detector("AGENTLATCH-PY001", "ALR06", "static",
+        ),
+    ),
+    Gate(
+        "ALR06",
+        "Code execution containment",
+        "No unsandboxed eval, shell or model-driven code execution",
+        ("ASI02", "ASI05"),
+        ("Art. 15",),
+        detectors=(
+            ("AGENTLATCH-PY001", "static",
              "Runs arbitrary code inside the agent process"),
-    Detector("AGENTLATCH-PY002", "ALR06", "static",
+            ("AGENTLATCH-PY002", "static",
              "Model-influenced strings can become shell commands"),
-    Detector("AGENTLATCH-AG002", "ALR06", "static",
+            ("AGENTLATCH-AG002", "static",
              "The agent writes Python and the framework executes it"),
-    Detector("AGENTLATCH-AG001", "ALR07", "static",
+            ("ALR06-S01", "static",
+             "A loader that builds objects turns a crafted file into code in the agent process"),
+            ("ALR06-S02", "static",
+             "Model-written code without a sandbox runs with the agent's own access"),
+        ),
+    ),
+    Gate(
+        "ALR07",
+        "Least-privilege tools",
+        "Tools and delegation are scoped, not wildcard or unrestricted",
+        ("ASI02", "ASI03", "ASI05"),
+        ("Art. 15",),
+        detectors=(
+            ("AGENTLATCH-AG001", "static",
              "The agent can hand work to other agents, and with it their tools"),
-    Detector("AGENTLATCH-AG005", "ALR07", "static",
+            ("AGENTLATCH-AG005", "static",
              "The tool has no scope limit, so the agent holds full shell or file access"),
-    Detector("AGENTLATCH-MAN002", "ALR07", "manifest",
+            ("AGENTLATCH-MAN002", "manifest",
              "The manifest grants everything instead of what the tool needs"),
-    Detector("AGENTLATCH-AG007", "ALR08", "static",
+        ),
+    ),
+    Gate(
+        "ALR08",
+        "Bounded execution",
+        "Agent loops and recursion have effective limits",
+        ("ASI08",),
+        ("Art. 15",),
+        detectors=(
+            ("AGENTLATCH-AG007", "static",
              "An unbounded loop turns one bad step into runaway cost or repeated actions"),
-    Detector("AGENTLATCH-AG004", "ALR09", "static",
+            ("ALR08-S01", "static",
+             "One stalled peer without a timeout holds up every step queued behind it"),
+            ("ALR08-S02", "static",
+             "A retry without a limit never gives up, so a failing dependency stalls the step"),
+        ),
+    ),
+    Gate(
+        "ALR09",
+        "Human approval for sensitive actions",
+        "Destructive or outward-facing actions need human approval",
+        ("ASI02", "ASI03", "ASI05", "ASI09"),
+        ("Art. 14",),
+        detectors=(
+            ("AGENTLATCH-AG004", "static",
              "The model can delete, write, send or pay without a human confirming"),
-    Detector("AGENTLATCH-AG006", "ALR09", "static",
+            ("AGENTLATCH-AG006", "static",
              "Approval exists in the framework but the code switches it off"),
-    Detector("AGENTLATCH-MAN001", "ALR09", "manifest",
+            ("AGENTLATCH-MAN001", "manifest",
              "The manifest declares a dangerous capability with no approval step"),
-    Detector("AGENTLATCH-SEC001", "ALR10", "static",
-             "A secret in the project can be read by the agent, its prompts or anyone with the "
-             "code"),
-    Detector("AGENTLATCH-DEP001", "ALR11", "dependency audit (opt-in)",
+        ),
+    ),
+    Gate(
+        "ALR10",
+        "Secret hygiene",
+        "No credentials in source, config or prompts",
+        ("ASI03", "ASI04"),
+        ("Art. 15",),
+        detectors=(
+            ("AGENTLATCH-SEC001", "static",
+             ("A secret in the project can be read by the agent, its prompts or anyone with the "
+              "code")),
+        ),
+    ),
+    Gate(
+        "ALR11",
+        "Dependency integrity",
+        "Pinned dependencies have no known advisories",
+        ("ASI04",),
+        ("Art. 15",),
+        detectors=(
+            ("AGENTLATCH-DEP001", "dependency audit (opt-in)",
              "A known-vulnerable package is part of the agent's supply chain"),
-    Detector("AGENTLATCH-PY003", "ALR12", "static",
+            ("ALR11-S01", "static",
+             "Trusting remote model code makes a hub repository part of the agent's supply chain"),
+        ),
+    ),
+    Gate(
+        "ALR12",
+        "Secure transport",
+        "TLS is verified and agent or tool traffic does not use plain HTTP",
+        ("ASI02", "ASI07"),
+        ("Art. 15",),
+        detectors=(
+            ("AGENTLATCH-PY003", "static",
              "Disabled TLS checks let anyone on the network read or alter the agent's traffic"),
+            ("ALR12-S01", "static",
+             "Plaintext endpoints let anyone on the path read or rewrite peer traffic"),
+        ),
+    ),
+    Gate(
+        "ALR13",
+        "Memory and context integrity",
+        "Untrusted content is not written to agent memory or vector stores",
+        ("ASI06",),
+        ("Art. 15",),
+        detectors=(
+            ("ALR13-S01", "static",
+             "Untrusted text written to memory comes back as context the agent trusts"),
+            ("ALR13-S02", "static",
+             "One memory shared by every session lets one user's context reach another"),
+        ),
+    ),
+    Gate(
+        "ALR14",
+        "Rogue agent containment",
+        "Agents cannot modify their own prompts or config, or spawn agents without limits",
+        ("ASI10",),
+        ("Art. 14", "Art. 15"),
+        detectors=(
+            ("ALR14-S01", "static",
+             ("An agent that rewrites its own prompts or settings keeps instructions after the "
+              "session")),
+            ("ALR14-S02", "static",
+             "Persistence brings the agent back after it is stopped, outside a user's view"),
+            ("ALR14-S03", "static",
+             "Installing packages at runtime pulls unreviewed code into the agent process"),
+        ),
+    ),
+)
+
+# Derived from the gate groups above, flat and in gate order. Never add to this directly.
+DETECTORS: tuple[Detector, ...] = tuple(
+    Detector(detector_id, item.id, mode, reason)
+    for item in GATES
+    for detector_id, mode, reason in item.detectors
 )
 
 # Records that report on the scan itself rather than a security outcome; they belong to no gate.

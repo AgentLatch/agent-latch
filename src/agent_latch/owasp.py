@@ -32,6 +32,19 @@ ASI_CATEGORIES: dict[str, str] = {
 # Every category a rule can emit. Rules whose mapping depends on context (MAN001) list all options.
 # Keep in sync with the rules and with the coverage table in AGENTS.md.
 RULE_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "ALR01-S01": ("ASI01",),
+    "ALR03-S01": ("ASI03", "ASI07"),
+    "ALR06-S01": ("ASI05",),
+    "ALR06-S02": ("ASI05", "ASI02"),
+    "ALR08-S01": ("ASI08",),
+    "ALR08-S02": ("ASI08",),
+    "ALR11-S01": ("ASI04",),
+    "ALR12-S01": ("ASI02", "ASI07"),
+    "ALR13-S01": ("ASI06",),
+    "ALR13-S02": ("ASI06",),
+    "ALR14-S01": ("ASI10",),
+    "ALR14-S02": ("ASI10",),
+    "ALR14-S03": ("ASI10",),
     "AGENTLATCH-PY001": ("ASI05", "ASI02"),
     "AGENTLATCH-PY002": ("ASI05", "ASI02"),
     "AGENTLATCH-PY003": ("ASI02",),

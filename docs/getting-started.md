@@ -266,6 +266,8 @@ When the scan exits `1`, it prints the findings that caused the failure (severit
   HIGH     PY002 (ALR06)   tools.py:10             Subprocess uses shell=True
 ```
 
+New rules can change this outcome: `ALR06-S01` (unsafe deserialization) and `ALR14-S02` (persistence) are high severity, so a newer AgentLatch can exit `1` under `--fail-on high` on a project that passed before. Review the new findings and record the accepted ones in `.agent-latch-ignore`.
+
 ## Dependency audit
 
 ```sh

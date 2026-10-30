@@ -9,6 +9,9 @@
 - AG006 / AG007 (human approval disabled, unbounded agent loops) live in oversight.py.
                                                      (ASI02 Tool Misuse and Exploitation; ASI05/ASI03)
 
+The ASI06/07/08/10 checks live in memory.py, endpoints.py, resilience.py and rogue.py, and the
+execution-containment checks in sandbox.py. They are all wired together in scan_agent_code().
+
 All checks are single-file, name-based heuristics over the AST. Nothing is imported or executed.
 """
 
@@ -16,15 +19,21 @@ from __future__ import annotations
 
 import ast
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import yaml
 
 from agent_latch.astutil import walk
+from agent_latch.endpoints import scan_endpoints
 from agent_latch.findings import Finding
+from agent_latch.memory import memory_write_findings, shared_memory_findings
 from agent_latch.oversight import scan_oversight
 from agent_latch.prompts import check_prompt_text
+from agent_latch.resilience import scan_resilience
+from agent_latch.rogue import scan_rogue_agent
+from agent_latch.sandbox import scan_sandbox
+from agent_latch.taint import MemoryFlow
 from agent_latch.yamlload import LineDict, line_of, load_yaml
 
 # ---------------------------------------------------------------- shared helpers
@@ -477,11 +486,19 @@ def _builtin_tool_findings(tree: ast.Module, path: str) -> list[Finding]:
 # ---------------------------------------------------------------- entry point
 
 
-def scan_agent_code(tree: ast.Module, path: str) -> list[Finding]:
+def scan_agent_code(
+    tree: ast.Module, path: str, memory_flows: Sequence[MemoryFlow] = ()
+) -> list[Finding]:
     """Manifest-independent agent checks for one parsed Python file."""
     return [
         *_PromptCollector(path).visit(tree),
         *_ToolAnalysis(tree, path).findings(),
         *_builtin_tool_findings(tree, path),
         *scan_oversight(tree, path),
+        *memory_write_findings(memory_flows, path),
+        *shared_memory_findings(tree, path),
+        *scan_endpoints(tree, path),
+        *scan_resilience(tree, path),
+        *scan_rogue_agent(tree, path),
+        *scan_sandbox(tree, path),
     ]

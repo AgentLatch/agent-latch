@@ -1,8 +1,9 @@
-"""Lightweight, intra-module taint tracking from web/tool output into LLM prompts.
+"""Lightweight, intra-module taint tracking from web/tool output into prompts and agent memory.
 
 Tracks values from known web-search tools, web loaders, and HTTP clients through
 assignments, loops, function returns, call arguments, and dict state keys (as used by
-LangGraph nodes). It is a heuristic: no aliasing, no cross-module flow, no sanitizer model.
+LangGraph nodes). Sinks are LLM message content (AG003) and memory or vector-store writes
+(ALR13-S01). It is a heuristic: no aliasing, no cross-module flow, no sanitizer model.
 """
 
 from __future__ import annotations
@@ -63,6 +64,27 @@ _MESSAGE_SINKS = {"HumanMessage", "SystemMessage", "ChatMessage"}
 # Prompts that fence retrieved content in tags or label it as untrusted are treated as mitigated.
 _MITIGATION = re.compile(r"<[A-Za-z][\w-]*>|untrusted|do not follow", re.IGNORECASE)
 
+# Writes that persist text where a later turn or session reads it back.
+_MEMORY_WRITE_METHODS = {
+    "add",
+    "add_documents",
+    "add_memory",
+    "add_messages",
+    "add_texts",
+    "insert",
+    "put",
+    "remember",
+    "save",
+    "save_context",
+    "store",
+    "upsert",
+}
+_MEMORY_WRITE_CALLS = {"add_memory", "memorize", "remember", "save_memory"}
+# The receiver has to look like a memory, store or index, so session.add() and list.append() stay out.
+_MEMORY_RECEIVER = re.compile(r"(?i)memor|memory|vector|store|collection|knowledge|retriev|embedding|recall")
+# A value passed through a validating or sanitising helper is treated as mitigated.
+_VALIDATION = re.compile(r"(?i)validat|saniti|sanitiz|sanitise|filter|clean")
+
 _Scope = ast.AST  # a FunctionDef/AsyncFunctionDef, or the Module for top-level code
 
 
@@ -71,6 +93,19 @@ class PromptFlow:
     line: int
     column: int
     sink: str
+
+
+@dataclass(frozen=True)
+class MemoryFlow:
+    line: int
+    column: int
+    sink: str
+
+
+@dataclass(frozen=True)
+class UntrustedFlows:
+    prompts: list[PromptFlow]
+    memories: list[MemoryFlow]
 
 
 def _dotted(node: ast.AST) -> str | None:
@@ -99,11 +134,8 @@ def _target_names(target: ast.AST) -> list[str]:
     return [node.id for node in ast.walk(target) if isinstance(node, ast.Name)]
 
 
-def _scope_nodes(scope: _Scope) -> list[ast.AST]:
-    """Nodes belonging to this scope, excluding nested function bodies. Cached on the scope."""
-    cached = getattr(scope, "_agent_latch_scope_nodes", None)
-    if cached is not None:
-        return cached
+def _collect_scope_nodes(scope: _Scope) -> list[ast.AST]:
+    """Nodes belonging to this scope, excluding nested function bodies."""
     roots = scope.body if isinstance(scope, ast.Module) else [scope]
     nodes: list[ast.AST] = []
     stack = list(reversed(roots))
@@ -113,7 +145,6 @@ def _scope_nodes(scope: _Scope) -> list[ast.AST]:
             continue
         nodes.append(node)
         stack.extend(reversed(list(ast.iter_child_nodes(node))))
-    scope._agent_latch_scope_nodes = nodes
     return nodes
 
 
@@ -127,9 +158,17 @@ class _Analysis:
         }
         self.scopes: list[_Scope] = [tree, *self.functions.values()]
         self.tainted: dict[int, set[str]] = {id(scope): set() for scope in self.scopes}
+        self.scope_nodes: dict[int, list[ast.AST]] = {}
         self.tool_objects: set[str] = set()
         self.tainted_returns: set[str] = set()
         self.tainted_keys: set[str] = set()
+
+    def _nodes(self, scope: _Scope) -> list[ast.AST]:
+        """Nodes of this scope, collected once per analysis."""
+        cached = self.scope_nodes.get(id(scope))
+        if cached is None:
+            cached = self.scope_nodes[id(scope)] = _collect_scope_nodes(scope)
+        return cached
 
     def is_tainted(self, expr: ast.AST, scope: _Scope) -> bool:
         names = self.tainted[id(scope)]
@@ -169,7 +208,7 @@ class _Analysis:
 
     def _propagate(self, scope: _Scope) -> bool:
         changed = False
-        for node in _scope_nodes(scope):
+        for node in self._nodes(scope):
             if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and node.value is not None:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 value = node.value
@@ -221,7 +260,7 @@ class _Analysis:
         )
         return self._taint(target, tainted) if tainted else False
 
-    def run(self) -> list[PromptFlow]:
+    def run(self) -> UntrustedFlows:
         for _ in range(20):  # fixed point; bounded for safety on pathological input
             changed = False
             for scope in self.scopes:  # every scope must propagate each pass, so no any()
@@ -230,8 +269,18 @@ class _Analysis:
                 break
 
         flows: dict[tuple[int, int], PromptFlow] = {}
+        memory_flows: dict[tuple[int, int], MemoryFlow] = {}
         for scope in self.scopes:
-            for node in _scope_nodes(scope):
+            for node in self._nodes(scope):
+                sink_name = _memory_sink(node) if isinstance(node, ast.Call) else None
+                if sink_name is not None:
+                    arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
+                    if any(self.is_tainted(argument, scope) for argument in arguments) and not _validated(
+                        arguments
+                    ):
+                        memory_flows.setdefault(
+                            (node.lineno, node.col_offset), MemoryFlow(node.lineno, node.col_offset + 1, sink_name)
+                        )
                 content: ast.AST | None = None
                 sink = ""
                 if isinstance(node, ast.Call) and _dotted(node.func) is not None:
@@ -257,8 +306,41 @@ class _Analysis:
                 if _MITIGATION.search(literal_text):
                     continue
                 flows.setdefault((node.lineno, node.col_offset), PromptFlow(node.lineno, node.col_offset + 1, sink))
-        return sorted(flows.values(), key=lambda flow: (flow.line, flow.column))
+        return UntrustedFlows(
+            prompts=sorted(flows.values(), key=lambda flow: (flow.line, flow.column)),
+            memories=sorted(memory_flows.values(), key=lambda flow: (flow.line, flow.column)),
+        )
+
+
+def _memory_sink(call: ast.Call) -> str | None:
+    """'memory.save_context()' for a call that writes text into a memory or vector store."""
+    name = _dotted(call.func) or ""
+    method = name.rsplit(".", 1)[-1]
+    if method in _MEMORY_WRITE_CALLS:
+        return f"{name}()"
+    if not isinstance(call.func, ast.Attribute) or method not in _MEMORY_WRITE_METHODS:
+        return None
+    receiver = _dotted(call.func.value) or ""
+    if _MEMORY_RECEIVER.search(receiver.rsplit(".", 1)[-1]):
+        return f"{receiver}.{method}()"
+    return None
+
+
+def _validated(arguments: list[ast.AST]) -> bool:
+    return any(
+        isinstance(node, ast.Call) and bool(_VALIDATION.search(_dotted(node.func) or ""))
+        for argument in arguments
+        for node in ast.walk(argument)
+    )
+
+
+def analyze_untrusted_flows(tree: ast.Module) -> UntrustedFlows:
+    return _Analysis(tree).run()
 
 
 def find_untrusted_prompt_flows(tree: ast.Module) -> list[PromptFlow]:
-    return _Analysis(tree).run()
+    return analyze_untrusted_flows(tree).prompts
+
+
+def find_untrusted_memory_writes(tree: ast.Module) -> list[MemoryFlow]:
+    return analyze_untrusted_flows(tree).memories
