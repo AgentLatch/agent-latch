@@ -272,3 +272,17 @@ def test_sarif_with_a_missing_ledger_prints_no_report(tmp_path: Path, capsys) ->
     assert code == 2
     assert captured.out == ""
     assert "no audit ledger" in captured.err
+
+
+def test_a_deleted_ledger_with_an_anchor_fails_the_report(tmp_path: Path, capsys) -> None:
+    _, ledger, anchor = _sealed(tmp_path)
+    csv_path = tmp_path / "gate-results.csv"
+    _csv(csv_path, [])
+    ledger.write_text("", encoding="utf-8")
+
+    code = main([str(tmp_path), "--runtime-result", str(csv_path), "--plain", "--fail-on", "none",
+                 "--ledger", str(ledger), "--anchor", str(anchor)])
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "AUDIT TRAIL DELETED" in captured.out
+    assert "audit trail deleted" in captured.err

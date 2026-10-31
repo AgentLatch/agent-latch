@@ -354,10 +354,11 @@ def _import_logs(args: argparse.Namespace) -> int:
 
 
 def _verify_one(ledger: Path, trace: Path | None, anchor: Path | None) -> int:
-    if not ledger.is_file():
+    verification = verify_ledger(ledger, trace_path=trace, anchor_path=anchor)
+    if not ledger.is_file() and not verification.failed:
+        # Nothing says records ever existed, so this is a wrong path, not a deletion.
         print(f"agent-latch-runtime: no ledger file at {ledger}", file=sys.stderr)
         return 2
-    verification = verify_ledger(ledger, trace_path=trace, anchor_path=anchor)
     for line in describe(verification):
         print(line)
     return 1 if verification.failed else 0

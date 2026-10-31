@@ -144,6 +144,59 @@ def _block_digest(block: Block) -> str:
     )
 
 
+def _nothing_to_verify(
+    ledger: Path,
+    detail: str,
+    *,
+    trace_path: Path | None,
+    anchor_path: Path | None,
+) -> Verification:
+    """A ledger that is gone or empty: ``missing``, unless something proves records existed.
+
+    The proxy creates an empty ledger when it starts, so empty alone is a fresh start. But an
+    anchor point, or lines in the trace, mean records were sealed once, and a ledger without them
+    was deleted or emptied.
+    """
+    evidence: Issue | None = None
+    anchor_seq: int | None = None
+    anchor_digest: str | None = None
+    anchor_time: str | None = None
+    if anchor_path is not None:
+        try:
+            point = FileAnchor(Path(anchor_path)).latest()
+        except (AnchorError, OSError):
+            point = None
+        if point is not None:
+            anchor_seq, anchor_digest, anchor_time = point.seq, point.digest, point.timestamp
+            evidence = Issue(
+                "deleted", point.seq, f"{detail}, but #{point.seq} was anchored at {point.timestamp}"
+            )
+    trace_lines = 0
+    if trace_path is not None and Path(trace_path).is_file():
+        try:
+            text = Path(trace_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            text = ""
+        trace_lines = sum(1 for line in text.splitlines() if line.strip())
+    if evidence is None and trace_lines:
+        evidence = Issue("deleted", 1, f"{detail}, but the trace holds {trace_lines} line(s)")
+    if evidence is None:
+        return _missing(ledger, detail)
+    return Verification(
+        status=STATUS_DELETED,
+        blocks=0,
+        head_seq=0,
+        head_digest="",
+        issues=(evidence,),
+        anchored=anchor_seq is not None,
+        anchor_seq=anchor_seq,
+        anchor_digest=anchor_digest,
+        anchor_time=anchor_time,
+        ledger=Path(ledger).name,
+        trace_checked=trace_path is not None and Path(trace_path).is_file(),
+    )
+
+
 def _missing(ledger: Path, detail: str) -> Verification:
     return Verification(
         status=STATUS_MISSING,
@@ -169,7 +222,9 @@ def verify_ledger(
     """Verify the chain, optionally against the trace file and the last anchor point."""
     ledger_path = Path(ledger_path)
     if not ledger_path.is_file():
-        return _missing(ledger_path, f"no ledger at {ledger_path}")
+        return _nothing_to_verify(
+            ledger_path, f"no ledger at {ledger_path}", trace_path=trace_path, anchor_path=anchor_path
+        )
 
     try:
         blocks = list(iter_blocks(ledger_path))
@@ -188,7 +243,12 @@ def verify_ledger(
             trace_checked=False,
         )
     if not blocks:
-        return _missing(ledger_path, f"the ledger at {ledger_path} is empty")
+        return _nothing_to_verify(
+            ledger_path,
+            f"the ledger at {ledger_path} is empty",
+            trace_path=trace_path,
+            anchor_path=anchor_path,
+        )
 
     issues: list[Issue] = []
     prev = GENESIS

@@ -80,8 +80,10 @@ last block. Use that for a long-lived service.
 3. move all three to long-term storage together, named the same way;
 4. only then remove them from the active folder.
 
-Deleting the ledger does not hide anything — a later `verify` says `missing`, and the anchor file
-still records that a head existed. It just removes your ability to answer questions.
+Deleting or emptying the ledger does not hide anything: a later `verify` reports `deleted` (exit
+`1`) when the anchor file or the trace shows records existed, and `missing` only when nothing does.
+It does remove your ability to answer questions. If the anchor and the trace go too, nothing is
+left to compare, which is why the anchor must live where the agent cannot write.
 
 **Live checks and archived sessions.** Point routine checks at the live ledger, or at the live
 folder without `--all`. `verify runtime-logs` looks only at ledgers directly in that folder, so

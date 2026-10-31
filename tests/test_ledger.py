@@ -427,3 +427,69 @@ def test_verify_folder_and_path_usage_errors(tmp_path: Path, capsys) -> None:
     assert _verify_cli(str(ledger), "--ledger", str(ledger)) == 2
     assert _verify_cli() == 2
     assert _verify_cli(str(tmp_path / "nope.ledger.jsonl")) == 2
+
+
+# --------------------------------------------------------------- an emptied or deleted ledger
+def test_emptied_ledger_with_an_anchor_is_a_deletion(sealed) -> None:
+    _, ledger, anchor = sealed
+    _anchor(ledger, anchor)
+    ledger.write_text("", encoding="utf-8")
+
+    result = verify_ledger(ledger, anchor_path=anchor)
+    assert result.status == STATUS_DELETED
+    assert result.failed
+    assert "was anchored" in result.issues[0].detail
+    assert "DELETED" in result.headline()
+
+
+def test_deleted_ledger_with_an_anchor_is_a_deletion(sealed) -> None:
+    _, ledger, anchor = sealed
+    _anchor(ledger, anchor)
+    ledger.unlink()
+
+    result = verify_ledger(ledger, anchor_path=anchor)
+    assert result.status == STATUS_DELETED
+    assert result.anchored and result.anchor_seq == 4
+
+
+def test_emptied_ledger_with_a_trace_that_has_lines_is_a_deletion(sealed) -> None:
+    trace, ledger, _ = sealed
+    ledger.write_text("", encoding="utf-8")
+
+    result = verify_ledger(ledger, trace_path=trace)
+    assert result.status == STATUS_DELETED
+    assert "the trace holds 4 line(s)" in result.issues[0].detail
+
+
+def test_a_fresh_empty_ledger_is_not_a_deletion(tmp_path: Path) -> None:
+    """The proxy creates the ledger before the first record, so empty alone proves nothing."""
+    from agent_latch.runtime.ledger import STATUS_MISSING
+
+    ledger = tmp_path / "trace.ledger.jsonl"
+    ledger.write_text("", encoding="utf-8")
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+
+    assert verify_ledger(ledger, trace_path=trace).status == STATUS_MISSING
+    assert verify_ledger(ledger, anchor_path=tmp_path / "no-anchors.jsonl").status == STATUS_MISSING
+
+
+def test_verify_cli_fails_on_an_emptied_or_deleted_ledger(tmp_path: Path, capsys) -> None:
+    trace, ledger = _pair(tmp_path)
+    anchors = tmp_path / "anchors.jsonl"
+    _anchor(ledger, anchors)
+
+    ledger.write_text("", encoding="utf-8")
+    assert _verify_cli("--ledger", str(ledger), "--anchor", str(anchors)) == 1
+    assert "DELETED" in capsys.readouterr().out
+    assert _verify_cli(str(ledger)) == 1  # path only: the trace beside it still has lines
+    capsys.readouterr()
+
+    ledger.unlink()
+    assert _verify_cli("--ledger", str(ledger), "--anchor", str(anchors)) == 1
+    assert _verify_cli(str(ledger)) == 1
+    capsys.readouterr()
+
+    trace.unlink()
+    assert _verify_cli(str(ledger)) == 2  # nothing says it ever existed: a wrong path
+    assert "no ledger file" in capsys.readouterr().err

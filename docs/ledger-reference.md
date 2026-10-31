@@ -167,7 +167,11 @@ Read-only. Prints the headline and up to five problems.
 |---|---|
 | `0` | `intact` or `unanchored` (for a folder: every ledger) |
 | `1` | `tampered`, `deleted` or `rewritten` (for a folder: any ledger, or an empty one) |
-| `2` | No ledger at that path, no ledger in the folder, or a usage error |
+| `2` | No ledger at that path and nothing (anchor or trace) shows one existed, no ledger in the folder, or a usage error |
+
+A ledger that is gone or empty counts as `deleted` (exit `1`) when `--anchor` has a point, or the
+trace has lines. An empty ledger with neither is a fresh start (`missing`), because the proxy
+creates the file before the first record.
 
 ### `agent-latch --runtime-result CSV --ledger FILE [--anchor PATH] [--ledger-rows N] [--format sarif]`
 

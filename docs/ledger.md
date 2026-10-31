@@ -81,7 +81,7 @@ verdict that fails the command.
 | `intact` | The chain verifies and the head is the digest that was published | Everything matches, including the newest anchor point |
 | `unanchored` | The file verifies on its own, but nothing outside proves it was not rebuilt | No anchor given, or the anchor file is empty |
 | **`tampered`** | A block's content no longer matches its digest, or a record is out of order | An edited field, a malformed block, blocks swapped |
-| **`deleted`** | Records are missing | A gap in `seq`, a trace line with no block, a log shorter than the anchored head, a missing trace file |
+| **`deleted`** | Records are missing | A gap in `seq`, a trace line with no block, a log shorter than the anchored head, a missing trace file, a ledger that is gone or empty while an anchor or the trace shows records existed |
 | **`rewritten`** | The chain is self-consistent but its head is not what was published | The whole log was rebuilt, or replaced from an older copy |
 | **`missing`** | There is no ledger to check | A wrong path, or a run that never had `--ledger` |
 
