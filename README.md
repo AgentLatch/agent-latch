@@ -31,7 +31,7 @@ AgentLatch checks an AI agent at three points, and you can use each on its own:
 
 Everything runs on your machine and nothing is uploaded. The only network use is the opt-in `--dependencies` audit. AgentLatch reports findings and never blocks a tool call, and a clean result is not a security guarantee.
 
-![What stays on your machine: project files flow through the AgentLatch scanner to reports and CI, all locally. An optional dependency audit, off by default, sends only package names and versions to an advisory service.](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/diagrams/local-boundary.svg)
+![What stays on your machine: project files flow through the AgentLatch scanner to reports and CI, all locally. An optional dependency audit, off by default, sends only package names and versions to an advisory service.](docs/assets/diagrams/local-boundary.svg)
 
 Every section below follows the same four steps: what it does, **Run it** (copy-paste), **See the result** (the command that shows the output), and **Go deeper** (links).
 
@@ -97,7 +97,7 @@ On PyPI, AgentLatch is published as `agentlatch-security`. It installs the `agen
 
 **What it does:** reads the files of an agent project (Python code, prompts, YAML, manifests) and reports risky patterns. It never imports or runs the code it checks. No configuration or manifest is needed: every folder and text file is scanned.
 
-![The scan, end to end: source files are parsed and never run, checked by static rules and taint analysis, mapped to OWASP Agentic categories ASI01 to ASI10, and reported as text, JSON or SARIF.](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/diagrams/scan-flow.svg)
+![The scan, end to end: source files are parsed and never run, checked by static rules and taint analysis, mapped to OWASP Agentic categories ASI01 to ASI10, and reported as text, JSON or SARIF.](docs/assets/diagrams/scan-flow.svg)
 
 **Run it:**
 
@@ -148,7 +148,7 @@ echo $?                                        # 0 passed, 1 findings at or abov
 
 What the rules look for: how one piece of untrusted text can travel from a web page to a shell command. Each red marker is a shipped rule (`AG003`, `AG004`, `PY002`), and breaking any one link stops the chain.
 
-![How one bad input becomes an action: untrusted web content reaches an LLM agent, then a tool call with no approval gate, then a shell call. AgentLatch flags AG003, AG004 and PY002.](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/diagrams/attack-chain.svg)
+![How one bad input becomes an action: untrusted web content reaches an LLM agent, then a tool call with no approval gate, then a shell call. AgentLatch flags AG003, AG004 and PY002.](docs/assets/diagrams/attack-chain.svg)
 
 [![AgentLatch demo video: scanning a vulnerable AI agent](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/demo-video-thumbnail.png)](https://youtu.be/4FrRWlApDpo)
 
@@ -207,7 +207,7 @@ pre-commit run agent-latch --all-files
 
 **What it does:** `agent-latch-runtime` sits between an AI agent and an MCP server and records what the agent asks its tools to do and what comes back. It is a **preview and monitor only**: it never blocks a call. It runs ALR04, which reports a finding when a tool definition contains instruction-like content. Secrets are masked in every file.
 
-![Runtime monitor: the agent talks to the MCP server through the agent-latch-runtime proxy, which passes every message through unchanged and writes masked logs. import-logs joins them into events and findings, and agent-latch --runtime-result prints the report.](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/diagrams/runtime-monitor.svg)
+![Runtime monitor: the agent talks to the MCP server through the agent-latch-runtime proxy, which passes every message through unchanged and writes masked logs. import-logs joins them into events and findings, and agent-latch --runtime-result prints the report.](docs/assets/diagrams/runtime-monitor.svg)
 
 **Run it:** try it with a bundled synthetic server, no setup:
 
@@ -273,7 +273,7 @@ The **trace** keeps argument names, sizes, SHA-256 hashes and a short secret-mas
 
 **What it does:** a log the agent can rewrite is not evidence. `--ledger FILE` seals every trace record into a local hash chain, and one short digest per batch (an *anchor*) is published somewhere the agent cannot write. An edit, a deletion or a full rebuild then shows up when you verify. It is off unless you ask for it, uses only the standard library, makes no network call, and is never in the request path.
 
-![Tamper-evident ledger: each trace line is sealed into a numbered block that holds its hash and the previous block's digest, the newest digest is published as an anchor the agent cannot write, and verify returns intact, unanchored, tampered, deleted, rewritten or missing.](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/diagrams/ledger.svg)
+![Tamper-evident ledger: each trace line is sealed into a numbered block that holds its hash and the previous block's digest, the newest digest is published as an anchor the agent cannot write, and verify returns intact, unanchored, tampered, deleted, rewritten or missing.](docs/assets/diagrams/ledger.svg)
 
 **Run it:**
 
