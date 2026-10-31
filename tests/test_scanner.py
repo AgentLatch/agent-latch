@@ -769,7 +769,7 @@ def test_every_detector_belongs_to_one_gate_within_its_owasp_categories() -> Non
 
     from agent_latch.gates import alr04
 
-    assert [gate.id for gate in catalog.GATES] == [f"ALR{n:02d}" for n in range(1, 15)]
+    assert [gate.id for gate in catalog.GATES] == [f"ALR{n:02d}" for n in range(1, 16)]
     assert len(catalog.DETECTORS_BY_ID) == len(catalog.DETECTORS)
     for rule_id in RULE_CATEGORIES:
         assert (rule_id in catalog.DETECTORS_BY_ID) != (rule_id in catalog.DIAGNOSTICS), rule_id

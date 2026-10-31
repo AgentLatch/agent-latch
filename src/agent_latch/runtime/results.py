@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import csv
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,8 +22,27 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from agent_latch.owasp import category_label
+from agent_latch import __version__
+from agent_latch.catalog import gate_entry
+from agent_latch.owasp import category_entries, category_label
 from agent_latch.rules import iter_project_files
+from agent_latch.runtime.ledger import (
+    STATUS_INTACT,
+    STATUS_MISSING,
+    STATUS_UNANCHORED,
+    Verification,
+    describe,
+    verify_ledger,
+)
+from agent_latch.runtime.ledger.report import (
+    DEFAULT_ROWS,
+    audit_properties,
+    format_ledger_table,
+    ledger_rows,
+    render_ledger_table,
+    sarif_results,
+    sarif_rule,
+)
 
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 _SEVERITY_STYLE = {
@@ -33,6 +53,15 @@ _SEVERITY_STYLE = {
     "info": "dim",
     "unknown": "dim",
 }
+_SARIF_LEVEL = {
+    "critical": "error",
+    "high": "error",
+    "medium": "warning",
+    "low": "note",
+    "info": "note",
+    "unknown": "warning",
+}
+_PATH_LINE = re.compile(r"^(?P<path>[^\s#]+?):(?P<line>\d+)(?::(?P<column>\d+))?$")
 _MAX_SOURCE_BYTES = 1_000_000
 _NOTE = "The report lists findings only. Nothing was blocked."
 
@@ -206,6 +235,100 @@ def format_report(alerts: list[RuntimeAlert]) -> str:
     return "\n".join(lines)
 
 
+def format_audit_status(verification: Verification) -> str:
+    """The verdict as plain lines, for --plain output, logs and pipes."""
+    return "\n".join(describe(verification))
+
+
+def _render_audit_status(verification: Verification) -> None:
+    """The verdict in bold above the findings table: the first thing a reader sees."""
+    console = Console()
+    if verification.status == STATUS_INTACT:
+        color = "green"
+    elif verification.status == STATUS_UNANCHORED:
+        color = "yellow"
+    else:
+        color = "red"
+    body = Text(verification.headline(), style=f"bold {color}")
+    for line in describe(verification)[1:]:
+        body.append("\n" + line.strip(), style="dim")
+    console.print(
+        Panel(body, border_style=color, title="[bold]Audit trail[/bold]", title_align="left")
+    )
+
+
+def _alert_location(location: str) -> dict[str, Any]:
+    match = _PATH_LINE.match(location)
+    if match is None:
+        return {"logicalLocations": [{"name": location}]}
+    region: dict[str, Any] = {"startLine": int(match["line"])}
+    if match["column"]:
+        region["startColumn"] = int(match["column"])
+    return {
+        "physicalLocation": {
+            "artifactLocation": {"uri": match["path"]},
+            "region": region,
+        }
+    }
+
+
+def runtime_sarif(
+    alerts: list[RuntimeAlert],
+    verification: Verification | None,
+    ledger_uri: str,
+    block_count: int,
+) -> str:
+    """Runtime gate findings and the audit verdict as one SARIF 2.1.0 run."""
+    rules: dict[str, dict[str, Any]] = {}
+    results: list[dict[str, Any]] = []
+    properties: dict[str, Any] = {"runtimeReport": True, "monitorOnly": True}
+    if verification is not None:
+        rules[sarif_rule()["id"]] = sarif_rule()
+        results.extend(sarif_results(verification, ledger_uri, block_count))
+        properties["auditTrail"] = audit_properties(verification)
+    for alert in alerts:
+        gate = gate_entry(alert.rule_id)
+        rules.setdefault(alert.rule_id, {
+            "id": alert.rule_id,
+            "name": alert.title or alert.rule_id,
+            "shortDescription": {"text": alert.title or alert.rule_id},
+            "help": {"text": alert.message},
+            "properties": {
+                "tags": ["security", *([gate["id"]] if gate else []), *alert.owasp],
+                "gate": gate,
+                "owaspCategories": category_entries(alert.owasp),
+            },
+        })
+        results.append({
+            "ruleId": alert.rule_id,
+            "level": _SARIF_LEVEL.get(alert.severity, "warning"),
+            "message": {"text": alert.message or alert.title or alert.rule_id},
+            "locations": [_alert_location(alert.location)],
+            "properties": {
+                "severity": alert.severity,
+                "gate": gate,
+                "owasp": list(alert.owasp),
+                "owaspCategories": category_entries(alert.owasp),
+                "evidence": alert.evidence,
+                "eventOrder": alert.order,
+            },
+        })
+    payload = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {
+                "name": "AgentLatch",
+                "version": __version__,
+                "rules": list(rules.values()),
+            }},
+            "properties": properties,
+            "results": results,
+        }],
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
 def _render_table(alerts: list[RuntimeAlert]) -> None:
     console = Console()
     if not alerts:
@@ -234,30 +357,24 @@ def _render_table(alerts: list[RuntimeAlert]) -> None:
     console.print(f"[dim]{_NOTE}[/dim]")
 
 
-def report_runtime_results(
-    csv_path: Path,
-    project: Path,
-    *,
-    plain: bool,
-    min_severity: str,
+def _exit_code(
+    verification: Verification | None,
+    ledger: Path | None,
+    alerts: list[RuntimeAlert],
     fail_on: str,
 ) -> int:
-    """Print the report. Returns 0, 1 when --fail-on matches, or 2 on a bad file."""
-    if not csv_path.is_file():
-        print(f"Error: runtime results file does not exist: {csv_path}", file=sys.stderr)
+    if verification is not None and verification.status == STATUS_MISSING:
+        print(
+            f"Error: no audit ledger at {ledger}; pass the file written by proxy --ledger",
+            file=sys.stderr,
+        )
         return 2
-    if not project.exists():
-        print(f"Error: project path does not exist: {project}", file=sys.stderr)
-        return 2
-    try:
-        alerts = filter_severity(load_alerts(csv_path, project), min_severity)
-    except (OSError, ValueError) as error:
-        print(f"Error: {error}", file=sys.stderr)
-        return 2
-    if plain or not sys.stdout.isatty():
-        print(format_report(alerts))
-    else:
-        _render_table(alerts)
+    if verification is not None and verification.failed:
+        print(
+            f"audit trail {verification.status}: the runtime log cannot be trusted",
+            file=sys.stderr,
+        )
+        return 1
     if fail_on == "none":
         return 0
     threshold = _SEVERITY_RANK[fail_on]
@@ -272,3 +389,83 @@ def report_runtime_results(
         file=sys.stderr,
     )
     return 1
+
+
+def _write_sarif(sarif: str, output: Path | None) -> bool:
+    if output is None:
+        print(sarif)
+        return True
+    try:
+        output.write_text(sarif + "\n", encoding="utf-8")
+    except OSError as error:
+        print(f"Error: could not write the sarif report to {output}: {error}", file=sys.stderr)
+        return False
+    print(f"Wrote sarif report to {output}", file=sys.stderr)
+    return True
+
+
+def report_runtime_results(
+    csv_path: Path,
+    project: Path,
+    *,
+    plain: bool,
+    min_severity: str,
+    fail_on: str,
+    ledger: Path | None = None,
+    anchor: Path | None = None,
+    output_format: str = "text",
+    output: Path | None = None,
+    ledger_rows_limit: int = DEFAULT_ROWS,
+) -> int:
+    """Print the report. Returns 0, 1 when the trail failed or --fail-on matches, or 2.
+
+    A trail that fails verification always returns 1: log integrity is not a severity threshold,
+    so ``--fail-on none`` does not opt out of it. Without a ledger the exit code is unchanged.
+    ``output_format`` is ``text`` (table, or plain lines) or ``sarif``.
+    """
+    if not csv_path.is_file():
+        print(f"Error: runtime results file does not exist: {csv_path}", file=sys.stderr)
+        return 2
+    if not project.exists():
+        print(f"Error: project path does not exist: {project}", file=sys.stderr)
+        return 2
+    verification = verify_ledger(ledger, anchor_path=anchor) if ledger is not None else None
+    try:
+        alerts = filter_severity(load_alerts(csv_path, project), min_severity)
+    except (OSError, ValueError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 2
+    rows = (
+        ledger_rows(ledger, verification)
+        if ledger is not None and verification is not None
+        and verification.status != STATUS_MISSING
+        else []
+    )
+    if output_format == "sarif":
+        if verification is not None and verification.status == STATUS_MISSING:
+            return _exit_code(verification, ledger, alerts, fail_on)
+        ledger_uri = ledger.as_posix() if ledger is not None else ""
+        sarif = runtime_sarif(alerts, verification, ledger_uri, len(rows))
+        if not _write_sarif(sarif, output):
+            return 2
+        if output is None:
+            # SARIF is on stdout, so the human summary goes to stderr and the pipe stays clean.
+            if verification is not None:
+                print(format_audit_status(verification), file=sys.stderr)
+            return _exit_code(verification, ledger, alerts, fail_on)
+        # SARIF went to a file, so stdout is free for the readable report.
+    if plain or not sys.stdout.isatty():
+        if verification is not None:
+            print(format_audit_status(verification))
+            print()
+            if rows:
+                print(format_ledger_table(rows, verification, limit=ledger_rows_limit))
+                print()
+        print(format_report(alerts))
+    else:
+        if verification is not None:
+            _render_audit_status(verification)
+            if rows:
+                render_ledger_table(rows, verification, limit=ledger_rows_limit)
+        _render_table(alerts)
+    return _exit_code(verification, ledger, alerts, fail_on)

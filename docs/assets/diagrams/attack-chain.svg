@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 330" width="900" height="330" role="img" aria-labelledby="t d">
+  <title id="t">How one bad input becomes an action</title>
+  <desc id="d">Untrusted web content flows into an LLM agent, which calls a tool that can run commands. AgentLatch flags three points: unfenced content (AG003), a tool with no approval gate (AG004), and a shell call with shell=True (PY002).</desc>
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .head { font-family: Syne, "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; font-weight: 800; }
+    .flow { stroke-dasharray: 6 6; animation: flow 1.2s linear infinite; }
+    .pulse { animation: pulse 2.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes flow { to { stroke-dashoffset: -12; } }
+    @keyframes pulse { 0%, 100% { transform: scale(.8); } 50% { transform: scale(1.4); } }
+    @media (prefers-reduced-motion: reduce) { .flow, .pulse { animation: none; } .dot { display: none; } }
+  </style>
+  <defs>
+    <clipPath id="card"><rect width="900" height="330" rx="16"/></clipPath>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="900" height="330" fill="#17161C"/>
+    <rect width="900" height="44" fill="#121211"/>
+    <line x1="0" y1="44" x2="900" y2="44" stroke="#ECE9E2" stroke-opacity=".1"/>
+    <text x="24" y="27" class="mono" font-size="11" letter-spacing="1.8" fill="#ECE9E2" fill-opacity=".55">FIG. 03 — HOW ONE BAD INPUT BECOMES AN ACTION</text>
+    <circle cx="640" cy="23" r="4" fill="#F5C542"/>
+    <text x="652" y="27" class="mono" font-size="10" letter-spacing="1.2" fill="#ECE9E2" fill-opacity=".55">UNTRUSTED INPUT</text>
+    <circle cx="776" cy="23" r="4" fill="#F0524F"/>
+    <text x="788" y="27" class="mono" font-size="10" letter-spacing="1.2" fill="#ECE9E2" fill-opacity=".55">FLAGGED</text>
+
+    <g transform="translate(5 0)" text-anchor="middle">
+      <rect x="20" y="90" width="170" height="90" rx="14" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="105" y="130" class="head" font-size="14" fill="#ECE9E2">Web page</text>
+      <text x="105" y="152" class="mono" font-size="10" fill="#9C9A93">untrusted content</text>
+
+      <rect x="265" y="90" width="170" height="90" rx="14" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="350" y="130" class="head" font-size="14" fill="#ECE9E2">LLM agent</text>
+      <text x="350" y="152" class="mono" font-size="10" fill="#9C9A93">reads and decides</text>
+
+      <rect x="510" y="90" width="170" height="90" rx="14" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="595" y="130" class="head" font-size="14" fill="#ECE9E2">Tool call</text>
+      <text x="595" y="152" class="mono" font-size="10" fill="#9C9A93">no approval gate</text>
+
+      <rect x="716" y="90" width="170" height="90" rx="14" fill="#1F1D26" stroke="#F0524F" stroke-opacity=".8" stroke-width="2"/>
+      <text x="801" y="130" class="head" font-size="14" fill="#ECE9E2">Shell</text>
+      <text x="801" y="152" class="mono" font-size="10" fill="#9C9A93">shell=True</text>
+
+      <g stroke="#F5C542" stroke-opacity=".7" stroke-width="1.5" fill="none">
+        <path class="flow" d="M190 135 H265"/>
+        <path class="flow" d="M435 135 H510"/>
+        <path class="flow" d="M680 135 H716"/>
+      </g>
+      <circle class="dot" r="5.5" fill="#F5C542"><animateMotion dur="1.8s" begin="0s" repeatCount="indefinite" path="M190 135 H265"/></circle>
+      <circle class="dot" r="5.5" fill="#F5C542"><animateMotion dur="1.8s" begin="-1.2s" repeatCount="indefinite" path="M435 135 H510"/></circle>
+      <circle class="dot" r="5.5" fill="#F0524F"><animateMotion dur="1.8s" begin="-0.6s" repeatCount="indefinite" path="M680 135 H716"/></circle>
+
+      <g>
+        <line x1="105" y1="190" x2="105" y2="222" stroke="#F0524F" stroke-opacity=".6" stroke-dasharray="3 4"/>
+        <circle class="pulse" cx="105" cy="236" r="9" fill="none" stroke="#F0524F" stroke-width="2"/>
+        <circle cx="105" cy="236" r="4" fill="#F0524F"/>
+        <text x="105" y="268" class="mono" font-size="10.5" fill="#ECE9E2">AG003 unfenced content</text>
+        <text x="105" y="284" class="mono" font-size="9.5" fill="#A78BFA">ASI01 Goal Hijack</text>
+
+        <line x1="595" y1="190" x2="595" y2="222" stroke="#F0524F" stroke-opacity=".6" stroke-dasharray="3 4"/>
+        <circle class="pulse" cx="595" cy="236" r="9" fill="none" stroke="#F0524F" stroke-width="2" style="animation-delay:.8s"/>
+        <circle cx="595" cy="236" r="4" fill="#F0524F"/>
+        <text x="595" y="268" class="mono" font-size="10.5" fill="#ECE9E2">AG004 no approval gate</text>
+        <text x="595" y="284" class="mono" font-size="9.5" fill="#A78BFA">ASI02 Tool Misuse</text>
+
+        <line x1="801" y1="190" x2="801" y2="222" stroke="#F0524F" stroke-opacity=".6" stroke-dasharray="3 4"/>
+        <circle class="pulse" cx="801" cy="236" r="9" fill="none" stroke="#F0524F" stroke-width="2" style="animation-delay:1.6s"/>
+        <circle cx="801" cy="236" r="4" fill="#F0524F"/>
+        <text x="801" y="268" class="mono" font-size="10.5" fill="#ECE9E2">PY002 shell=True</text>
+        <text x="801" y="284" class="mono" font-size="9.5" fill="#A78BFA">ASI05 Code Execution</text>
+      </g>
+    </g>
+    <text x="450" y="314" text-anchor="middle" class="mono" font-size="10" fill="#ECE9E2" fill-opacity=".5">Each red marker is a shipped AgentLatch rule. Breaking any one link stops the chain.</text>
+  </g>
+  <rect x=".5" y=".5" width="899" height="329" rx="16" fill="none" stroke="#ECE9E2" stroke-opacity=".12"/>
+</svg>

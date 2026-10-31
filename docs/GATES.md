@@ -26,6 +26,7 @@ A gate is a security outcome AgentLatch checks for, such as "destructive actions
 | `ALR12` | Secure transport | TLS is verified and agent or tool traffic does not use plain HTTP | `PY003`, `ALR12-S01` | `ASI02`, `ASI07` | Art. 15 | partial |
 | `ALR13` | Memory and context integrity | Untrusted content is not written to agent memory or vector stores | `ALR13-S01`, `ALR13-S02` | `ASI06` | Art. 15 | partial |
 | `ALR14` | Rogue agent containment | Agents cannot modify their own prompts or config, or spawn agents without limits | `ALR14-S01`, `ALR14-S02`, `ALR14-S03` | `ASI10` | Art. 14, Art. 15 | partial |
+| `ALR15` | Tamper-evident audit trail | The record of what the agent did cannot be altered, deleted or rebuilt unnoticed | `ALR15-R01` | `ASI10` | Art. 12, Art. 15 | preview (runtime) |
 
 ## Detectors
 
@@ -72,6 +73,7 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `ALR14-S01` | `ALR14` | static | An agent that rewrites its own prompts or settings keeps instructions after the session | `ASI10` |
 | `ALR14-S02` | `ALR14` | static | Persistence brings the agent back after it is stopped, outside a user's view | `ASI10` |
 | `ALR14-S03` | `ALR14` | static | Installing packages at runtime pulls unreviewed code into the agent process | `ASI10` |
+| `ALR15-R01` | `ALR15` | runtime | An agent, or whoever holds its account, can hide what it did by editing or rebuilding its own audit log | `ASI10` |
 
 Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary.
 
@@ -80,5 +82,5 @@ Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest c
 These mappings are informational. They show where a gate may provide evidence relevant to a framework. They are not a compliance assessment, certification, or endorsement.
 
 - [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/): ASI01 Agent Goal Hijack; ASI02 Tool Misuse and Exploitation; ASI03 Identity and Privilege Abuse; ASI04 Agentic Supply Chain Vulnerabilities; ASI05 Unexpected Code Execution (RCE); ASI06 Memory & Context Poisoning; ASI07 Insecure Inter-Agent Communication; ASI08 Cascading Failures; ASI09 Human-Agent Trust Exploitation; ASI10 Rogue Agents.
-- EU AI Act (Regulation (EU) 2024/1689): Art. 14 Human oversight; Art. 15 Accuracy, robustness and cybersecurity. These articles set requirements for high-risk AI systems; whether they apply depends on the system and its use.
+- EU AI Act (Regulation (EU) 2024/1689): Art. 12 Record-keeping; Art. 14 Human oversight; Art. 15 Accuracy, robustness and cybersecurity. These articles set requirements for high-risk AI systems; whether they apply depends on the system and its use.
 - ISO/IEC 42001: not mapped yet.

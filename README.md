@@ -21,11 +21,38 @@
 
 > **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs one preview gate, ALR04, on MCP tool definitions. It reports findings and does not block calls.
 
+## What AgentLatch does so far
+
+AgentLatch checks an AI agent at three points, and you can use each on its own:
+
+1. **Static scan:** reads an agent project's code, prompts and manifests before anything runs, and reports risky patterns with the file and line.
+2. **Runtime monitor (preview):** sits between an agent and its MCP server, records the tool traffic with secrets masked, and flags tool definitions that contain instruction-like content.
+3. **Tamper-evident ledger (preview):** seals that record in a hash chain, so an edited, deleted or rebuilt log shows up when you verify it.
+
+Everything runs on your machine and nothing is uploaded. The only network use is the opt-in `--dependencies` audit. AgentLatch reports findings and never blocks a tool call, and a clean result is not a security guarantee.
+
+![What stays on your machine: project files flow through the AgentLatch scanner to reports and CI, all locally. An optional dependency audit, off by default, sends only package names and versions to an advisory service.](docs/assets/diagrams/local-boundary.svg)
+
+Every section below follows the same four steps: what it does, **Run it** (copy-paste), **See the result** (the command that shows the output), and **Go deeper** (links).
+
+| I want to… | Go to |
+|---|---|
+| Scan an agent project on my laptop | [1. Static scan](#1-static-scan-local) |
+| Fail a pull request on risky changes | [2. Static scan in CI](#2-static-scan-in-ci-github-actions-and-pre-commit) |
+| See what my agent asks its MCP tools to do | [3. Runtime monitor](#3-runtime-monitor-for-mcp-preview) |
+| Prove the runtime log was not edited | [4. Tamper-evident ledger](#4-tamper-evident-ledger-preview) |
+| Hook up Claude, ChatGPT or Cursor | [5. Connect your app](#5-connect-claude-chatgpt-or-cursor) |
+
 ## Contents
 
-- [Quick start: scan an agent project](#quick-start-scan-an-agent-project)
+- [What AgentLatch does so far](#what-agentlatch-does-so-far)
+- [Install once](#install-once)
+- [1. Static scan (local)](#1-static-scan-local)
+- [2. Static scan in CI (GitHub Actions and pre-commit)](#2-static-scan-in-ci-github-actions-and-pre-commit)
+- [3. Runtime monitor for MCP (preview)](#3-runtime-monitor-for-mcp-preview)
+- [4. Tamper-evident ledger (preview)](#4-tamper-evident-ledger-preview)
+- [5. Connect Claude, ChatGPT or Cursor](#5-connect-claude-chatgpt-or-cursor)
 - [How it works](#how-it-works)
-- [Runtime monitoring for MCP (preview)](#runtime-monitoring-for-mcp-preview)
 - [What the scanner checks today](#what-the-scanner-checks-today)
 - [OWASP Agentic Top 10 coverage](#owasp-agentic-top-10-coverage)
 - [Documentation](#documentation)
@@ -37,30 +64,46 @@
 - [Roadmap](#roadmap)
 - [Contributing and security reports](#contributing-and-security-reports)
 
-## Quick start: scan an agent project
+## Install once
 
-Requires Python 3.11+. Install AgentLatch from PyPI with [pipx](https://pipx.pypa.io), which keeps it in its own environment (Windows and other options: see [Getting started](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md#install)):
+Requires Python 3.11+. [pipx](https://pipx.pypa.io) keeps AgentLatch in its own environment (Windows and other options: [Getting started](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md#install)).
 
 ```sh
 pipx install agentlatch-security
 ```
 
-Or install it into a virtual environment with pip:
+Sections 3 to 5 use the runtime proxy, which needs the `runtime` extra (it adds FastMCP). Install this instead if you want everything:
+
+```sh
+pipx install "agentlatch-security[runtime]"
+```
+
+Or use a virtual environment:
 
 ```sh
 python3 -m venv .venv && source .venv/bin/activate
-python -m pip install agentlatch-security
+python -m pip install "agentlatch-security[runtime]"
+```
+
+Check it:
+
+```sh
+agent-latch -V
 ```
 
 On PyPI, AgentLatch is published as `agentlatch-security`. It installs the `agent-latch` and `agent-latch-runtime` commands. The PyPI package named `agentlatch` is a separate project.
 
-Scan an agent project:
+## 1. Static scan (local)
+
+**What it does:** reads the files of an agent project (Python code, prompts, YAML, manifests) and reports risky patterns. It never imports or runs the code it checks. No configuration or manifest is needed: every folder and text file is scanned.
+
+![The scan, end to end: source files are parsed and never run, checked by static rules and taint analysis, mapped to OWASP Agentic categories ASI01 to ASI10, and reported as text, JSON or SARIF.](docs/assets/diagrams/scan-flow.svg)
+
+**Run it:**
 
 ```sh
 agent-latch scan /path/to/my-agent
 ```
-
-No configuration or agent manifest is needed: every folder and text file is scanned. Suppressions inside the scanned project (`.agent-latch-ignore`, inline ignore comments) are not applied unless you add `--project-ignores`, so a project you scan cannot hide its own findings.
 
 Try it on the deliberately insecure example in this repository:
 
@@ -69,11 +112,7 @@ git clone https://github.com/AgentLatch/agent-latch.git
 agent-latch scan agent-latch/examples/vulnerable-agent
 ```
 
-Watch the demo: scanning the example and failing CI with `--fail-on high`.
-
-[![AgentLatch demo video: scanning a vulnerable AI agent](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/demo-video-thumbnail.png)](https://youtu.be/4FrRWlApDpo)
-
-More ways to run it:
+Common options:
 
 ```sh
 agent-latch scan --config agent-manifest.yaml        # also audit a manifest's declared tools (optional)
@@ -86,17 +125,246 @@ agent-latch scan . --format sarif --output results.sarif
 agent-latch --interactive                            # guided mode
 ```
 
-Block risky changes automatically with the [pre-commit hook](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md#pre-commit-hook) or the GitHub Action ([setup guide](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md#github-actions), [Marketplace listing](https://github.com/marketplace/actions/agentlatch-scan)):
+Suppressions written inside the scanned project (`.agent-latch-ignore`, inline ignore comments) are not applied unless you add `--project-ignores`, so a project you scan cannot hide its own findings.
+
+**See the result:** the terminal shows each finding with its rule, file and line, and OWASP mapping. This is real output for the example above (shortened):
+
+```text
+Findings: 12
+
+[HIGH] MAN001 (ALR09) High-risk tool without human approval
+  agent-manifest.yaml:29:1
+  Tool 'run_shell' can perform high-impact actions with no approval gate declared. ...
+  Gate: ALR09 Human approval for sensitive actions
+  OWASP Agentic: ASI02 Tool Misuse and Exploitation; ASI05 Unexpected Code Execution (RCE); ...
+```
+
+```sh
+agent-latch scan . --plain                     # plain text, for logs and pipes
+agent-latch scan . --format json               # machine-readable
+agent-latch scan . --format sarif --output results.sarif   # for code scanning and SARIF viewers
+echo $?                                        # 0 passed, 1 findings at or above --fail-on, 2 error
+```
+
+What the rules look for: how one piece of untrusted text can travel from a web page to a shell command. Each red marker is a shipped rule (`AG003`, `AG004`, `PY002`), and breaking any one link stops the chain.
+
+![How one bad input becomes an action: untrusted web content reaches an LLM agent, then a tool call with no approval gate, then a shell call. AgentLatch flags AG003, AG004 and PY002.](docs/assets/diagrams/attack-chain.svg)
+
+[![AgentLatch demo video: scanning a vulnerable AI agent](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/demo-video-thumbnail.png)](https://youtu.be/4FrRWlApDpo)
+
+**Go deeper:** [Getting started](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md) (ignores, output formats, exit codes) · [Rule reference](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md) · [Agent manifest](https://github.com/AgentLatch/agent-latch/blob/main/docs/agent-manifest.md)
+
+## 2. Static scan in CI (GitHub Actions and pre-commit)
+
+**What it does:** runs the same scan on every pull request, or before every commit, and fails the check when a finding meets your threshold.
+
+**Run it, GitHub Actions:** save this as `.github/workflows/agent-latch.yml` ([Marketplace listing](https://github.com/marketplace/actions/agentlatch-scan)):
 
 ```yaml
-- uses: AgentLatch/agent-latch@v0.4.0
-  with:
-    fail-on: high
-    # min-severity: medium      # optional: hide low and info findings
-    # project-ignores: "true"   # apply your repo's .agent-latch-ignore (see the note below)
+name: agent-latch
+on: [push, pull_request]
+
+permissions:
+  contents: read
+  security-events: write  # needed to upload results to code scanning
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: AgentLatch/agent-latch@v0.4.0
+        with:
+          fail-on: high
+          # min-severity: medium      # optional: hide low and info findings
+          # project-ignores: "true"   # apply your repo's .agent-latch-ignore (a pull request can edit it)
+```
+
+**Run it, pre-commit:** add this to `.pre-commit-config.yaml`, then run `pre-commit install`:
+
+```yaml
+repos:
+  - repo: https://github.com/AgentLatch/agent-latch
+    rev: v0.4.0
+    hooks:
+      - id: agent-latch
+```
+
+**See the result:**
+
+- **Actions:** open the run's log and its **job summary** (a findings table), or the repository's **Security → Code scanning** tab and the pull request's checks. The job exposes the outputs `sarif-file`, `finding-count` and `exit-code`.
+- **pre-commit:** the commit is blocked on a high or critical finding. Check the whole repo at any time with:
+
+```sh
+pre-commit run agent-latch --all-files
 ```
 
 > **Upgrading from v0.1.0:** the project's own `.agent-latch-ignore`, `pyproject.toml` excludes, and inline ignore comments are no longer applied by default. If your repository relies on them, add `project-ignores: "true"` to the Action or `--project-ignores` on the command line. See the [v0.2.0 release notes](https://github.com/AgentLatch/agent-latch/blob/main/docs/release-notes/v0.2.0.md).
+
+**Go deeper:** [pre-commit and CI](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md) (all inputs and outputs, other CI systems, choosing a threshold)
+
+## 3. Runtime monitor for MCP (preview)
+
+**What it does:** `agent-latch-runtime` sits between an AI agent and an MCP server and records what the agent asks its tools to do and what comes back. It is a **preview and monitor only**: it never blocks a call. It runs ALR04, which reports a finding when a tool definition contains instruction-like content. Secrets are masked in every file.
+
+![Runtime monitor: the agent talks to the MCP server through the agent-latch-runtime proxy, which passes every message through unchanged and writes masked logs. import-logs joins them into events and findings, and agent-latch --runtime-result prints the report.](docs/assets/diagrams/runtime-monitor.svg)
+
+**Run it:** try it with a bundled synthetic server, no setup:
+
+```sh
+agent-latch-runtime demo
+```
+
+`demo` starts the synthetic server behind the real proxy, makes a few tool calls (one returns a fake credential, one fails), then imports the logs. This is real output:
+
+![Output of agent-latch-runtime demo: ten MCP events, from tools/list to prompts/get, each joined with its payload](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/runtime-demo.svg)
+
+Watch a real agent. Put the proxy in front of any MCP server, then follow its logs from a second terminal:
+
+```sh
+# Terminal 1: the agent's MCP traffic goes through the proxy.
+agent-latch-runtime proxy --trace runtime-logs/trace.jsonl --payloads runtime-logs/payloads.jsonl \
+  -- npx -y @modelcontextprotocol/server-github
+```
+
+```sh
+# Terminal 2: one line per message, plus events.csv and gate-results.csv in runtime-logs/.
+agent-latch-runtime import-logs
+```
+
+Run both from the same folder, in the environment where AgentLatch is installed. `mcp-server/.venv` does not provide `agent-latch-runtime`. To also keep a queryable local copy, add `--database runtime-logs/runtime.db` to `import-logs` (SQLite, nothing is uploaded).
+
+**See the result:**
+
+```sh
+agent-latch . --runtime-result runtime-logs/gate-results.csv
+```
+
+This prints the gate findings in the same table as a scan, with the local tool's file and line when the project defines it (add `--plain` for text). Real output, shortened:
+
+```text
+Runtime findings · 3
+
+HIGH     ALR04-003  mcp-server/tools/alr04_fixture_tools.py:14
+  concealment
+  Tool definition contains above-threshold injection indicators; no exploit confirmed.
+  Evidence: instruction_to_conceal_from_user @ $/description
+  OWASP: ASI01 Agent Goal Hijack; ASI02 Tool Misuse and Exploitation; ...
+```
+
+The report lists findings only. Nothing was blocked. Add `--fail-on high` to exit `1` on a high finding, and `--min-severity` to hide lower ones.
+
+**Go deeper:** [Runtime proxy guide](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md) (limits, SQLite store, HTTP mode) · [Live run with a CrewAI agent, plus 20 test scenarios](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch)
+
+### What the proxy records
+
+| MCP message | Trace (always) | Full payload (`--payloads`) |
+|---|---|---|
+| `tools/list`: tool names, descriptions, schemas | ✅ | ✅ |
+| `tools/call`: request, response and error | ✅ | ✅ (a failed call is logged with its error type) |
+| `prompts/get`: request and response | ✅ | ✅ |
+| `prompts/list` | ✅ | names only |
+
+The **trace** keeps argument names, sizes, SHA-256 hashes and a short secret-masked excerpt, never raw values. The opt-in **payloads** file keeps full argument values and tool output, secret-masked and cut to `--payload-max-chars`. `import-logs` joins the two into one event per message.
+
+**Not recorded yet:** `resources/list` and `resources/read`, `initialize`, `sampling/createMessage`, notifications (including `tools/list_changed`), image, audio and embedded-resource content in tool results, and a failed `prompts/get`. These pass through the proxy unchanged with no record. The proxy also never sees the user's chat with the model, an app's built-in tools, or servers not routed through it. Details: [docs/runtime.md](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#limits).
+
+## 4. Tamper-evident ledger (preview)
+
+**What it does:** a log the agent can rewrite is not evidence. `--ledger FILE` seals every trace record into a local hash chain, and one short digest per batch (an *anchor*) is published somewhere the agent cannot write. An edit, a deletion or a full rebuild then shows up when you verify. It is off unless you ask for it, uses only the standard library, makes no network call, and is never in the request path.
+
+![Tamper-evident ledger: each trace line is sealed into a numbered block that holds its hash and the previous block's digest, the newest digest is published as an anchor the agent cannot write, and verify returns intact, unanchored, tampered, deleted, rewritten or missing.](docs/assets/diagrams/ledger.svg)
+
+**Run it:**
+
+```sh
+# 1. Record with a ledger (the ledger needs a trace file beside it)
+agent-latch-runtime proxy --trace runtime-logs/trace.jsonl \
+  --ledger runtime-logs/trace.ledger.jsonl -- npx -y @modelcontextprotocol/server-github
+```
+
+```sh
+# 2. Publish an anchor to a place the agent cannot write (a mounted drive, another host, ...)
+agent-latch-runtime anchor --ledger runtime-logs/trace.ledger.jsonl --to /mnt/audit/anchors.jsonl
+```
+
+```sh
+# 3. Verify, any time
+agent-latch-runtime verify runtime-logs/trace.ledger.jsonl                       # finds trace.jsonl beside it
+agent-latch-runtime verify runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl
+agent-latch-runtime verify runtime-logs                                          # every ledger in a folder
+agent-latch-runtime verify runtime-logs --all                                    # ... and its subfolders, archives included
+```
+
+**See the result:** `verify` prints one verdict (`intact`, `unanchored`, `tampered`, `deleted`, `rewritten` or `missing`) and exits `1` when the trail cannot be trusted. For the full picture, put the ledger in the runtime report:
+
+```sh
+agent-latch . --runtime-result runtime-logs/gate-results.csv \
+  --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl
+```
+
+The verdict leads the report, followed by a table with one row per record. Problem records are always listed, and `--ledger-rows N` sets how many intact ones to show (`0` for all). Real output for a ledger with one edited record, one gap and one out-of-order block (shortened):
+
+```text
+AUDIT TRAIL TAMPERED — a record was altered; the log cannot be trusted.
+  #5: the block's digest does not match its content
+  #11: 2 records are missing here
+  #13: this block does not follow the block before it
+
+#   TIME                      METHOD      STAGE    DIGEST        STATE
+5   2026-10-31T15:52:51.881Z  tools/list  request  b1c5e3ae7973  EDITED
+11  -                         -           -        -             DELETED
+13  2026-10-31T15:52:51.882Z  tools/call  request  65cbcbd329ef  REORDERED
+30  2026-10-31T15:52:51.883Z  tools/call  request  97adbec2a3bd  ok
+```
+
+Export it as SARIF for a viewer or code scanning. The file gets the SARIF and the terminal still shows the report above:
+
+```sh
+agent-latch . --runtime-result runtime-logs/gate-results.csv \
+  --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl \
+  --format sarif --output audit.sarif
+```
+
+A failed trail exits `1` even with `--fail-on none`, because log integrity is not a severity threshold.
+
+**What to expect:** without an anchor the best verdict is `unanchored`: the chain is consistent, but nothing outside the machine proves the file was not rebuilt. The ledger makes tampering visible; it does not prevent it, and it cannot show a change made before a record was sealed. Check live sessions with `verify runtime-logs` (the folder, without `--all`) and use `--all` to audit archived sessions on purpose. What an agent with write access can still do, and how to narrow it: [the ledger operations guide](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md#what-an-agent-can-still-do).
+
+**Go deeper:** [Audit ledger overview](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md) · [Setup](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-setup.md) · [Reference](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-reference.md) · [Operations and incident runbook](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md)
+
+## 5. Connect Claude, ChatGPT or Cursor
+
+**What it does:** your app starts the proxy instead of the MCP server, and the proxy starts the real server. Nothing else about the app changes.
+
+**Run it:** in the app's MCP settings, replace the server's `command` with the proxy and move the old command after `--`. Use full paths: desktop apps often start servers with a different `PATH` and working directory.
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "/full/path/to/.venv/bin/agent-latch-runtime",
+      "args": [
+        "proxy", "--name", "github", "--trace", "/full/path/to/runtime-logs/trace.jsonl", "--",
+        "npx", "-y", "@modelcontextprotocol/server-github"
+      ]
+    }
+  }
+}
+```
+
+Restart the app afterwards. Add `"--ledger", "/full/path/to/runtime-logs/trace.ledger.jsonl"` before the `--` to also seal the log (section 4).
+
+| App | Settings file |
+|---|---|
+| Claude Code | `.mcp.json` in the project |
+| Claude Desktop | **Settings → Developer → Edit Config** |
+| Cursor | `~/.cursor/mcp.json` |
+| GitHub Copilot in VS Code | `.vscode/mcp.json` (top-level key is `servers`, not `mcpServers`) |
+| ChatGPT (web) | cannot start a local program: it reaches the proxy through OpenAI's Secure MCP Tunnel, see the [ChatGPT guide](https://github.com/AgentLatch/agent-latch/blob/main/docs/clients/chatgpt.md) |
+
+**See the result:** use the app as usual, then follow the traffic with `agent-latch-runtime import-logs` and read it with the commands from sections 3 and 4.
+
+**Go deeper:** [Connect an app](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#connect-an-app) (exact paths per OS, remote servers over HTTP, the supported-clients table) · [ChatGPT through the tunnel](https://github.com/AgentLatch/agent-latch/blob/main/docs/clients/chatgpt.md) · [Claude Desktop on Windows with the MCP server in WSL](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md#4b-claude-desktop-on-windows-with-the-gateway-in-wsl)
 
 ## How it works
 
@@ -119,47 +387,7 @@ flowchart LR
 
 The scanner never imports or runs the code it checks. The proxy passes every MCP message through unchanged and never blocks anything.
 
-## Runtime monitoring for MCP (preview)
-
-`agent-latch-runtime` records what an AI agent asks its MCP tools to do and what comes back, so you can review an agent's tool use after a run. It is a **preview and monitor only**. It records every message and runs ALR04, which reports a finding when a tool definition contains instruction-like content. It does not block calls. After a run, `agent-latch --runtime-result` prints those findings in the same table as a scan, including a local tool's file and line when the project defines that tool. The report lists findings only.
-
-### Try it in one command
-
-Install with the `runtime` extra, which adds FastMCP:
-
-```sh
-pipx install "agentlatch-security[runtime]"      # or: python -m pip install "agentlatch-security[runtime]"
-agent-latch-runtime demo
-```
-
-`demo` starts a bundled synthetic MCP server behind the real proxy, lists its tools, calls three of them (one returns a fake credential, one fails), gets a prompt, then imports the logs. This is real output:
-
-![Output of agent-latch-runtime demo: ten MCP events, from tools/list to prompts/get, each joined with its payload](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/runtime-demo.svg)
-
-The files land in `runtime-logs/demo/` (git-ignored). The fake credential appears only as `[REDACTED]` in every one of them.
-
-### Watch a real agent
-
-Put the proxy in front of any MCP server, then follow its logs from a second terminal:
-
-```sh
-# Terminal 1: the agent's MCP traffic goes through the proxy.
-agent-latch-runtime proxy --trace runtime-logs/trace.jsonl --payloads runtime-logs/payloads.jsonl \
-  -- npx -y @modelcontextprotocol/server-github
-
-# Terminal 2: one line per message, plus events.csv and normalized.jsonl in runtime-logs/.
-agent-latch-runtime import-logs
-```
-
-Run both from the same folder, in the environment where AgentLatch is installed. `mcp-server/.venv` does not provide `agent-latch-runtime`.
-
-To also keep a queryable copy, name a local SQLite file. That flag is the choice of store. Leave it off and nothing is written except the CSV and JSONL files. Nothing is uploaded.
-
-```sh
-agent-latch-runtime import-logs --database runtime-logs/runtime.db
-```
-
-SQLite is the first store. The importer calls it through a small `EventStore` interface, so a later destination can be selected the same way without becoming part of the default install. Details: [Store events in SQLite](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#store-events-in-sqlite).
+For one tool call, the runtime path looks like this:
 
 ```mermaid
 sequenceDiagram
@@ -175,25 +403,6 @@ sequenceDiagram
     I->>P: tail the log files (read-only)
     I->>I: join request, payload and response into one event
 ```
-
-Step-by-step guides with expected output at each step:
-
-- [Connect an app](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#connect-an-app) (Claude Code, Claude Desktop, Cursor, or any MCP config)
-- [Live run with a CrewAI agent, plus 20 test scenarios](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) (normal calls, errors, fake secrets, SSRF attempts, injection-shaped input)
-- [Claude Desktop on Windows with the MCP server in WSL](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md#4b-claude-desktop-on-windows-with-the-gateway-in-wsl)
-
-### What the proxy records
-
-| MCP message | Trace (always) | Full payload (`--payloads`) |
-|---|---|---|
-| `tools/list`: tool names, descriptions, schemas | ✅ | ✅ |
-| `tools/call`: request, response and error | ✅ | ✅ (a failed call is logged with its error type) |
-| `prompts/get`: request and response | ✅ | ✅ |
-| `prompts/list` | ✅ | names only |
-
-The **trace** keeps argument names, sizes, SHA-256 hashes and a short secret-masked excerpt, never raw values. The opt-in **payloads** file keeps full argument values and tool output, secret-masked and cut to `--payload-max-chars`. `import-logs` joins the two into one event per message.
-
-**Not recorded yet:** `resources/list` and `resources/read`, `initialize`, `sampling/createMessage`, notifications (including `tools/list_changed`), image, audio and embedded-resource content in tool results, and a failed `prompts/get`. These pass through the proxy unchanged with no record. The proxy also never sees the user's chat with the model, an app's built-in tools, or servers not routed through it. Details: [docs/runtime.md](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#limits).
 
 ## What the scanner checks today
 
@@ -262,6 +471,7 @@ Every scan report ends with the same ASI01–ASI10 summary and marks the uncover
 | [pre-commit and CI](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
 | [Detection rules](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
 | [Gates](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md) | The security outcomes AgentLatch checks, which rules and runtime checks belong to each, and their OWASP and EU AI Act references |
+| [Audit ledger](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md) | Making the runtime log tamper-evident: the hash chain, anchors, the six verdicts, and what it cannot catch. Then [setup](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-setup.md), [reference](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-reference.md) and [operations](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md) |
 | [Vulnerable example](https://github.com/AgentLatch/agent-latch/tree/main/examples/vulnerable-agent) | A demo project and the findings it should produce |
 | [Runtime proxy for MCP (preview)](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md) | Install, connecting an app, what is recorded, `import-logs` and `demo`, limits. Optional local SQLite: [Store events in SQLite](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#store-events-in-sqlite) |
 | [MCP gateway](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients, and [live runs through the runtime proxy](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) |
@@ -305,7 +515,7 @@ Install AgentLatch and run `agent-latch scan /path/to/agent`. It checks Python a
 
 ### How do I monitor the MCP tool calls my AI agent makes?
 
-Put `agent-latch-runtime proxy` in front of the MCP server, either in your app's MCP config or as an HTTP proxy, and run `agent-latch-runtime import-logs` next to it from the same folder. Every tool list, tool call, result and prompt is recorded with secrets masked, and shown as one event per message. Add `--database runtime-logs/runtime.db` when you want those events in a local SQLite file as well. Run `agent-latch-runtime demo` to see the whole flow first. See [Runtime monitoring for MCP](#runtime-monitoring-for-mcp-preview).
+Put `agent-latch-runtime proxy` in front of the MCP server, either in your app's MCP config or as an HTTP proxy, and run `agent-latch-runtime import-logs` next to it from the same folder. Every tool list, tool call, result and prompt is recorded with secrets masked, and shown as one event per message. Add `--database runtime-logs/runtime.db` when you want those events in a local SQLite file as well. Run `agent-latch-runtime demo` to see the whole flow first. See [Runtime monitor for MCP](#3-runtime-monitor-for-mcp-preview).
 
 ### Can AgentLatch block a dangerous MCP tool call?
 
