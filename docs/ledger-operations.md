@@ -62,10 +62,13 @@ makes "which run was altered" unambiguous:
 
 ```sh
 agent-latch-runtime proxy \
-  --trace "runtime-logs/$(date -u +%Y-%m-%d).trace.jsonl" \
+  --trace "runtime-logs/$(date -u +%Y-%m-%d).jsonl" \
   --ledger "runtime-logs/$(date -u +%Y-%m-%d).ledger.jsonl" \
   -- <server command>
 ```
+
+Name the pair `X.jsonl` and `X.ledger.jsonl`. `verify PATH` and `verify FOLDER` find a ledger's
+trace by that rule, and report a trace they cannot find as `deleted`.
 
 A ledger can also be resumed: run the proxy again against the same file and it continues from the
 last block. Use that for a long-lived service.
@@ -79,6 +82,15 @@ last block. Use that for a long-lived service.
 
 Deleting the ledger does not hide anything — a later `verify` says `missing`, and the anchor file
 still records that a head existed. It just removes your ability to answer questions.
+
+**Live checks and archived sessions.** Point routine checks at the live ledger, or at the live
+folder without `--all`. `verify runtime-logs` looks only at ledgers directly in that folder, so
+an archived session (for example one moved to `runtime-logs/archive/<date>-<time>/`) is not part
+of it. `verify runtime-logs --all` searches subfolders too, which includes every archive: use it
+to audit old sessions on purpose, and read its results as history. One altered archived session
+makes that run exit `1`, so do not use `--all` as the pass/fail check for the current session.
+Each session needs its own ledger and trace; pairing an old ledger with a new trace reports
+false `deleted` results.
 
 **Backups.** Back the three files up as one unit. Restoring a trace without its ledger produces
 `deleted` (trace lines no block sealed); restoring a ledger without its trace produces `deleted`
@@ -105,6 +117,9 @@ agent-latch-runtime verify \
   --ledger /srv/agent/runtime-logs/trace.ledger.jsonl \
   --trace /srv/agent/runtime-logs/trace.jsonl \
   --anchor /mnt/audit/anchors.jsonl
+
+# or, without an anchor, every ledger in the live folder (archives are not included)
+agent-latch-runtime verify /srv/agent/runtime-logs
 ```
 
 Alert on **exit 1**. Also alert on exit **2** at least once per deployment: a path typo should not
