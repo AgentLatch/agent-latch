@@ -190,28 +190,33 @@ def verify_ledger(
         prev = block.digest
         expected = block.seq + 1
 
+    # The anchor is read first so the trace walk can tell a lost ledger tail from added lines.
+    anchor_issues: list[Issue] = []
+    point = None
+    if anchor_path is not None:
+        try:
+            point = FileAnchor(Path(anchor_path)).latest()
+        except (AnchorError, OSError) as error:
+            anchor_issues.append(Issue("malformed", 0, f"the anchor file cannot be read: {error}"))
+        if point is None:
+            anchor_issues.append(
+                Issue("unanchored", 0, f"no anchor point at {anchor_path}")
+            )
+
     trace_checked = trace_path is not None
     if trace_path is not None:
-        issues.extend(_trace_issues(Path(trace_path), blocks))
+        tail_lost = point is not None and point.seq > blocks[-1].seq
+        issues.extend(_trace_issues(Path(trace_path), blocks, tail_lost=tail_lost))
 
     anchored = False
     anchor_seq: int | None = None
     anchor_digest: str | None = None
     anchor_time: str | None = None
-    if anchor_path is not None:
-        try:
-            point = FileAnchor(Path(anchor_path)).latest()
-        except (AnchorError, OSError) as error:
-            issues.append(Issue("malformed", 0, f"the anchor file cannot be read: {error}"))
-            point = None
-        if point is None:
-            issues.append(
-                Issue("unanchored", 0, f"no anchor point at {anchor_path}")
-            )
-        else:
-            anchored = True
-            anchor_seq, anchor_digest, anchor_time = point.seq, point.digest, point.timestamp
-            issues.extend(_anchor_issues(point.seq, point.digest, blocks))
+    issues.extend(anchor_issues)
+    if point is not None:
+        anchored = True
+        anchor_seq, anchor_digest, anchor_time = point.seq, point.digest, point.timestamp
+        issues.extend(_anchor_issues(point.seq, point.digest, blocks))
 
     kinds = {issue.kind for issue in issues}
     if kinds & {"edited", "malformed"}:
@@ -244,12 +249,19 @@ def verify_ledger(
     )
 
 
-def _trace_issues(trace_path: Path, blocks: list[Block]) -> list[Issue]:
+def _trace_issues(
+    trace_path: Path, blocks: list[Block], *, tail_lost: bool = False
+) -> list[Issue]:
     """Walk blocks and trace lines together, so a removed line is named as removed.
 
-    Position alone is not enough: one deleted line shifts every later comparison, which would
-    read as an edit on every record after it. When a line does not match its block, the next
-    block is checked against it before calling the line altered.
+    Position alone is not enough: a deleted line shifts every later comparison, which would
+    read as an edit on every record after it. When a line does not match its block, it is looked
+    up among the later blocks: a match means every block in between lost its line. A line that
+    matches no later block is an edit. (Someone could overwrite a line with a copy of a later
+    one, which then reads as a deletion; both fail verification.)
+
+    ``tail_lost`` says the anchor is ahead of the ledger, so lines past the last block are
+    records whose blocks were cut off, not lines added to the trace.
     """
     if not trace_path.is_file():
         return [Issue("deleted", 1, f"the trace file {trace_path} is gone")]
@@ -267,20 +279,26 @@ def _trace_issues(trace_path: Path, blocks: list[Block]) -> list[Issue]:
         comparable.append(block)
         expected = block.seq + 1
 
+    later: dict[str, list[int]] = {}
+    for at, item in enumerate(comparable):
+        later.setdefault(item.record_sha256, []).append(at)
+
     issues: list[Issue] = []
     index = position = 0
     while index < len(comparable) and position < len(lines):
         block = comparable[index]
-        if record_hash(lines[position]) == block.record_sha256:
+        digest = record_hash(lines[position])
+        if digest == block.record_sha256:
             index += 1
             position += 1
             continue
-        if (
-            index + 1 < len(comparable)
-            and record_hash(lines[position]) == comparable[index + 1].record_sha256
-        ):
-            issues.append(Issue("deleted", block.seq, "the trace line this block sealed is gone"))
-            index += 1
+        ahead = next((at for at in later.get(digest, ()) if at > index), None)
+        if ahead is not None:
+            for skipped in comparable[index:ahead]:
+                issues.append(
+                    Issue("deleted", skipped.seq, "the trace line this block sealed is gone")
+                )
+            index = ahead
             continue
         issues.append(
             Issue("edited", block.seq, "the trace line is not the record this block sealed")
@@ -293,13 +311,15 @@ def _trace_issues(trace_path: Path, blocks: list[Block]) -> list[Issue]:
     # After a gap the rest of the trace has no matching block, so its tail proves nothing.
     unsealed = len(lines) - position
     if unsealed > 0 and len(comparable) == len(blocks):
-        issues.append(
-            Issue(
-                "edited",
-                comparable[-1].seq if comparable else 0,
-                f"the trace holds {unsealed} line(s) that no block sealed",
+        tail = comparable[-1].seq if comparable else 0
+        if tail_lost:
+            detail = (
+                f"the ledger lost its tail: the trace holds {unsealed} line(s) past #{tail} "
+                "that the ledger no longer seals"
             )
-        )
+        else:
+            detail = f"the trace holds {unsealed} line(s) that no block sealed"
+        issues.append(Issue("edited", tail, detail))
     return issues
 
 

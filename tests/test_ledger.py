@@ -205,6 +205,78 @@ def test_deleted_trace_line_is_named_as_a_deletion(sealed) -> None:
     assert any(issue.kind == "deleted" and issue.seq == 3 for issue in result.issues)
 
 
+def _sealed_six(tmp_path: Path) -> tuple[Path, Path]:
+    trace = tmp_path / "trace.jsonl"
+    lines = _trace(trace, count=6)
+    ledger = tmp_path / "trace.ledger.jsonl"
+    chain = Ledger(ledger)
+    for index, line in enumerate(lines, 1):
+        chain.append(line, method="tools/call", stage="request",
+                     timestamp=f"2026-10-29T09:15:4{index}.000Z")
+    chain.close()
+    return trace, ledger
+
+
+def _write_lines(trace: Path, lines: list[str]) -> None:
+    trace.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("keep", "gone"),
+    [
+        ([0, 1, 4, 5], [3, 4]),  # two adjacent lines from the middle
+        ([2, 3, 4, 5], [1, 2]),  # the first lines, where the old one-block look-ahead failed
+        ([0, 1, 2, 3], [5, 6]),  # the last lines
+        ([0, 2, 3, 4, 5], [2]),  # a single line
+    ],
+)
+def test_run_of_deleted_trace_lines_is_a_deletion_not_an_edit(tmp_path, keep, gone) -> None:
+    trace, ledger = _sealed_six(tmp_path)
+    lines = trace.read_text(encoding="utf-8").splitlines()
+    _write_lines(trace, [lines[i] for i in keep])
+
+    result = verify_ledger(ledger, trace_path=trace)
+    assert result.status == STATUS_DELETED
+    assert not any(issue.kind == "edited" for issue in result.issues)
+    assert sorted(i.seq for i in result.issues if i.kind == "deleted") == gone
+
+
+def test_edited_trace_line_is_still_an_edit(tmp_path: Path) -> None:
+    trace, ledger = _sealed_six(tmp_path)
+    lines = trace.read_text(encoding="utf-8").splitlines()
+    lines[2] = lines[2].replace("read_file", "send_email")
+    _write_lines(trace, lines)
+
+    result = verify_ledger(ledger, trace_path=trace)
+    assert result.status == STATUS_TAMPERED
+    assert [(i.kind, i.seq) for i in result.issues] == [("edited", 3)]
+
+
+def test_deletion_and_edit_together_stay_tampered(tmp_path: Path) -> None:
+    trace, ledger = _sealed_six(tmp_path)
+    lines = trace.read_text(encoding="utf-8").splitlines()
+    lines[0] = lines[0].replace("read_file", "send_email")
+    _write_lines(trace, [lines[0], lines[1], lines[4], lines[5]])
+
+    result = verify_ledger(ledger, trace_path=trace)
+    assert result.status == STATUS_TAMPERED
+    kinds = {i.kind for i in result.issues}
+    assert {"edited", "deleted"} <= kinds
+
+
+def test_lost_ledger_tail_is_not_described_as_added_lines(sealed) -> None:
+    trace, ledger, anchor = sealed
+    _anchor(ledger, anchor)
+    rewrite(ledger, _blocks(ledger)[:2])
+
+    result = verify_ledger(ledger, trace_path=trace, anchor_path=anchor)
+    assert result.status == STATUS_TAMPERED
+    details = " ".join(issue.detail for issue in result.issues)
+    assert "the ledger lost its tail" in details
+    assert "no block sealed" not in details
+    assert "the log ends at #2, but #4 was anchored" in details
+
+
 def test_trace_line_no_block_sealed_is_reported(sealed) -> None:
     trace, ledger, _ = sealed
     with trace.open("a", encoding="utf-8") as stream:
