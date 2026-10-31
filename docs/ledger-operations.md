@@ -106,6 +106,50 @@ record.
 | Trace and ledger | The account running the agent — it must be able to write them |
 | Anchor destination | **Not** that account. A different machine, a different bucket, a human |
 | The `verify` schedule | Ideally something that also cannot edit the files |
+
+## What an agent can still do
+
+The ledger makes tampering visible. It does not prevent it, and it cannot see what never passed
+through the proxy. This is what an agent (or anyone holding its account) can do to the files, what
+`verify` reports, and what narrows the gap:
+
+| What can be done with write access | What `verify` reports | What narrows it |
+|---|---|---|
+| Edit a ledger record | `tampered` | |
+| Edit a trace line | `tampered`, when the trace is compared (`verify PATH`, or `--trace`) | Always compare the trace |
+| Delete records from the middle | `deleted` | |
+| Truncate or delete the ledger | `deleted`, when an anchor has a point or the trace has lines. A ledger that is empty with neither shows `missing` | Keep an anchor |
+| Rebuild the whole chain | `rewritten`, only when an anchor from before the rebuild exists | Anchor off the machine |
+| Cut the newest records, after the last anchor | **Not caught.** Nothing vouches for them | Anchor often, and at the end of each session |
+| Delete the ledger, the trace and the anchor together | **Not caught.** Exit `2`, nothing left to compare | Keep the anchor where that account cannot write; alert on exit `2` |
+| Call a tool without going through the proxy | **Never recorded** | Configure the app so its only route to the server is the proxy |
+
+### Narrowing the gap on Linux
+
+None of this is built into AgentLatch, and none of it makes the log tamper-proof. It limits what
+the account running the agent can change. These steps were not run as part of AgentLatch's tests.
+
+- **Separate account.** Start the proxy from a launcher that runs it as a different user, keep
+  `runtime-logs/` owned by that user, and give the agent's account read-only access. This fits a
+  server or CI job you launch yourself. A desktop app starts the proxy as the same user as the app,
+  so it does not apply there.
+- **Append-only files.** On a filesystem that supports it (ext4, xfs), the append-only attribute
+  stops the files being truncated, rewritten or deleted, while appending still works:
+
+  ```sh
+  sudo chattr +a runtime-logs/trace.jsonl runtime-logs/trace.ledger.jsonl
+  lsattr runtime-logs/trace.jsonl runtime-logs/trace.ledger.jsonl     # shows the "a" flag
+  ```
+
+  The proxy opens both files in append mode, so it keeps working. Setting the attribute needs root,
+  and so does removing it. Run `sudo chattr -a …` before you rotate or archive them.
+- **An anchor out of reach.** Point `anchor --to` at a path the agent's account cannot write: a
+  mount owned by another user, a share on another host, or a synced location with write-once
+  settings. AgentLatch only writes to the path you give it, so where that path leads is your setup.
+- **Anchor on a schedule and at session end.** This is the only protection for records written
+  after the last anchor.
+- **Verify from a different account, on a timer.** Alert on exit `1` and on exit `2`, and on a
+  ledger whose head sequence stops growing while the agent is running.
 | The report | Whoever reviews the agent's behaviour |
 
 The one rule: **if the agent's account can write the anchor, the anchor proves nothing.** A

@@ -328,7 +328,7 @@ agent-latch . --runtime-result runtime-logs/gate-results.csv \
 
 A failed trail exits `1` even with `--fail-on none`, because log integrity is not a severity threshold.
 
-**What to expect:** without an anchor the best verdict is `unanchored`: the chain is consistent, but nothing outside the machine proves the file was not rebuilt. The ledger makes tampering visible; it does not prevent it, and it cannot show a change made before a record was sealed. Check live sessions with `verify runtime-logs` (the folder, without `--all`) and use `--all` to audit archived sessions on purpose.
+**What to expect:** without an anchor the best verdict is `unanchored`: the chain is consistent, but nothing outside the machine proves the file was not rebuilt. The ledger makes tampering visible; it does not prevent it, and it cannot show a change made before a record was sealed. Check live sessions with `verify runtime-logs` (the folder, without `--all`) and use `--all` to audit archived sessions on purpose. What an agent with write access can still do, and how to narrow it: [the ledger operations guide](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md#what-an-agent-can-still-do).
 
 **Go deeper:** [Audit ledger overview](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md) · [Setup](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-setup.md) · [Reference](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-reference.md) · [Operations and incident runbook](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md)
 
