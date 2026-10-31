@@ -274,7 +274,7 @@ Before building a check, look at how established open-source tools handle it. Bo
 
 ## Documentation map
 
-- `README.md`: overview, quick start, FAQ, limitations, roadmap
+- `README.md`: overview, install, the five how-to sections (scan, CI, runtime monitor, ledger, connect an app), FAQ, limitations, roadmap
 - `docs/getting-started.md`: install (incl. Windows), options, ignores, output formats, exit codes, troubleshooting
 - `docs/agent-manifest.md`: manifest schema and checks
 - `docs/ci.md`: pre-commit, GitHub Action inputs and outputs, other CI

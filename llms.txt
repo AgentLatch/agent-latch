@@ -15,7 +15,7 @@ Key facts:
 
 ## Docs
 
-- [README](https://github.com/AgentLatch/agent-latch/blob/main/README.md): overview, quick start, FAQ
+- [README](https://github.com/AgentLatch/agent-latch/blob/main/README.md): overview, install and how-to sections (scan, CI, runtime, ledger, connect an app), FAQ
 - [Getting started](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md): install, command reference, output formats, exit codes, ignoring false positives
 - [Agent manifests](https://github.com/AgentLatch/agent-latch/blob/main/docs/agent-manifest.md): `agent-manifest.yaml` format and the checks it enables
 - [pre-commit and CI](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md): pre-commit hook, GitHub Action inputs and outputs, other CI systems
