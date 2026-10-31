@@ -103,6 +103,7 @@ src/agent_latch/
       chain.py    # block format, digest, Ledger (resumes from the last block), iter_blocks
       anchor.py   # AnchorPoint and FileAnchor; the only destination that ships
       verify.py   # verify_ledger: intact, unanchored, tampered, deleted, rewritten, missing
+      report.py   # audit table rows (terminal and plain) and SARIF results for the verdict
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
     demo_server.py # synthetic MCP server for `demo` and the runtime tests [needs fastmcp]
@@ -157,7 +158,7 @@ agent-latch [scan] [path] [--config MANIFEST] [--exclude PATH]... [--ignore-file
             [--project-ignores] [--dependencies] [-i/--interactive]
             [--format text|json|sarif] [--output FILE] [--plain] [--min-severity LEVEL]
             [--fail-on none|low|medium|high|critical]
-            [--runtime-result [CSV]] [--ledger FILE] [--anchor PATH] [-V]
+            [--runtime-result [CSV]] [--ledger FILE] [--anchor PATH] [--ledger-rows N] [-V]
 
 agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
             [--payloads FILE] [--payload-max-chars N] [--ledger FILE] [--quiet]
@@ -174,7 +175,7 @@ agent-latch-runtime demo [--dir DIR]
 
 `--database FILE` is the operator's choice of a local store. It saves each normalized event in a SQLite file (`SQLiteEventStore`) and is off when omitted. The importer talks to that file only through the `EventStore` contract in `importer.py` (`open`, `save`, `close`). SQLite is the first implementation, using the standard-library `sqlite3` module, so it adds no dependency and makes no network request. A later destination (a warehouse or an opt-in trace exporter) implements the same contract and is selected the same way: by a flag on `import-logs`, not by a default. The database can hold payload data, so a new file is created with mode `0600` where the platform supports it. Keep it local. Do not add a vendor client as a required dependency.
 
-`--ledger FILE` (with `--trace`) seals every trace record into a local hash chain, and `anchor` publishes one short digest to a path the operator chooses. `verify` and `agent-latch --runtime-result --ledger FILE [--anchor PATH]` report `intact`, `unanchored`, `tampered`, `deleted`, `rewritten` or `missing`. Standard library only, no network, never in the request path: an append failure warns once on stderr and the call continues. The verifier lives in `runtime/ledger/`, not in `gates/` (that package is for per-event plugins). Docs: `docs/ledger.md` (model), `docs/ledger-setup.md`, `docs/ledger-reference.md`, `docs/ledger-operations.md`.
+`--ledger FILE` (with `--trace`) seals every trace record into a local hash chain, and `anchor` publishes one short digest to a path the operator chooses. `verify` and `agent-latch --runtime-result --ledger FILE [--anchor PATH]` report `intact`, `unanchored`, `tampered`, `deleted`, `rewritten` or `missing`. The report adds a per-record audit table (`--ledger-rows N`, default 20, problem records always shown), and `--runtime-result ... --format sarif` exports the verdict (rule `ALR15-R01`) with the runtime findings; `--format json` is refused there. Standard library only, no network, never in the request path: an append failure warns once on stderr and the call continues. The verifier lives in `runtime/ledger/`, not in `gates/` (that package is for per-event plugins). Docs: `docs/ledger.md` (model), `docs/ledger-setup.md`, `docs/ledger-reference.md`, `docs/ledger-operations.md`.
 
 Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them. One deliberate addition: a runtime report with `--ledger` exits `1` when the trail fails verification even with `--fail-on none` (log integrity is not a severity threshold), and `2` when the ledger path is missing; a run without `--ledger` is unchanged.
 

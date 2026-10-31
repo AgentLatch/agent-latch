@@ -162,3 +162,110 @@ def test_a_missing_ledger_is_a_usage_error(tmp_path: Path, capsys) -> None:
     assert code == 2
     assert "no audit ledger" in captured.err
     assert "NO AUDIT TRAIL" in captured.out
+
+
+# ------------------------------------------------------------- ledger table and SARIF
+def _tamper_second_block(ledger: Path) -> None:
+    lines = ledger.read_text(encoding="utf-8").splitlines()
+    block = json.loads(lines[1])
+    block["method"] = "tools/list"
+    lines[1] = json.dumps(block)
+    ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_ledger_table_lists_each_record_with_its_state(tmp_path: Path, capsys) -> None:
+    _, ledger, anchor = _sealed(tmp_path)
+    csv_path = tmp_path / "gate-results.csv"
+    _csv(csv_path, [])
+    _tamper_second_block(ledger)
+
+    code = main([str(tmp_path), "--runtime-result", str(csv_path), "--plain",
+                 "--ledger", str(ledger), "--anchor", str(anchor)])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "Audit ledger trace.ledger.jsonl: 2 record(s), head #2" in out
+    rows = [line.split() for line in out.splitlines() if line[:1].isdigit()]
+    assert [(row[0], row[-1]) for row in rows] == [("1", "ok"), ("2", "EDITED")]
+
+
+def test_ledger_table_caps_intact_rows_but_never_hides_a_problem(tmp_path: Path) -> None:
+    from agent_latch.runtime.ledger.report import LedgerRow, select_rows
+
+    rows = [LedgerRow(n, "t", "m", "s", "d", "ok") for n in range(1, 31)]
+    rows[2] = LedgerRow(3, "t", "m", "s", "d", "edited")
+
+    shown, hidden = select_rows(rows, 5)
+    assert [row.seq for row in shown] == [3, 27, 28, 29, 30]
+    assert hidden == 25
+    assert select_rows(rows, 0) == (rows, 0)
+
+
+def test_sarif_carries_the_ledger_verdict_and_runtime_findings(tmp_path: Path, capsys) -> None:
+    _, ledger, anchor = _sealed(tmp_path)
+    csv_path = tmp_path / "gate-results.csv"
+    _csv(csv_path, [{
+        "order": "1",
+        "gate_id": "GATEX",
+        "result": {"gate_id": "GATEX", "status": "ok", "findings": [{
+            "rule_id": "GATEX-001", "outcome": "FAIL", "severity": "high",
+            "message": "flagged", "path": "pkg/given.py", "line": 4,
+        }]},
+    }])
+    _tamper_second_block(ledger)
+
+    code = main([str(tmp_path), "--runtime-result", str(csv_path), "--format", "sarif",
+                 "--ledger", str(ledger), "--anchor", str(anchor)])
+    captured = capsys.readouterr()
+    assert code == 1
+    sarif = json.loads(captured.out)
+    run = sarif["runs"][0]
+    assert sarif["version"] == "2.1.0"
+    assert run["properties"]["auditTrail"]["status"] == "tampered"
+    ledger_results = [r for r in run["results"] if r["ruleId"] == "ALR15-R01"]
+    assert ledger_results and all(r["level"] == "error" for r in ledger_results)
+    location = ledger_results[0]["locations"][0]["physicalLocation"]
+    assert location["artifactLocation"]["uri"].endswith("trace.ledger.jsonl")
+    assert location["region"]["startLine"] == 2
+    assert ledger_results[0]["properties"]["gate"]["id"] == "ALR15"
+    gate_result = next(r for r in run["results"] if r["ruleId"] == "GATEX-001")
+    assert gate_result["locations"][0]["physicalLocation"]["region"]["startLine"] == 4
+    assert {rule["id"] for rule in run["tool"]["driver"]["rules"]} == {"ALR15-R01", "GATEX-001"}
+    assert "AUDIT TRAIL TAMPERED" in captured.err
+
+
+def test_sarif_for_an_intact_trail_has_a_verdict_and_no_results(tmp_path: Path, capsys) -> None:
+    _, ledger, anchor = _sealed(tmp_path)
+    csv_path = tmp_path / "gate-results.csv"
+    _csv(csv_path, [])
+    out_file = tmp_path / "audit.sarif"
+
+    code = main([str(tmp_path), "--runtime-result", str(csv_path), "--format", "sarif",
+                 "--output", str(out_file), "--ledger", str(ledger), "--anchor", str(anchor)])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out == ""
+    run = json.loads(out_file.read_text(encoding="utf-8"))["runs"][0]
+    assert run["results"] == []
+    assert run["properties"]["auditTrail"]["status"] == "intact"
+
+
+def test_sarif_without_a_ledger_and_json_is_refused(tmp_path: Path, capsys) -> None:
+    csv_path = tmp_path / "gate-results.csv"
+    _csv(csv_path, [])
+    assert main([str(tmp_path), "--runtime-result", str(csv_path), "--format", "sarif"]) == 0
+    run = json.loads(capsys.readouterr().out)["runs"][0]
+    assert run["results"] == [] and "auditTrail" not in run["properties"]
+
+    assert main([str(tmp_path), "--runtime-result", str(csv_path), "--format", "json"]) == 2
+    assert "text or sarif" in capsys.readouterr().err
+
+
+def test_sarif_with_a_missing_ledger_prints_no_report(tmp_path: Path, capsys) -> None:
+    csv_path = tmp_path / "gate-results.csv"
+    _csv(csv_path, [])
+    code = main([str(tmp_path), "--runtime-result", str(csv_path), "--format", "sarif",
+                 "--ledger", str(tmp_path / "nope.jsonl")])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert "no audit ledger" in captured.err

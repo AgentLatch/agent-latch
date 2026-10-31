@@ -160,10 +160,21 @@ Read-only. Prints the headline and up to five problems.
 | `1` | `tampered`, `deleted` or `rewritten` |
 | `2` | No ledger at that path, or a usage error |
 
-### `agent-latch --runtime-result CSV --ledger FILE [--anchor PATH]`
+### `agent-latch --runtime-result CSV --ledger FILE [--anchor PATH] [--ledger-rows N] [--format sarif]`
 
 Prints the verdict above the findings table (bold panel in a terminal, the same words in
-`--plain`). `--anchor` without `--ledger` is a usage error (`2`).
+`--plain`), then an audit table with one row per record: `#`, time, method, stage, a short digest
+and a state (`ok`, `EDITED`, `DELETED`, `REORDERED`, `MALFORMED`). A gap in the sequence gets its
+own `DELETED` row. Every record with a problem is always listed. `--ledger-rows N` (default 20)
+caps how many intact ones are shown, newest first, and `0` lists them all. `--anchor` without
+`--ledger` is a usage error (`2`).
+
+`--format sarif` (with `--output FILE`, or on stdout) writes a SARIF 2.1.0 run instead. Each problem
+the verifier found is a result for rule `ALR15-R01`, located in the ledger file (the line is the
+record's sequence number; level `error`, or `warning` for a missing anchor). Runtime gate findings
+are included as their own results. The verdict is always in the run properties (`auditTrail`), so a
+clean ledger still leaves a record. `--format json` is not supported with `--runtime-result` and
+exits `2`. Exit codes are the same as for text.
 
 | Exit | Meaning |
 |---|---|

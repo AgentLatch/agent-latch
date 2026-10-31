@@ -140,6 +140,16 @@ def build_parser() -> argparse.ArgumentParser:
             " rewritten log is caught and not only an edited one"
         ),
     )
+    output.add_argument(
+        "--ledger-rows",
+        metavar="N",
+        type=int,
+        default=20,
+        help=(
+            "With --ledger: records to list in the audit table (default: 20). Every record with a"
+            " problem is always listed. 0 lists all records"
+        ),
+    )
     output.add_argument("--format", choices=("text", "json", "sarif"), default="text", help="Report format (default: text)")
     output.add_argument("--output", metavar="FILE", help="Write report to a file instead of stdout")
     output.add_argument(
@@ -407,6 +417,12 @@ def main(argv: list[str] | None = None) -> int:
         print("Error: --anchor needs --ledger", file=sys.stderr)
         return 2
     if args.runtime_result is not None:
+        if args.format == "json":
+            print("Error: --runtime-result supports --format text or sarif", file=sys.stderr)
+            return 2
+        if args.ledger_rows < 0:
+            print("Error: --ledger-rows must be 0 or more", file=sys.stderr)
+            return 2
         return report_runtime_results(
             Path(args.runtime_result).expanduser(),
             Path(args.path).expanduser().resolve(),
@@ -415,6 +431,9 @@ def main(argv: list[str] | None = None) -> int:
             fail_on=args.fail_on,
             ledger=Path(args.ledger).expanduser() if args.ledger else None,
             anchor=Path(args.anchor).expanduser() if args.anchor else None,
+            output_format=args.format,
+            output=Path(args.output).expanduser() if args.output else None,
+            ledger_rows_limit=args.ledger_rows,
         )
     if args.interactive:
         return interactive_main()

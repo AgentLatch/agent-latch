@@ -124,7 +124,10 @@ machine at that time.
 
 ## Step 5 — Put the verdict at the top of the runtime report
 
-The report you already generate can carry the verdict as its first line:
+The report you already generate can carry the verdict as its first line, followed by a table with
+one row per record (add `--ledger-rows 0` for all of them). For code scanning or another SARIF
+viewer, add `--format sarif --output audit.sarif`: a failed trail becomes `ALR15-R01` results
+located in the ledger file, and the verdict is kept in the run properties.
 
 ```sh
 agent-latch scan . \
