@@ -112,6 +112,27 @@ class Verification:
         return "AUDIT TRAIL DAMAGED — the log cannot be trusted."
 
 
+LEDGER_SUFFIX = ".ledger.jsonl"
+
+
+def trace_for(ledger: Path) -> Path | None:
+    """The trace a ledger sits beside: ``x.ledger.jsonl`` seals ``x.jsonl``.
+
+    The path is returned even when the file is gone, so a deleted trace is reported as deleted
+    and not skipped. A ledger with any other name has no known trace.
+    """
+    if not ledger.name.endswith(LEDGER_SUFFIX):
+        return None
+    return ledger.with_name(ledger.name[: -len(LEDGER_SUFFIX)] + ".jsonl")
+
+
+def find_ledgers(root: Path, *, recursive: bool) -> list[Path]:
+    """Every ``*.ledger.jsonl`` in a folder, or below it. Symlinks are not followed."""
+    pattern = "*" + LEDGER_SUFFIX
+    found = root.rglob(pattern) if recursive else root.glob(pattern)
+    return sorted(path for path in found if path.is_file() and not path.is_symlink())
+
+
 def _block_digest(block: Block) -> str:
     return block_digest(
         prev=block.prev,

@@ -22,6 +22,8 @@ from agent_latch.runtime.ledger import (
     point_for,
     verify_ledger,
 )
+from agent_latch.runtime.ledger.report import format_summary_table
+from agent_latch.runtime.ledger.verify import STATUS_MISSING, find_ledgers, trace_for
 from agent_latch.runtime.payloads import DEFAULT_PAYLOAD_MAX_CHARS, PayloadFile, PayloadTap
 from agent_latch.runtime.sqlite_store import SQLiteEventStore
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
@@ -35,6 +37,8 @@ _EPILOG = """\
   [cyan]agent-latch-runtime proxy --trace t.jsonl --ledger t.ledger.jsonl -- npx -y @modelcontextprotocol/server-github[/cyan]
   [cyan]agent-latch-runtime anchor --ledger t.ledger.jsonl --to ~/offbox/anchors.jsonl[/cyan]
   [cyan]agent-latch-runtime verify --ledger t.ledger.jsonl --anchor ~/offbox/anchors.jsonl[/cyan]
+  [cyan]agent-latch-runtime verify runtime-logs/trace.ledger.jsonl[/cyan]   (path only: trace found beside it)
+  [cyan]agent-latch-runtime verify runtime-logs/ --all[/cyan]   (every ledger below a folder)
   [cyan]agent-latch-runtime demo[/cyan]   (try it with a synthetic server, no setup)
 
 In an MCP config, put [cyan]agent-latch-runtime[/cyan] as the command and move the real server
@@ -158,16 +162,26 @@ def _parser() -> argparse.ArgumentParser:
         description=(
             "Recompute the hash chain, compare each block with the trace line it sealed when"
             " --trace is given, and compare the head with the last published anchor when"
-            " --anchor is given. Reads only; never writes. Exit codes: 0 intact or unanchored,"
-            " 1 altered, deleted or rewritten, 2 no ledger or a usage error."
+            " --anchor is given. Reads only; never writes. Give a ledger file, or a folder to"
+            " check every *.ledger.jsonl in it (add --all to search subfolders too). With a"
+            " path, the trace beside each ledger (x.ledger.jsonl seals x.jsonl) is compared"
+            " automatically, and a missing trace is reported as deleted. Exit codes: 0 intact or"
+            " unanchored, 1 altered, deleted, rewritten (or, for a folder, empty), 2 nothing to"
+            " verify or a usage error."
         ),
     )
-    verify.add_argument("--ledger", type=Path, required=True, metavar="FILE",
-                        help="the ledger written by proxy --ledger")
+    verify.add_argument("path", nargs="?", type=Path, metavar="PATH",
+                        help="a ledger file, or a folder holding ledgers")
+    verify.add_argument("--ledger", type=Path, metavar="FILE",
+                        help="the ledger written by proxy --ledger (same as giving it as PATH,"
+                             " but the trace is only compared when --trace is given)")
+    verify.add_argument("--all", action="store_true",
+                        help="with a folder: also search its subfolders")
     verify.add_argument("--trace", type=Path, metavar="FILE",
                         help="also compare every block with its trace line")
     verify.add_argument("--anchor", type=Path, metavar="PATH",
-                        help="also compare the head with the newest anchor point in this file")
+                        help="also compare the head with the newest anchor point in this file"
+                             " (one ledger only: an anchor belongs to one ledger)")
 
     anchor = commands.add_parser(
         "anchor",
@@ -339,17 +353,62 @@ def _import_logs(args: argparse.Namespace) -> int:
     return 0
 
 
-def _verify(args: argparse.Namespace) -> int:
-    ledger: Path = args.ledger
+def _verify_one(ledger: Path, trace: Path | None, anchor: Path | None) -> int:
     if not ledger.is_file():
         print(f"agent-latch-runtime: no ledger file at {ledger}", file=sys.stderr)
         return 2
-    verification = verify_ledger(
-        ledger, trace_path=args.trace, anchor_path=args.anchor
-    )
+    verification = verify_ledger(ledger, trace_path=trace, anchor_path=anchor)
     for line in describe(verification):
         print(line)
     return 1 if verification.failed else 0
+
+
+def _verify_folder(args: argparse.Namespace, folder: Path) -> int:
+    if args.trace is not None or args.anchor is not None:
+        print(
+            "agent-latch-runtime: --trace and --anchor belong to one ledger; give a ledger file"
+            " instead of a folder",
+            file=sys.stderr,
+        )
+        return 2
+    ledgers = find_ledgers(folder, recursive=args.all)
+    if not ledgers:
+        hint = "" if args.all else " (add --all to search subfolders)"
+        print(f"agent-latch-runtime: no *.ledger.jsonl in {folder}{hint}", file=sys.stderr)
+        return 2
+    results = [
+        (ledger.relative_to(folder).as_posix(), verify_ledger(ledger, trace_path=trace_for(ledger)))
+        for ledger in ledgers
+    ]
+    print(format_summary_table(results))
+    # An empty ledger cannot be verified, so a folder check does not call it clean.
+    problems = [(label, v) for label, v in results if v.failed or v.status == STATUS_MISSING]
+    for label, verification in problems:
+        print(f"\n{label}")
+        for line in describe(verification):
+            print(line)
+    return 1 if problems else 0
+
+
+def _verify(args: argparse.Namespace) -> int:
+    if args.path is not None and args.ledger is not None:
+        print("agent-latch-runtime: give a PATH or --ledger, not both", file=sys.stderr)
+        return 2
+    if args.path is None and args.ledger is None:
+        print("agent-latch-runtime: verify needs a ledger file or a folder", file=sys.stderr)
+        return 2
+    if args.ledger is not None:
+        if args.all:
+            print("agent-latch-runtime: --all needs a folder, not --ledger", file=sys.stderr)
+            return 2
+        return _verify_one(args.ledger, args.trace, args.anchor)
+    path: Path = args.path
+    if path.is_dir():
+        return _verify_folder(args, path)
+    if args.all:
+        print("agent-latch-runtime: --all needs a folder, not a file", file=sys.stderr)
+        return 2
+    return _verify_one(path, args.trace or trace_for(path), args.anchor)
 
 
 def _anchor(args: argparse.Namespace) -> int:

@@ -344,3 +344,86 @@ def test_describe_lists_the_first_problems(sealed) -> None:
     lines = describe(verify_ledger(ledger))
     assert lines[0].startswith("AUDIT TRAIL")
     assert any(line.strip().startswith("#") for line in lines[1:])
+
+
+# --------------------------------------------------------------- verify PATH and --all
+def _pair(folder: Path, name: str = "trace", count: int = 3) -> tuple[Path, Path]:
+    """A trace and the ledger that seals it, named the way the proxy pairs them."""
+    folder.mkdir(parents=True, exist_ok=True)
+    trace = folder / f"{name}.jsonl"
+    lines = _trace(trace, count=count)
+    ledger = folder / f"{name}.ledger.jsonl"
+    chain = Ledger(ledger)
+    for index, line in enumerate(lines, 1):
+        chain.append(line, method="tools/call", stage="request",
+                     timestamp=f"2026-10-29T09:15:4{index}.000Z")
+    chain.close()
+    return trace, ledger
+
+
+def _verify_cli(*argv: str) -> int:
+    from agent_latch.runtime.cli import main
+
+    return main(["verify", *argv])
+
+
+def test_verify_a_path_finds_the_trace_beside_the_ledger(tmp_path: Path, capsys) -> None:
+    trace, ledger = _pair(tmp_path)
+    assert _verify_cli(str(ledger)) == 0
+    assert "UNANCHORED" in capsys.readouterr().out
+
+    lines = trace.read_text(encoding="utf-8").splitlines()
+    lines[0] = lines[0].replace("read_file", "send_email")
+    _write_lines(trace, lines)
+    assert _verify_cli(str(ledger)) == 1
+    assert "TAMPERED" in capsys.readouterr().out
+
+
+def test_verify_a_path_reports_a_deleted_trace(tmp_path: Path, capsys) -> None:
+    trace, ledger = _pair(tmp_path)
+    trace.unlink()
+    assert _verify_cli(str(ledger)) == 1
+    assert "is gone" in capsys.readouterr().out
+
+
+def test_verify_ledger_flag_still_works_and_does_not_guess_the_trace(tmp_path: Path) -> None:
+    trace, ledger = _pair(tmp_path)
+    trace.unlink()
+    assert _verify_cli("--ledger", str(ledger)) == 0
+    assert _verify_cli("--ledger", str(ledger), "--trace", str(trace)) == 1
+
+
+def test_verify_a_folder_checks_each_ledger_and_all_goes_into_subfolders(
+    tmp_path: Path, capsys
+) -> None:
+    _pair(tmp_path, "run-a")
+    _pair(tmp_path, "run-b")
+    bad_trace, _ = _pair(tmp_path / "archive" / "20261030-081346")
+    lines = bad_trace.read_text(encoding="utf-8").splitlines()
+    _write_lines(bad_trace, lines[:1] + lines[2:])
+
+    assert _verify_cli(str(tmp_path)) == 0
+    top = capsys.readouterr().out
+    assert "2 ledger(s): 2 unanchored" in top
+    assert "archive" not in top
+
+    assert _verify_cli(str(tmp_path), "--all") == 1
+    out = capsys.readouterr().out
+    assert "3 ledger(s): 1 deleted, 2 unanchored" in out
+    assert "archive/20261030-081346/trace.ledger.jsonl" in out
+    assert "AUDIT TRAIL DELETED" in out
+
+
+def test_verify_folder_and_path_usage_errors(tmp_path: Path, capsys) -> None:
+    _, ledger = _pair(tmp_path / "one")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    assert _verify_cli(str(empty)) == 2
+    assert "add --all" in capsys.readouterr().err
+    assert _verify_cli(str(tmp_path), "--all", "--anchor", str(tmp_path / "a.jsonl")) == 2
+    assert "one ledger" in capsys.readouterr().err
+    assert _verify_cli(str(ledger), "--all") == 2
+    assert _verify_cli(str(ledger), "--ledger", str(ledger)) == 2
+    assert _verify_cli() == 2
+    assert _verify_cli(str(tmp_path / "nope.ledger.jsonl")) == 2

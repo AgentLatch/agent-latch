@@ -150,15 +150,24 @@ warns once on stderr and never interrupts the MCP session.
 Appends one point for the current head. `PATH` may be `file:/path` or a bare path. Exit `2` on a
 missing ledger, an empty one, an unwritable destination, or a `seq` that would go backwards.
 
-### `agent-latch-runtime verify --ledger FILE [--trace FILE] [--anchor PATH]`
+### `agent-latch-runtime verify [PATH | --ledger FILE] [--all] [--trace FILE] [--anchor PATH]`
 
 Read-only. Prints the headline and up to five problems.
 
+- `--ledger FILE` checks one ledger, and compares a trace only when `--trace` is given.
+- `PATH` as a ledger file does the same, but finds the trace by name (`x.ledger.jsonl` seals
+  `x.jsonl` beside it). A trace that is missing is reported as `deleted`, not skipped.
+- `PATH` as a folder checks every `*.ledger.jsonl` directly in it; `--all` also searches the
+  subfolders (for example `runtime-logs/archive/`). Symlinks are not followed. The output is one
+  row per ledger (records, whether the trace was compared, verdict), a count per verdict, then the
+  details of every ledger that failed. `--trace` and `--anchor` belong to one ledger, so they are a
+  usage error with a folder.
+
 | Exit | Meaning |
 |---|---|
-| `0` | `intact` or `unanchored` |
-| `1` | `tampered`, `deleted` or `rewritten` |
-| `2` | No ledger at that path, or a usage error |
+| `0` | `intact` or `unanchored` (for a folder: every ledger) |
+| `1` | `tampered`, `deleted` or `rewritten` (for a folder: any ledger, or an empty one) |
+| `2` | No ledger at that path, no ledger in the folder, or a usage error |
 
 ### `agent-latch --runtime-result CSV --ledger FILE [--anchor PATH] [--ledger-rows N] [--format sarif]`
 

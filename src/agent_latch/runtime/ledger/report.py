@@ -176,6 +176,31 @@ def render_ledger_table(
     console.print(table)
 
 
+def format_summary_table(entries: list[tuple[str, Verification]]) -> str:
+    """One row per ledger: how many records, whether its trace was compared, and the verdict."""
+    header = ("LEDGER", "RECORDS", "TRACE", "VERDICT")
+    body = [
+        (
+            label,
+            f"{verification.blocks:,}",
+            "checked" if verification.trace_checked else "not checked",
+            verification.status.upper(),
+        )
+        for label, verification in entries
+    ]
+    widths = [max(len(line[i]) for line in [header, *body]) for i in range(len(header))]
+
+    def line(cells: tuple[str, ...]) -> str:
+        return "  ".join(cell.ljust(width) for cell, width in zip(cells, widths)).rstrip()
+
+    counts: dict[str, int] = {}
+    for _, verification in entries:
+        counts[verification.status] = counts.get(verification.status, 0) + 1
+    totals = ", ".join(f"{count} {status}" for status, count in sorted(counts.items()))
+    out = [line(header), *(line(cells) for cells in body), "", f"{len(entries)} ledger(s): {totals}"]
+    return "\n".join(out)
+
+
 def sarif_rule() -> dict[str, Any]:
     gate = gate_entry(RULE_ID)
     return {

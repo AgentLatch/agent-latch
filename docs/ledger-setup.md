@@ -58,7 +58,8 @@ arguments or output, so it is safe to keep next to the log — but keep both.
 ## Step 2 — Check the chain
 
 ```sh
-agent-latch-runtime verify --ledger runtime-logs/trace.ledger.jsonl
+agent-latch-runtime verify runtime-logs/trace.ledger.jsonl      # finds trace.jsonl beside it
+agent-latch-runtime verify runtime-logs --all                   # every ledger, archive included
 ```
 
 ```
