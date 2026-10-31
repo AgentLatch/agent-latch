@@ -243,7 +243,10 @@ def test_sarif_for_an_intact_trail_has_a_verdict_and_no_results(tmp_path: Path, 
                  "--output", str(out_file), "--ledger", str(ledger), "--anchor", str(anchor)])
     captured = capsys.readouterr()
     assert code == 0
-    assert captured.out == ""
+    # The SARIF is in the file, so stdout carries the readable report instead.
+    assert captured.out.startswith("AUDIT TRAIL INTACT")
+    assert "Audit ledger trace.ledger.jsonl" in captured.out
+    assert "Wrote sarif report" in captured.err
     run = json.loads(out_file.read_text(encoding="utf-8"))["runs"][0]
     assert run["results"] == []
     assert run["properties"]["auditTrail"]["status"] == "intact"

@@ -448,9 +448,12 @@ def report_runtime_results(
         sarif = runtime_sarif(alerts, verification, ledger_uri, len(rows))
         if not _write_sarif(sarif, output):
             return 2
-        if verification is not None:
-            print(format_audit_status(verification), file=sys.stderr)
-        return _exit_code(verification, ledger, alerts, fail_on)
+        if output is None:
+            # SARIF is on stdout, so the human summary goes to stderr and the pipe stays clean.
+            if verification is not None:
+                print(format_audit_status(verification), file=sys.stderr)
+            return _exit_code(verification, ledger, alerts, fail_on)
+        # SARIF went to a file, so stdout is free for the readable report.
     if plain or not sys.stdout.isatty():
         if verification is not None:
             print(format_audit_status(verification))

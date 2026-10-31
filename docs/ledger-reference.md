@@ -178,7 +178,9 @@ own `DELETED` row. Every record with a problem is always listed. `--ledger-rows 
 caps how many intact ones are shown, newest first, and `0` lists them all. `--anchor` without
 `--ledger` is a usage error (`2`).
 
-`--format sarif` (with `--output FILE`, or on stdout) writes a SARIF 2.1.0 run instead. Each problem
+`--format sarif` writes a SARIF 2.1.0 run. With `--output FILE` the file gets the SARIF and the
+terminal still shows the readable report above; without it the SARIF goes to stdout and the
+verdict line to stderr, so a pipe stays clean. Each problem
 the verifier found is a result for rule `ALR15-R01`, located in the ledger file (the line is the
 record's sequence number; level `error`, or `warning` for a missing anchor). Runtime gate findings
 are included as their own results. The verdict is always in the run properties (`auditTrail`), so a
