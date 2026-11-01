@@ -23,6 +23,7 @@ Everything runs on your machine. Today the gateway only forwards tool calls; it'
 | Set up the gateway, connect an agent (Claude Code, Claude Desktop, Cursor, Codex CLI, HTTP), or connect tools | [SETUP.md](SETUP.md): step by step, with what you should see at each step |
 | Add a tool, tool server or environment variable to this repo | [CLAUDE.md](CLAUDE.md): standards and a checklist |
 | Run a full open-source agent (CrewAI, ECC, BabyAGI, Swarm, AutoGPT) against it | [RUNNING_AGENTS.md](RUNNING_AGENTS.md), including [`bridge.py`](bridge.py) for agents that take plain Python tools |
+| Use the gateway's tools from your own JavaScript or TypeScript code, or try a demo where Claude uses them | [JS connector](js/README.md): step by step, starting from installing Node.js |
 | Test prompt injection against a live agent | [Injection lab](examples/injection_lab/README.md) (ASI01) |
 | Use a point-and-click view | [Dashboard](#dashboard-ui) below |
 
