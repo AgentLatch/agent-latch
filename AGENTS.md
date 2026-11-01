@@ -108,8 +108,6 @@ src/agent_latch/
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
     demo_server.py # synthetic MCP server for `demo` and the runtime tests [needs fastmcp]
-    rogue_server.py # synthetic server that hides its handshake identity, for `demo --rogue` [needs fastmcp]
-    impostor_server.py # synthetic server with a look-alike handshake name, for `demo --impostor` [needs fastmcp]
     demo.py       # `demo`: drives demo_server through the proxy, then imports the logs [needs fastmcp]
     cli.py        # agent-latch-runtime console script (`proxy`, `import-logs`, `demo`)
 tests/test_scanner.py          # scanner unit tests (synthetic fixtures via tmp_path)

@@ -16,8 +16,6 @@ from typing import TextIO
 from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
 
 DEMO_SERVER = "demo-server"
-ROGUE_SERVER = "rogue-server"
-IMPOSTOR_SERVER = "demo-server"  # proxy label; the upstream declares a look-alike of it
 # The only files the demo writes; a rerun removes just these, so the demo starts clean.
 DEMO_FILES = (
     "trace.jsonl", "payloads.jsonl", "events.csv", "gate-results.csv", "normalized.jsonl",
@@ -25,17 +23,17 @@ DEMO_FILES = (
 )
 
 
-async def _drive(directory: Path, log_file: TextIO, *, server_module: str, server_name: str) -> None:
+async def _drive(directory: Path, log_file: TextIO) -> None:
     from fastmcp import Client
     from fastmcp.client.transports import StdioTransport
 
     transport = StdioTransport(
         command=sys.executable,
         args=[
-            "-m", "agent_latch.runtime.cli", "proxy", "--quiet", "--name", server_name,
+            "-m", "agent_latch.runtime.cli", "proxy", "--quiet", "--name", DEMO_SERVER,
             "--trace", str(directory / "trace.jsonl"),
             "--payloads", str(directory / "payloads.jsonl"),
-            "--", sys.executable, "-m", server_module,
+            "--", sys.executable, "-m", "agent_latch.runtime.demo_server",
         ],
         env=dict(os.environ),
         keep_alive=False,
@@ -50,87 +48,19 @@ async def _drive(directory: Path, log_file: TextIO, *, server_module: str, serve
         await client.get_prompt("summarize", {"topic": "Mars"})
 
 
-async def _drive_rogue(directory: Path, log_file: TextIO) -> None:
-    """Drive the rogue server: it has only ``ping``, so the calls differ from the normal demo."""
-    from fastmcp import Client
-    from fastmcp.client.transports import StdioTransport
-
-    transport = StdioTransport(
-        command=sys.executable,
-        args=[
-            "-m", "agent_latch.runtime.cli", "proxy", "--quiet", "--name", ROGUE_SERVER,
-            "--trace", str(directory / "trace.jsonl"),
-            "--payloads", str(directory / "payloads.jsonl"),
-            "--", sys.executable, "-m", "agent_latch.runtime.rogue_server",
-        ],
-        env=dict(os.environ),
-        keep_alive=False,
-        log_file=log_file,
-    )
-    async with Client(transport) as client:
-        await client.list_tools()
-        await client.call_tool("ping", {})
-
-
-async def _drive_impostor(directory: Path, log_file: TextIO) -> None:
-    """Drive the impostor server: it declares a look-alike of the proxy's ``demo-server`` label."""
-    from fastmcp import Client
-    from fastmcp.client.transports import StdioTransport
-
-    transport = StdioTransport(
-        command=sys.executable,
-        args=[
-            "-m", "agent_latch.runtime.cli", "proxy", "--quiet", "--name", IMPOSTOR_SERVER,
-            "--trace", str(directory / "trace.jsonl"),
-            "--payloads", str(directory / "payloads.jsonl"),
-            "--", sys.executable, "-m", "agent_latch.runtime.impostor_server",
-        ],
-        env=dict(os.environ),
-        keep_alive=False,
-        log_file=log_file,
-    )
-    async with Client(transport) as client:
-        await client.list_tools()
-        await client.call_tool("get_weather", {"city": "London"})
-
-
-def run_demo(
-    directory: Path, *, out: TextIO | None = None, rogue: bool = False, impostor: bool = False
-) -> None:
-    """Record a demo session into ``directory`` and import it; raises on failure.
-
-    With ``rogue``, the demo server hides its identity so ALR03-001 reports a finding. With
-    ``impostor``, it declares a look-alike name so ALR03-003 reports a finding.
-    """
+def run_demo(directory: Path, *, out: TextIO | None = None) -> None:
+    """Record a demo session into ``directory`` and import it; raises on failure."""
     out = out if out is not None else sys.stderr
     directory.mkdir(parents=True, exist_ok=True)
     for name in DEMO_FILES:
         (directory / name).unlink(missing_ok=True)
-    server_name = ROGUE_SERVER if rogue else DEMO_SERVER
-    if rogue:
-        out.write(
-            f"agent-latch-runtime: demo: calling the synthetic {server_name} through the proxy\n"
-        )
-    elif impostor:
-        out.write(
-            "agent-latch-runtime: demo: calling the impostor server through the proxy "
-            f"(it declares a look-alike of {IMPOSTOR_SERVER!r})\n"
-        )
-    else:
-        out.write(
-            f"agent-latch-runtime: demo: calling the synthetic {server_name} through the proxy\n"
-        )
+    out.write(
+        f"agent-latch-runtime: demo: calling the synthetic {DEMO_SERVER} through the proxy\n"
+    )
     out.flush()
     # The proxy's own stderr (startup message, warnings) goes to proxy.log in the demo folder.
     with (directory / "proxy.log").open("w", encoding="utf-8") as log_file:
-        if rogue:
-            asyncio.run(_drive_rogue(directory, log_file))
-        elif impostor:
-            asyncio.run(_drive_impostor(directory, log_file))
-        else:
-            asyncio.run(_drive(directory, log_file,
-                               server_module="agent_latch.runtime.demo_server",
-                               server_name=DEMO_SERVER))
+        asyncio.run(_drive(directory, log_file))
     gates = discover_gates()
     out.write(f"agent-latch-runtime: demo: importing the logs ({len(gates)} gate(s))\n")
     out.flush()

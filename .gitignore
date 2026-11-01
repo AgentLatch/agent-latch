@@ -17,3 +17,7 @@ build/
 # Ignore this output folder only. A pattern of "runtime/" would also hide the source
 # package src/agent_latch/runtime/, and these logs must not land in that package.
 runtime-logs/
+
+# Local-only demo fixtures (rogue/impostor servers); kept off main by request.
+src/agent_latch/runtime/rogue_server.py
+src/agent_latch/runtime/impostor_server.py
