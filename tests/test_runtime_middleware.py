@@ -311,3 +311,37 @@ def test_demo_rogue_server_triggers_alr03(
     )
     assert identification["outcome"] == "FAIL"
     assert identification["is_finding"] is True
+
+
+def test_demo_impostor_server_triggers_alr03_impersonation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The impostor demo server declares a look-alike name, so ALR03-003 reports a finding."""
+    from agent_latch.gates import alr03
+    from agent_latch.runtime import cli
+
+    alr03.reset_state()
+    assert cli.main(["demo", "--impostor", "--dir", str(tmp_path)]) == 0
+    err = capsys.readouterr().err
+    assert "impostor" in err
+
+    # The recorded handshake carries the look-alike name (Cyrillic е), not the proxy label.
+    handshake = next(
+        r for r in _records(tmp_path / "trace.jsonl") if r["method"] == "initialize"
+    )
+    assert handshake["server_info"]["name"] == "dеmo-server"
+    assert handshake["server_info"]["name"] != "demo-server"
+
+    with (tmp_path / "gate-results.csv").open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    findings = [
+        finding
+        for row in rows
+        for finding in json.loads(row["result_json"])["findings"]
+    ]
+    impersonation = next(
+        f for f in findings if f["rule_id"] == alr03.RULE_IDS["server_name_impersonation"]
+    )
+    assert impersonation["outcome"] == "FAIL"
+    assert impersonation["is_finding"] is True
+    assert impersonation["entity"]["server"] == "demo-server"

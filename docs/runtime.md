@@ -168,7 +168,7 @@ agent-latch-runtime demo
 
 This runs a bundled synthetic MCP server behind the proxy, lists its tools, calls three tools (one returns a fake credential, one fails), gets a prompt, then imports the logs and prints one line per event. Everything stays on your machine. The files land in `runtime-logs/demo/` and are replaced on each run: `trace.jsonl`, `payloads.jsonl`, `events.csv`, `normalized.jsonl` and `proxy.log` (the proxy's own messages).
 
-`agent-latch-runtime demo --rogue` uses a second synthetic server that hides its identity in the handshake, so ALR03 reports a finding (`ALR03-001`) you can see with `agent-latch --runtime-result`.
+`agent-latch-runtime demo --rogue` uses a second synthetic server that hides its identity in the handshake, so ALR03 reports a finding (`ALR03-001`) you can see with `agent-latch --runtime-result`. `agent-latch-runtime demo --impostor` uses a server that declares a look-alike of the proxy's `demo-server` label (a Cyrillic homoglyph that renders identically), so ALR03-003 reports a name-impersonation finding.
 
 ## Import logs
 
