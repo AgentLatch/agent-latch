@@ -152,7 +152,7 @@ def _parser() -> argparse.ArgumentParser:
         help="use a server that hides its identity, so ALR03-001 reports a finding",
     )
     demo_mode.add_argument(
-        "--impostor", action="store_true",
+        "--impostor", "--imposter", dest="impostor", action="store_true",
         help="use a server that declares a look-alike name, so ALR03-003 reports a finding",
     )
     return parser
