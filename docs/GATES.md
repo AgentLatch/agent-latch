@@ -14,7 +14,7 @@ A gate is a security outcome AgentLatch checks for, such as "destructive actions
 |---|---|---|---|---|---|---|
 | `ALR01` | Prompt integrity | System prompts carry no injected instructions or raw user input | `PRM001`, `PRM002`, `ALR01-S01` | `ASI01` | Art. 15 | partial |
 | `ALR02` | Tool definition integrity | Tool definitions are pinned and changes are detected | none | `ASI02`, `ASI04` | Art. 15 | no checks yet |
-| `ALR03` | Tool and agent endpoint trust | Remote tools, MCP servers and peer agents are identified and authenticated | `MAN003`, `ALR03-S01`, `ALR03-001`, `ALR03-002` | `ASI02`, `ASI03`, `ASI04`, `ASI07` | Art. 15 | partial |
+| `ALR03` | Tool and agent endpoint trust | Remote tools, MCP servers and peer agents are identified and authenticated | `MAN003`, `ALR03-S01`, `ALR03-001`, `ALR03-002`, `ALR03-003` | `ASI02`, `ASI03`, `ASI04`, `ASI07` | Art. 15 | partial |
 | `ALR04` | Tool schema injection | Tool definitions contain no instruction-like or hidden content | `ALR04-001`, `ALR04-002`, `ALR04-003`, `ALR04-004`, `ALR04-005`, `ALR04-006`, `ALR04-007`, `ALR04-008`, `ALR04-009` | `ASI01`, `ASI02`, `ASI04` | Art. 15 | preview (runtime) |
 | `ALR05` | Untrusted content isolation | Web, HTTP and tool output reaches the model fenced as data | `AG003` | `ASI01` | Art. 15 | partial |
 | `ALR06` | Code execution containment | No unsandboxed eval, shell or model-driven code execution | `PY001`, `PY002`, `AG002`, `ALR06-S01`, `ALR06-S02` | `ASI02`, `ASI05` | Art. 15 | partial |
@@ -40,6 +40,7 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `ALR03-S01` | `ALR03` | static | A server on every interface lets any reachable peer call the agent and its tools | `ASI03`, `ASI07` |
 | `ALR03-001` | `ALR03` | runtime | An endpoint that does not identify itself cannot be told apart from an impostor | `ASI02`, `ASI03`, `ASI04`, `ASI07` |
 | `ALR03-002` | `ALR03` | runtime | A server whose name or version changed may be compromised or swapped | `ASI02`, `ASI03`, `ASI04`, `ASI07` |
+| `ALR03-003` | `ALR03` | runtime | A look-alike server name (typosquat or homoglyph) impersonates a trusted endpoint | `ASI02`, `ASI03`, `ASI04`, `ASI07` |
 | `ALR04-001` | `ALR04` | runtime | The tool definition tells the model to ignore its instructions | `ASI01`, `ASI02`, `ASI04` |
 | `ALR04-002` | `ALR04` | runtime | The tool definition claims to speak for the system, developer or user | `ASI01`, `ASI02`, `ASI04` |
 | `ALR04-003` | `ALR04` | runtime | The tool definition asks the model to hide actions from the user | `ASI01`, `ASI02`, `ASI04` |

@@ -120,6 +120,8 @@ GATES: tuple[Gate, ...] = (
              "An endpoint that does not identify itself cannot be told apart from an impostor"),
             ("ALR03-002", "runtime",
              "A server whose name or version changed may be compromised or swapped"),
+            ("ALR03-003", "runtime",
+             "A look-alike server name (typosquat or homoglyph) impersonates a trusted endpoint"),
         ),
     ),
     Gate(
