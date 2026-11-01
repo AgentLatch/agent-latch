@@ -11,9 +11,19 @@ from pathlib import Path
 
 import pytest
 
-from agent_latch.runtime import TRACE_SCHEMA, ToolCall, ToolInfo, ToolOutput, TraceLog
+from agent_latch.runtime import (
+    PAYLOAD_SCHEMA,
+    TRACE_SCHEMA,
+    PayloadEvent,
+    PayloadFile,
+    PayloadTap,
+    ToolCall,
+    ToolInfo,
+    ToolOutput,
+    TraceLog,
+)
 from agent_latch.runtime.cli import _default_name, _parse_http, main
-from agent_latch.runtime.redact import MASK, excerpt, mask_secrets, payload_sha256
+from agent_latch.runtime.redact import MASK, excerpt, mask_secrets, mask_value, payload_sha256
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 FAKE_TOKEN = "sk-" + "FAKE0123456789abcdefFAKE"
@@ -27,6 +37,18 @@ def _call(**arguments: object) -> ToolCall:
         tool="get_weather",
         server="weather",
         arguments=arguments,
+        timestamp="2026-10-17T00:00:00.000Z",
+    )
+
+
+def _call_tool(tool: str) -> ToolCall:
+    return ToolCall(
+        session_id="s1",
+        request_id="8",
+        client_id=None,
+        tool=tool,
+        server="weather",
+        arguments={},
         timestamp="2026-10-17T00:00:00.000Z",
     )
 
@@ -138,3 +160,69 @@ def test_proxy_needs_exactly_one_upstream(capsys: pytest.CaptureFixture[str]) ->
     assert main(["proxy"]) == 2
     assert main(["proxy", "--upstream-url", "http://127.0.0.1:1/mcp", "--", "python", "x.py"]) == 2
     assert "--upstream-url" in capsys.readouterr().err
+
+
+def test_mask_value_masks_secret_keys_and_cuts_long_strings() -> None:
+    value = {
+        "api_key": "plainvalue",
+        "query": f"use {FAKE_TOKEN}",
+        "nested": [{"password": "x" * 8}, 3, None, True],
+        "long": "a" * 50,
+    }
+    masked = mask_value(value, 20)
+    assert masked["api_key"] == MASK
+    assert masked["query"] == f"use {MASK}"
+    assert masked["nested"] == [{"password": MASK}, 3, None, True]
+    assert masked["long"] == "a" * 20 + "…[30 more chars]"
+
+
+def test_payload_tap_attaches_tool_definition_and_isolates_sinks() -> None:
+    seen: list[PayloadEvent] = []
+
+    def broken(event: PayloadEvent) -> None:
+        raise RuntimeError("sink down")
+
+    tap = PayloadTap([broken, seen.append])
+    weather = ToolInfo(
+        "get_weather", "weather", "Weather for a city.", {"type": "object"}, {"readOnlyHint": True}
+    )
+    tap.tools_listed(
+        session_id="s1", request_id="1", client_id=None, server="weather", tools=[weather]
+    )
+    call = _call(city="London")
+    tap.call_request(call)
+    tap.call_response(call, ToolOutput(("rainy",), {"temp": 18}, False), 4.25)
+    tap.call_request(_call_tool("unlisted_tool"))
+    tap.prompt_response(
+        session_id="s1", request_id="9", client_id="c1", server="weather", prompt="summarize",
+        roles=["user"], texts=["Summarize Mars"],
+    )
+
+    listed, request, response, unlisted, prompt = (event.to_dict() for event in seen)
+    assert [e["seq"] for e in (listed, request, response, unlisted, prompt)] == [1, 2, 3, 4, 5]
+    assert all(e["schema"] == PAYLOAD_SCHEMA for e in (listed, request, prompt))
+    assert listed["payload"]["tools"][0]["annotations"] == {"readOnlyHint": True}
+    assert request["payload"]["arguments"] == {"city": "London"}
+    assert request["payload"]["tool_definition"]["description"] == "Weather for a city."
+    assert response["payload"] == {
+        "tool": "get_weather", "is_error": False, "content": ["rainy"],
+        "structured": {"temp": 18}, "duration_ms": 4.2,
+    }
+    assert unlisted["payload"]["tool_definition"] is None
+    assert prompt["payload"]["messages"] == [{"role": "user", "text": "Summarize Mars"}]
+
+
+def test_payload_file_masks_values(tmp_path: Path) -> None:
+    path = tmp_path / "payloads.jsonl"
+    sink = PayloadFile(path)
+    tap = PayloadTap([sink])
+    call = _call(api_key="plainvalue", city="London")
+    tap.call_request(call)
+    tap.call_response(call, ToolOutput((f"token={FAKE_TOKEN}",), None, False), 1.0)
+    sink.close()
+
+    request, response = (json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
+    assert request["payload"]["arguments"] == {"api_key": MASK, "city": "London"}
+    assert FAKE_TOKEN not in json.dumps(response)
+    if os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600

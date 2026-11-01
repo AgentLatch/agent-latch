@@ -26,7 +26,8 @@ from agent_latch.rules import Finding
 
 IGNORE_FILE = ".agent-latch-ignore"
 _INLINE_IGNORE = re.compile(r"agent-latch:\s*ignore(?:\[([^\]]*)\])?", re.IGNORECASE)
-_RULE_ID = re.compile(r"^(?:AGENTLATCH-)?[A-Z]{2,4}\d{3}$", re.IGNORECASE)
+# PRM001 / AGENTLATCH-PRM001, and gate-named detectors such as ALR13-S01 (agent_latch.catalog).
+_RULE_ID = re.compile(r"^(?:(?:AGENTLATCH-)?[A-Z]{2,4}\d{3}|ALR\d{2}-[SR]\d{2})$", re.IGNORECASE)
 _COMMENT = re.compile(r"(?:^|\s)#.*$")
 
 

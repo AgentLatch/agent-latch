@@ -7,6 +7,7 @@ from dataclasses import asdict
 from typing import Any
 
 from agent_latch import __version__
+from agent_latch.catalog import display_id, gate_entry, gate_label, short_id
 from agent_latch.owasp import (
     OWASP_AGENTIC_TITLE,
     OWASP_AGENTIC_URL,
@@ -34,6 +35,8 @@ def severity_sort_key(finding: Finding) -> tuple[int, str, int]:
 
 def finding_dict(finding: Finding) -> dict[str, Any]:
     result = asdict(finding)
+    result["short_id"] = short_id(finding.rule_id)
+    result["gate"] = gate_entry(finding.rule_id)
     result["owasp"] = list(finding.owasp)
     result["owasp_categories"] = category_entries(finding.owasp)
     return result
@@ -101,6 +104,8 @@ def sarif_report(
     rules_by_id: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
     for finding in findings:
+        gate = gate_entry(finding.rule_id)
+        gate_tags = [gate["id"]] if gate else []
         rules_by_id.setdefault(
             finding.rule_id,
             {
@@ -108,10 +113,13 @@ def sarif_report(
                 "name": finding.title,
                 "shortDescription": {"text": finding.title},
                 "help": {
-                    "text": f"{finding.message}\n\nOWASP Agentic mapping: {owasp_labels(finding)}"
+                    "text": f"{finding.message}\n\nGate: {gate_label(finding.rule_id)}\n"
+                    f"OWASP Agentic mapping: {owasp_labels(finding)}"
                 },
                 "properties": {
-                    "tags": ["security", *finding.owasp],
+                    "tags": ["security", *gate_tags, *finding.owasp],
+                    "shortId": short_id(finding.rule_id),
+                    "gate": gate,
                     "owaspCategories": category_entries(finding.owasp),
                 },
             },
@@ -136,6 +144,7 @@ def sarif_report(
                 "properties": {
                     "severity": finding.severity,
                     "confidence": finding.confidence,
+                    "gate": gate,
                     "owasp": list(finding.owasp),
                     "owaspCategories": category_entries(finding.owasp),
                 },
@@ -228,9 +237,10 @@ def text_report(
     for finding in ordered:
         lines.extend(
             [
-                f"[{finding.severity.upper()}] {finding.rule_id} {finding.title}",
+                f"[{finding.severity.upper()}] {display_id(finding.rule_id)} {finding.title}",
                 f"  {finding.path}:{finding.line}:{finding.column}",
                 f"  {finding.message}",
+                f"  Gate: {gate_label(finding.rule_id)}",
                 f"  OWASP Agentic: {owasp_labels(finding)} | confidence: {finding.confidence}",
                 f"  Evidence: {finding.evidence}",
                 "",

@@ -18,7 +18,9 @@ def is_test_path(relative_path: str) -> bool:
 
 
 # Rules whose findings in test files are reported at low severity (SEC001 handles this itself).
-TEST_DEMOTED_RULES = frozenset({"AGENTLATCH-PY001", "AGENTLATCH-AG004", "AGENTLATCH-AG006", "AGENTLATCH-AG007"})
+TEST_DEMOTED_RULES = frozenset(
+    {"AGENTLATCH-PY001", "AGENTLATCH-AG004", "AGENTLATCH-AG006", "AGENTLATCH-AG007", "ALR14-S01"}
+)
 
 
 def demote_test_findings(findings: list[Finding], relative_path: str) -> list[Finding]:

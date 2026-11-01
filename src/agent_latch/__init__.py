@@ -1,3 +1,3 @@
 """AgentLatch: local-first checks for selected AI-agent security risks."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

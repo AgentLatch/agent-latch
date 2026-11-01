@@ -14,6 +14,7 @@ from rich.text import Text
 from rich_argparse import RawDescriptionRichHelpFormatter
 
 from agent_latch import __version__
+from agent_latch.catalog import display_id
 from agent_latch.findings import dedupe
 from agent_latch.manifest import ManifestError, find_manifest, scan_manifest
 from agent_latch.owasp import OWASP_AGENTIC_TITLE, category_label, coverage, coverage_status
@@ -24,6 +25,7 @@ from agent_latch.rules import (
     audit_requirements,
     scan_project,
 )
+from agent_latch.runtime.results import report_runtime_results
 from agent_latch.suppress import IGNORE_FILE, ConfigError, filter_findings, load_ignore_rules
 
 _EPILOG = """\
@@ -35,6 +37,7 @@ _EPILOG = """\
   [cyan]agent-latch scan . --min-severity medium[/cyan]           hide low and info findings
   [cyan]agent-latch scan --format sarif --output results.sarif[/cyan]
   [cyan]agent-latch --interactive[/cyan]                          guided scan
+  [cyan]agent-latch --runtime-result[/cyan]                       print the runtime gate report
 
 [dim]Scans run locally. Findings are heuristics, not a security certification.[/dim]
 """
@@ -110,6 +113,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     output = parser.add_argument_group("Output")
+    output.add_argument(
+        "--runtime-result",
+        nargs="?",
+        const="runtime-logs/gate-results.csv",
+        metavar="CSV",
+        help=(
+            "Print the runtime gate report from this CSV instead of scanning"
+            " (default: runtime-logs/gate-results.csv). Every gate uses the same"
+            " columns. The path argument is the project searched for a local tool's file and line"
+        ),
+    )
+    output.add_argument(
+        "--ledger",
+        metavar="FILE",
+        help=(
+            "With --runtime-result: check the audit ledger written by `agent-latch-runtime proxy"
+            " --ledger` and print the verdict in bold above the findings"
+        ),
+    )
+    output.add_argument(
+        "--anchor",
+        metavar="PATH",
+        help=(
+            "With --ledger: also compare the ledger head with the newest anchor point, so a"
+            " rewritten log is caught and not only an edited one"
+        ),
+    )
+    output.add_argument(
+        "--ledger-rows",
+        metavar="N",
+        type=int,
+        default=20,
+        help=(
+            "With --ledger: records to list in the audit table (default: 20). Every record with a"
+            " problem is always listed. 0 lists all records"
+        ),
+    )
     output.add_argument("--format", choices=("text", "json", "sarif"), default="text", help="Report format (default: text)")
     output.add_argument("--output", metavar="FILE", help="Write report to a file instead of stdout")
     output.add_argument(
@@ -184,7 +224,7 @@ def _render_findings(console: Console, findings: list[Finding]) -> None:
         detail.append("\nEvidence: " + finding.evidence, style="dim")
         table.add_row(
             Text(finding.severity.upper(), style=style),
-            Text(finding.rule_id),
+            Text(display_id(finding.rule_id)),
             Text(f"{finding.path}:{finding.line}:{finding.column}"),
             Text("\n".join(category_label(cid) for cid in finding.owasp) or "—"),
             detail,
@@ -197,7 +237,7 @@ def _render_findings(console: Console, findings: list[Finding]) -> None:
 def _print_fail_summary(blocking: list[Finding], fail_on: str) -> None:
     # stderr keeps machine-readable stdout (json/sarif) intact; color only on a terminal.
     console = Console(stderr=True, highlight=False, soft_wrap=True)
-    rule_width = max(len(finding.rule_id) for finding in blocking)
+    rule_width = max(len(display_id(finding.rule_id)) for finding in blocking)
     locations = [f"{finding.path}:{finding.line}" for finding in blocking]
     location_width = max(len(location) for location in locations)
     console.print(
@@ -207,7 +247,7 @@ def _print_fail_summary(blocking: list[Finding], fail_on: str) -> None:
     for finding, location in zip(blocking, locations):
         line = Text("  ")
         line.append(f"{finding.severity.upper():<8}", style=SEVERITY_STYLES.get(finding.severity, "white"))
-        line.append(f" {finding.rule_id:<{rule_width}}  ")
+        line.append(f" {display_id(finding.rule_id):<{rule_width}}  ")
         line.append(f"{location:<{location_width}}", style="cyan")
         line.append(f"  {finding.title}")
         console.print(line)
@@ -373,6 +413,28 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["scan"]:
         argv = argv[1:]
     args = build_parser().parse_args(argv)
+    if args.anchor is not None and args.ledger is None:
+        print("Error: --anchor needs --ledger", file=sys.stderr)
+        return 2
+    if args.runtime_result is not None:
+        if args.format == "json":
+            print("Error: --runtime-result supports --format text or sarif", file=sys.stderr)
+            return 2
+        if args.ledger_rows < 0:
+            print("Error: --ledger-rows must be 0 or more", file=sys.stderr)
+            return 2
+        return report_runtime_results(
+            Path(args.runtime_result).expanduser(),
+            Path(args.path).expanduser().resolve(),
+            plain=args.plain,
+            min_severity=args.min_severity,
+            fail_on=args.fail_on,
+            ledger=Path(args.ledger).expanduser() if args.ledger else None,
+            anchor=Path(args.anchor).expanduser() if args.anchor else None,
+            output_format=args.format,
+            output=Path(args.output).expanduser() if args.output else None,
+            ledger_rows_limit=args.ledger_rows,
+        )
     if args.interactive:
         return interactive_main()
 
@@ -454,8 +516,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.output:
         output = Path(args.output).expanduser()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(report + "\n", encoding="utf-8")
+        try:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(report + "\n", encoding="utf-8")
+        except OSError as exc:
+            print(
+                f"Error: could not write the {args.format} report to {output}: {exc}",
+                file=sys.stderr,
+            )
+            return 2
         print(f"Wrote {args.format} report with {len(findings)} finding(s) to {output}", file=sys.stderr)
     else:
         print(report)

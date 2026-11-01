@@ -13,7 +13,7 @@ Guidance for AI coding agents (and humans) working in this repository.
 
 It reports findings as a terminal table / plain text, JSON, or SARIF, and runs as a CLI, a pre-commit hook, or a composite GitHub Action. Findings map to the OWASP Top 10 for Agentic Applications (informational only).
 
-Status: **early proof of concept (v0.3.0)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
+Status: **early proof of concept (v0.4.0)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
 
 ## Design principle: the scanned project is untrusted
 
@@ -36,20 +36,30 @@ AgentLatch is often run on agents someone else wrote, so nothing inside the scan
 - The mapping is informational. Never claim OWASP compliance, certification, or endorsement.
 - The PDF is an OWASP publication. Don't copy large passages into code or docs. Paraphrase it and link to https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/.
 
-| ID | Category | Current rules |
-|---|---|---|
-| ASI01 | Agent Goal Hijack | `AG003`, `PRM001`, `PRM002` |
-| ASI02 | Tool Misuse and Exploitation | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003` |
-| ASI03 | Identity and Privilege Abuse | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003` |
-| ASI04 | Agentic Supply Chain Vulnerabilities | `SEC001`, `DEP001` |
-| ASI05 | Unexpected Code Execution (RCE) | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001` |
-| ASI06 | Memory & Context Poisoning | none yet |
-| ASI07 | Insecure Inter-Agent Communication | none yet |
-| ASI08 | Cascading Failures | `AG007` (partial) |
-| ASI09 | Human-Agent Trust Exploitation | `AG004`, `AG006`, `MAN001` (partial) |
-| ASI10 | Rogue Agents | none yet |
+| ID | Category | Gates | Current rules |
+|---|---|---|---|
+| ASI01 | Agent Goal Hijack | `ALR01`, `ALR04`, `ALR05` | `AG003`, `PRM001`, `PRM002`, `ALR01-S01` |
+| ASI02 | Tool Misuse and Exploitation | `ALR02`, `ALR03`, `ALR04`, `ALR06`, `ALR07`, `ALR09`, `ALR12` | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003`, `ALR06-S02`, `ALR12-S01` |
+| ASI03 | Identity and Privilege Abuse | `ALR03`, `ALR07`, `ALR09`, `ALR10` | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003`, `ALR03-S01` |
+| ASI04 | Agentic Supply Chain Vulnerabilities | `ALR02`, `ALR03`, `ALR04`, `ALR10`, `ALR11` | `SEC001`, `DEP001`, `ALR11-S01` |
+| ASI05 | Unexpected Code Execution (RCE) | `ALR06`, `ALR07`, `ALR09` | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `ALR06-S01`, `ALR06-S02` |
+| ASI06 | Memory & Context Poisoning | `ALR13` | `ALR13-S01`, `ALR13-S02` (partial) |
+| ASI07 | Insecure Inter-Agent Communication | `ALR03`, `ALR12` | `ALR03-S01`, `ALR12-S01` (partial) |
+| ASI08 | Cascading Failures | `ALR08` | `AG007`, `ALR08-S01`, `ALR08-S02` (partial) |
+| ASI09 | Human-Agent Trust Exploitation | `ALR09` | `AG004`, `AG006`, `MAN001` (partial) |
+| ASI10 | Rogue Agents | `ALR14`, `ALR15` | `ALR14-S01`, `ALR14-S02`, `ALR14-S03`, `ALR15-R01` (partial) |
 
 Keep this table up to date whenever a rule is added or its OWASP mapping changes.
+
+### Gates
+
+A gate is a security outcome (for example `ALR09` Human approval for sensitive actions). Every detector, a static rule or a runtime check, belongs to exactly one gate. `src/agent_latch/catalog.py` is the single source for gates (`GATES`, which groups each gate's detectors as `(id, mode, reason)`), detector-to-gate assignments with the reason (`DETECTORS`, derived from those groups), and framework references per gate: OWASP IDs from `owasp.py` and EU AI Act articles (`EU_AI_ACT_ARTICLES`). ISO/IEC 42001 is not mapped yet.
+
+- A detector's OWASP IDs must be a subset of its gate's. A test checks this, and that every rule in `RULE_CATEGORIES` and every ALR04 rule ID has a gate (or is listed in `DIAGNOSTICS`).
+- `docs/GATES.md` is generated: `python -I -m agent_latch.catalog > docs/GATES.md`. A test fails when it is out of date.
+- Framework mappings are informational. Never claim compliance with the EU AI Act, ISO/IEC 42001 or OWASP.
+- `ALR15` (tamper-evident audit trail, `ASI10`) is verified by `runtime/ledger/verify.py`, not by a module in `gates/`. Its detector is `ALR15-R01`. A gate whose evidence is a whole-file property, like this one, belongs in the catalog and in the report, not in the per-event plugin loader.
+- `agent_latch/gates/` holds runtime gate plugins only (one module per gate, `GATE_ID` = the gate ID). Keep the catalog out of that package: the importer loads every module in it as a plugin.
 
 ## Repository layout
 
@@ -61,26 +71,52 @@ src/agent_latch/
   rules.py        # PY*/AG001/AG002/SEC001 rules, project walker, prompt-file scan, pip-audit integration
   agent_code.py   # manifest-free agent checks: prompts in code/YAML (PRM*), AG004, AG005
   oversight.py    # AG006 human approval disabled (ASI09), AG007 unbounded agent loops (ASI08)
+  memory.py       # ALR13: untrusted memory writes (ASI06), memory shared across sessions
+  endpoints.py    # ALR12-S01 plaintext endpoints, ALR03-S01 server bound to all interfaces (ASI07)
+  resilience.py   # ALR08-S01 missing timeout, ALR08-S02 unbounded retry (ASI08)
+  rogue.py        # ALR14: self-modification, persistence, runtime installs (ASI10)
+  sandbox.py      # ALR06 unsafe deserialization and unsandboxed code, ALR11-S01 trust_remote_code
   astutil.py      # cached ast.walk shared by the rule modules
-  taint.py        # AG003: untrusted web/HTTP/tool output flowing into LLM messages
-  prompts.py      # PRM001/PRM002 text checks shared by code, YAML, prompt files, and manifests
+  taint.py        # AG003/ALR13-S01: untrusted web/HTTP/tool output flowing into messages or memory
+  prompts.py      # PRM001/PRM002/ALR01-S01 text checks shared by code, YAML, prompt files, manifests
   yamlload.py     # line-aware YAML loading (SafeLoader subclass)
   manifest.py     # Manifest loading and MAN* rules; PRM* on manifest prompts
   owasp.py        # ASI01–ASI10 category IDs/names, rule→category map, coverage summary
+  catalog.py      # gates ALR01–ALR14, detector→gate map, EU AI Act refs; renders docs/GATES.md
   suppress.py     # .agent-latch-ignore, inline ignores, pyproject excludes
   report.py       # text, JSON, and SARIF renderers; severity ordering
   action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
-  runtime/        # runtime checks for MCP traffic (preview, monitor only; `[runtime]` extra)
-    events.py     # ToolCall, ToolOutput, ToolInfo
-    redact.py     # hashes, secret masking, short excerpts (never raw arguments or outputs)
+  gates/          # runtime gate plugins discovered by the importer (monitor only, never block)
+    __init__.py
+    alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; reports findings only)
+  runtime/        # MCP traffic recording (preview, monitor only; `[runtime]` extra). Logs go to runtime-logs/, not here.
+    events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
+    redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file
     trace.py      # TraceLog: one redacted JSONL record per MCP message (agentlatch.runtime.trace/1)
+    payloads.py   # PayloadTap: full-payload records to sinks; PayloadFile (opt-in --payloads, masked)
+    normalizer.py # MCPEventNormalizer: joins a trace record and its payload record into one event
+    importer.py   # RuntimeLogImporter: tails logs, writes events, runs gates; optional EventStore
+    sqlite_store.py # SQLiteEventStore: first EventStore, local SQLite via stdlib sqlite3 (`--database`)
+    results.py    # agent-latch --runtime-result: findings table from gate-results.csv, for every gate
+    ledger/       # ALR15: tamper-evident hash chain over trace records, plus anchor points (stdlib, local)
+      canonical.py # stable JSON bytes: the same value always hashes to the same digest
+      chain.py    # block format, digest, Ledger (resumes from the last block), iter_blocks
+      anchor.py   # AnchorPoint and FileAnchor; the only destination that ships
+      verify.py   # verify_ledger: intact, unanchored, tampered, deleted, rewritten, missing
+      report.py   # audit table rows (terminal and plain) and SARIF results for the verdict
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
-    cli.py        # agent-latch-runtime console script (`proxy` subcommand)
+    demo_server.py # synthetic MCP server for `demo` and the runtime tests [needs fastmcp]
+    demo.py       # `demo`: drives demo_server through the proxy, then imports the logs [needs fastmcp]
+    cli.py        # agent-latch-runtime console script (`proxy`, `import-logs`, `demo`)
 tests/test_scanner.py          # scanner unit tests (synthetic fixtures via tmp_path)
+tests/test_ledger.py           # ledger: chain, anchor, and every tamper case (edit, delete, truncate, rebuild)
 tests/test_runtime.py          # runtime tests that need no FastMCP
-tests/test_runtime_middleware.py # proxy end-to-end tests (skipped without the [runtime] extra)
-tests/runtime_fixtures/        # synthetic MCP server for the runtime tests
+tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests (no FastMCP)
+tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
+tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
+tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
+tests/runtime_fixtures/        # demo-server wrapper, plus the ALR04 event dataset and expected outcomes
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
@@ -88,6 +124,9 @@ action.yml                     # composite GitHub Action (isolated venv, SARIF p
 .pre-commit-hooks.yaml         # pre-commit hook definition (`agent-latch scan --fail-on high`)
 .agent-latch-ignore            # suppressions for the repo's own self-scan
 .github/workflows/tests.yml    # CI: tests + ruff (py3.11–3.14), runtime tests, action smoke test, self-scan
+.github/workflows/code-quality.yml # CI: ruff check across the repo, npm audit --audit-level=high for web/
+.github/workflows/publish.yml  # PyPI release via Trusted Publishing (on GitHub release; manual run → TestPyPI)
+MANIFEST.in                    # sdist extras (test fixtures the shipped tests read)
 llms.txt                       # LLM-oriented project summary
 ```
 
@@ -118,48 +157,73 @@ agent-latch scan --format sarif --output agent-latch.sarif
 agent-latch [scan] [path] [--config MANIFEST] [--exclude PATH]... [--ignore-file FILE]
             [--project-ignores] [--dependencies] [-i/--interactive]
             [--format text|json|sarif] [--output FILE] [--plain] [--min-severity LEVEL]
-            [--fail-on none|low|medium|high|critical] [-V]
+            [--fail-on none|low|medium|high|critical]
+            [--runtime-result [CSV]] [--ledger FILE] [--anchor PATH] [--ledger-rows N] [-V]
 
-agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N] [--quiet]
+agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
+            [--payloads FILE] [--payload-max-chars N] [--ledger FILE] [--quiet]
             [--http HOST:PORT] (--upstream-url URL | -- SERVER COMMAND...)
+agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
+            [--events-csv FILE] [--output-csv FILE] [--normalized-out FILE]
+            [--database FILE] [--run-id ID] [--once] [--quiet]
+agent-latch-runtime anchor --ledger FILE --to PATH [--quiet]
+agent-latch-runtime verify [PATH | --ledger FILE] [--all] [--trace FILE] [--anchor PATH]
+agent-latch-runtime demo [--dir DIR]
 ```
 
-`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode.
+`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR04 is installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. ALR04 reports findings only; the runtime report does not clear a tool. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command.
 
-Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them.
+`--database FILE` is the operator's choice of a local store. It saves each normalized event in a SQLite file (`SQLiteEventStore`) and is off when omitted. The importer talks to that file only through the `EventStore` contract in `importer.py` (`open`, `save`, `close`). SQLite is the first implementation, using the standard-library `sqlite3` module, so it adds no dependency and makes no network request. A later destination (a warehouse or an opt-in trace exporter) implements the same contract and is selected the same way: by a flag on `import-logs`, not by a default. The database can hold payload data, so a new file is created with mode `0600` where the platform supports it. Keep it local. Do not add a vendor client as a required dependency.
+
+`--ledger FILE` (with `--trace`) seals every trace record into a local hash chain, and `anchor` publishes one short digest to a path the operator chooses. `verify` and `agent-latch --runtime-result --ledger FILE [--anchor PATH]` report `intact`, `unanchored`, `tampered`, `deleted`, `rewritten` or `missing`. `verify PATH` finds the trace beside a ledger by name, and `verify FOLDER [--all]` checks every ledger below it and prints one row each. The report adds a per-record audit table (`--ledger-rows N`, default 20, problem records always shown), and `--runtime-result ... --format sarif` exports the verdict (rule `ALR15-R01`) with the runtime findings; `--format json` is refused there. Standard library only, no network, never in the request path: an append failure warns once on stderr and the call continues. The verifier lives in `runtime/ledger/`, not in `gates/` (that package is for per-event plugins). Docs: `docs/ledger.md` (model), `docs/ledger-setup.md`, `docs/ledger-reference.md`, `docs/ledger-operations.md`.
+
+Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them. One deliberate addition: a runtime report with `--ledger` exits `1` when the trail fails verification even with `--fail-on none` (log integrity is not a severity threshold), and `2` when the ledger path is missing; a run without `--ledger` is unchanged.
 
 ## Rules
 
-| ID | Where | Detects |
-|---|---|---|
-| `AGENTLATCH-PY001` | `rules.py` | `eval()` / `exec()` |
-| `AGENTLATCH-PY002` | `rules.py` | `subprocess.*(..., shell=True)` |
-| `AGENTLATCH-PY003` | `rules.py` | literal `verify=False` |
-| `AGENTLATCH-AG001` | `rules.py` | CrewAI `Agent(allow_delegation=True)` |
-| `AGENTLATCH-AG002` | `rules.py` | LangChain `create_pandas_dataframe_agent` |
-| `AGENTLATCH-AG003` | `taint.py` | web/HTTP/tool output flowing unfenced into LLM messages |
-| `AGENTLATCH-AG004` | `agent_code.py` | model-exposed tool that runs commands, writes files/DB, sends email or HTTP writes, with no approval gate |
-| `AGENTLATCH-AG005` | `agent_code.py` | unrestricted built-in tool (`ShellTool`, `PythonREPLTool`, unscoped `FileManagementToolkit`, ...) |
-| `AGENTLATCH-AG006` | `oversight.py` | human approval disabled (`human_input_mode="NEVER"` with code execution, `auto_approve=True`, ...) |
-| `AGENTLATCH-AG007` | `oversight.py` | agent loop without an effective limit (`max_iterations=None`, huge limits, endless `while True`) |
-| `AGENTLATCH-SEC001` | `rules.py` | credential-like quoted assignments (value redacted) |
-| `AGENTLATCH-DEP001` | `rules.py` | `pip-audit` advisories in `requirements*.txt` |
-| `AGENTLATCH-MAN001` | `manifest.py` | high-risk tool capability without an approval gate |
-| `AGENTLATCH-MAN002` | `manifest.py` | wildcard tool permissions |
-| `AGENTLATCH-MAN003` | `manifest.py` | remote tool endpoint without auth |
-| `AGENTLATCH-PRM001` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | prompt-injection signatures in prompts |
-| `AGENTLATCH-PRM002` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | user-input placeholder in a system prompt |
+| ID | Gate | Where | Detects |
+|---|---|---|---|
+| `PY001` | `ALR06` | `rules.py` | `eval()` / `exec()` |
+| `PY002` | `ALR06` | `rules.py` | `subprocess.*(..., shell=True)` |
+| `PY003` | `ALR12` | `rules.py` | literal `verify=False` |
+| `AG001` | `ALR07` | `rules.py` | CrewAI `Agent(allow_delegation=True)` |
+| `AG002` | `ALR06` | `rules.py` | LangChain `create_pandas_dataframe_agent` |
+| `AG003` | `ALR05` | `taint.py` | web/HTTP/tool output flowing unfenced into LLM messages |
+| `AG004` | `ALR09` | `agent_code.py` | model-exposed tool that runs commands, writes files/DB, sends email or HTTP writes, with no approval gate |
+| `AG005` | `ALR07` | `agent_code.py` | unrestricted built-in tool (`ShellTool`, `PythonREPLTool`, unscoped `FileManagementToolkit`, ...) |
+| `AG006` | `ALR09` | `oversight.py` | human approval disabled (`human_input_mode="NEVER"` with code execution, `auto_approve=True`, ...) |
+| `AG007` | `ALR08` | `oversight.py` | agent loop without an effective limit (`max_iterations=None`, huge limits, endless `while True`) |
+| `SEC001` | `ALR10` | `rules.py` | credential-like quoted assignments (value redacted) |
+| `DEP001` | `ALR11` | `rules.py` | `pip-audit` advisories in `requirements*.txt` |
+| `MAN001` | `ALR09` | `manifest.py` | high-risk tool capability without an approval gate |
+| `MAN002` | `ALR07` | `manifest.py` | wildcard tool permissions |
+| `MAN003` | `ALR03` | `manifest.py` | remote tool endpoint without auth |
+| `PRM001` | `ALR01` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | prompt-injection signatures in prompts |
+| `PRM002` | `ALR01` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | user-input placeholder in a system prompt |
+| `ALR01-S01` | `ALR01` | `prompts.py` | invisible, bidi, or zero-width characters in a prompt |
+| `ALR03-S01` | `ALR03` | `endpoints.py` | agent or MCP server bound to every interface |
+| `ALR06-S01` | `ALR06` | `sandbox.py` | unsafe deserialization (`yaml.load`, `pickle`, `torch.load`, dangerous loader options) |
+| `ALR06-S02` | `ALR06` | `sandbox.py` | model-written code runs without a sandbox |
+| `ALR08-S01` | `ALR08` | `resilience.py` | outbound HTTP call without a timeout |
+| `ALR08-S02` | `ALR08` | `resilience.py` | retry without a limit |
+| `ALR11-S01` | `ALR11` | `sandbox.py` | `trust_remote_code=True` on a model or dataset loader |
+| `ALR12-S01` | `ALR12` | `endpoints.py` | plaintext `http://` or `ws://` endpoint |
+| `ALR13-S01` | `ALR13` | `memory.py` | web/tool output written to memory without validation |
+| `ALR13-S02` | `ALR13` | `memory.py` | memory shared across sessions (module-level store) |
+| `ALR14-S01` | `ALR14` | `rogue.py` | agent writes to its own prompts or settings |
+| `ALR14-S02` | `ALR14` | `rogue.py` | agent installs persistence on the host |
+| `ALR14-S03` | `ALR14` | `rogue.py` | agent installs packages at runtime |
 
 Full behavior and blind spots: `docs/RULES.md`.
 
 ### Adding or changing a rule
 
-1. Give it a stable, unique ID (`AGENTLATCH-XXX000`, matching `suppress._RULE_ID`) and a focused title. Never reuse or renumber an existing ID.
+1. Pick its gate in `catalog.GATES` (add a gate only for a new outcome) and give it a stable, unique ID named after that gate: `ALRnn-Snn` for a static rule, `ALRnn-Rnn` for a runtime check (matching `suppress._RULE_ID`), plus a focused title. Existing `AGENTLATCH-XXX000` IDs keep their names. Never reuse or renumber an existing ID.
 2. Make it work without a manifest unless it is a `MAN*` rule (see the design principle above).
-3. Emit a `findings.Finding` with `rule_id`, `title`, `severity`, `message`, `path` (relative POSIX), `line`, `column`, `owasp` (ASI IDs only), `confidence`, and concise `evidence`. Register the rule in `owasp.RULE_CATEGORIES`.
+3. Emit a `findings.Finding` with `rule_id`, `title`, `severity`, `message`, `path` (relative POSIX), `line`, `column`, `owasp` (ASI IDs only), `confidence`, and concise `evidence`. Register the rule in `owasp.RULE_CATEGORIES` and in `catalog.DETECTORS` with its gate and a one-line reason. Its OWASP IDs must fit inside the gate's.
 4. **Never put secret values in evidence, messages, or reports.**
 5. Add a positive test and, where relevant, a negative (non-finding) test in `tests/test_scanner.py` using `tmp_path` fixtures.
-6. Document the rule in `docs/RULES.md` and in the rule tables in `README.md` and this file.
+6. Document the rule in `docs/RULES.md` and in the rule tables in `README.md` and this file (with its gate), and regenerate `docs/GATES.md`.
 7. If the demo project should show it, update `examples/vulnerable-agent/` (code, README, and `agent-latch.sarif`).
 8. Make sure the repo's own self-scan (`agent-latch scan . --fail-on high --project-ignores`) still passes. Add any intentional test fixtures to `.agent-latch-ignore` instead of weakening rules.
 
@@ -169,17 +233,18 @@ Full behavior and blind spots: `docs/RULES.md`.
 - Use `from __future__ import annotations`, type hints, and `pathlib.Path` throughout. Use frozen dataclasses for value types.
 - Rules are static heuristics. Parse with `ast` and never import or execute scanned code. Load YAML only with `yaml.SafeLoader` (see `manifest._LineLoader`).
 - The project walker (`rules.iter_project_files` / `scan_project`) visits every folder and every text file (see the design principle above). By file type: `.py` gets source, agent, and prompt rules; `.yaml`/`.yml` (except manifests, which `manifest.py` handles) gets YAML prompt checks; prompt templates (`rules.PROMPT_SUFFIXES`, and `.md`/`.txt` under a `prompts/` folder) get prompt rules; every text file gets `SEC001`. Keep these limits intentional and documented in `docs/getting-started.md`.
-- Noisy rules report findings in test files at low severity instead of dropping them, so real problems in tests stay visible: `SEC001` itself, and `findings.TEST_DEMOTED_RULES` (`PY001`, `AG004`, `AG006`, `AG007`) through `demote_test_findings`.
+- Noisy rules report findings in test files at low severity instead of dropping them, so real problems in tests stay visible: `SEC001` itself, and `findings.TEST_DEMOTED_RULES` (`PY001`, `AG004`, `AG006`, `AG007`, `ALR14-S01`) through `demote_test_findings`.
 - `--min-severity` filters what is reported, never what fails: the CLI rejects a `--min-severity` above `--fail-on`, keeps unknown severity, and every report counts hidden findings.
 - Use `astutil.walk` instead of `ast.walk` for whole-file or whole-function traversals; every rule walks the same tree.
 - Sort findings deterministically (path, line, rule ID) so reports and SARIF stay stable.
+- People read rule IDs short with their gate (`catalog.display_id`: `PY001 (ALR06)`) in the terminal, text report and job summary. SARIF `ruleId` and JSON `rule_id` keep the full ID (`AGENTLATCH-PY001`) because code-scanning alert history is keyed on it; JSON and SARIF also carry `gate` and the short ID. Do not change the full IDs.
 - Suppressions are handled in `suppress.py`: `.agent-latch-ignore` (path / rule / `path:line`), inline `# agent-latch: ignore[RULE]`, and `[tool.agent-latch] exclude` in `pyproject.toml`, all applied only with `--project-ignores`, plus `--exclude` and `--ignore-file`, which always apply. Reports must state how many findings were suppressed. This repo's own self-scan, pre-commit hook, and CI job pass `--project-ignores`.
 - When the CLI writes a report to a file or stdout, send human-facing summaries to stderr so machine-readable output stays clean.
 
 ## Privacy and security constraints
 
 - Scans must stay local. Do not add LLM calls, telemetry, or uploads.
-- The only network use is the opt-in `--dependencies` audit, which sends package names and versions. Any new network behavior must be opt-in and documented.
+- The only network use is the opt-in `--dependencies` audit, which sends package names and versions. Any new network behavior must be opt-in and documented. `--database` is local SQLite and must stay that way. A destination that sends events off the machine is new network behavior: opt-in, documented, and not a required dependency.
 - Tests must make no network calls. Mock `subprocess` for `pip-audit`.
 - Use synthetic fixtures only. Never commit real secrets or proprietary code.
 - Report vulnerabilities in AgentLatch itself as described in `SECURITY.md`.
@@ -203,18 +268,25 @@ Before building a check, look at how established open-source tools handle it. Bo
 ## Releasing
 
 - Bump the version in **both** `pyproject.toml` and `src/agent_latch/__init__.py`.
-- Add `docs/release-notes/vX.Y.Z.md`, and update version references in `README.md`, `docs/ci.md`, and `llms.txt` (for example `AgentLatch/agent-latch@vX.Y.Z`).
+- Add `docs/release-notes/vX.Y.Z.md`, and update version references in `README.md`, `docs/ci.md`, and `llms.txt` (for example `AgentLatch/agent-latch@vX.Y.Z` and `agentlatch-security==X.Y.Z`).
+- The package is published to PyPI as `agentlatch-security` (PyPI rejects `agent-latch` as too similar to an unrelated `agentlatch` project). The commands stay `agent-latch` and `agent-latch-runtime`, and the import stays `agent_latch`. It is published by `.github/workflows/publish.yml` using Trusted Publishing (no API token). Run it manually first to publish to TestPyPI and check `pipx install` from there. Publishing a GitHub release tagged `vX.Y.Z` then uploads to PyPI; the workflow fails if the tag does not match both version files.
+- PyPI versions cannot be replaced or reused, even after deletion, so fix problems with a new patch release.
 
 ## Documentation map
 
-- `README.md`: overview, quick start, FAQ, limitations, roadmap
+- `README.md`: overview, install, the five how-to sections (scan, CI, runtime monitor, ledger, connect an app), FAQ, limitations, roadmap
 - `docs/getting-started.md`: install (incl. Windows), options, ignores, output formats, exit codes, troubleshooting
 - `docs/agent-manifest.md`: manifest schema and checks
 - `docs/ci.md`: pre-commit, GitHub Action inputs and outputs, other CI
 - `docs/RULES.md`: per-rule detection, OWASP mapping, blind spots
+- `docs/GATES.md`: gates, their detectors and framework references (generated from `catalog.py`)
 - `docs/runtime.md`: runtime proxy for MCP (preview, monitor only): install, connecting an app, supported clients, what is recorded, limits
-- `docs/clients/`: tested, step-by-step proxy setup for one client per file (`claude-desktop.md`, `chatgpt.md`, `cursor.md`, `vscode-copilot.md`, `antigravity.md`); `docs/runtime.md` links to them
-- `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions; `mcp-server/README.md` is an overview that links to it
+- `docs/ledger.md`: the tamper-evident audit ledger — the chain, anchors, the six verdicts, what it catches and cannot
+- `docs/ledger-setup.md`: ten-minute setup, where to put the anchor, wiring the report and CI, troubleshooting
+- `docs/ledger-reference.md`: on-disk formats, digest inputs, Python API, CLI and exit codes, adding an anchor destination
+- `docs/ledger-operations.md`: cost, anchor cadence, retention and rotation, incident runbook
+- `docs/clients/chatgpt.md`: ChatGPT reaches the proxy through OpenAI's Secure MCP Tunnel. Local apps use the config change in `docs/runtime.md`
+- `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions, including starting `import-logs --database` before a live CrewAI or Claude Desktop run; `mcp-server/README.md` is an overview that links to it
 - `CONTRIBUTING.md`, `SECURITY.md`, `llms.txt`
 
 When behavior changes, update the relevant docs in the same change.

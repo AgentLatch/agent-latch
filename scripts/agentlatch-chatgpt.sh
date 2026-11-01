@@ -13,7 +13,8 @@
 #   --setup-only  Install and create the profile, but don't start the tunnel
 #
 # Creating the tunnel and the API key, and adding the plugin in ChatGPT, are still done by hand:
-# see docs/clients/chatgpt.md.
+# see docs/clients/chatgpt.md. This script writes a trace only. It does not pass --payloads and
+# it does not run import-logs, so it does not produce a finding.
 set -euo pipefail
 
 VERSION="v0.0.16"

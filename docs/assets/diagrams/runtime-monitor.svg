@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 424" width="900" height="424" role="img" aria-labelledby="t d">
+  <title id="t">Runtime monitor for MCP (preview)</title>
+  <desc id="d">An AI agent talks to an MCP server through the agent-latch-runtime proxy, which passes every message through unchanged and never blocks. The proxy writes secret-masked trace.jsonl and optional payloads.jsonl. import-logs joins them into one event per message, runs ALR04, and writes events.csv, gate-results.csv and an optional local SQLite file. agent-latch --runtime-result prints the findings.</desc>
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .head { font-family: Syne, "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; font-weight: 800; }
+    .flow { stroke-dasharray: 6 6; animation: flow 1.2s linear infinite; }
+    @keyframes flow { to { stroke-dashoffset: -12; } }
+    @media (prefers-reduced-motion: reduce) { .flow { animation: none; } .dot { display: none; } }
+  </style>
+  <defs>
+    <clipPath id="card"><rect width="900" height="424" rx="16"/></clipPath>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#7C3AED"/>
+    </marker>
+    <marker id="arrowY" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#F5C542"/>
+    </marker>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="900" height="424" fill="#17161C"/>
+    <rect width="900" height="44" fill="#121211"/>
+    <line x1="0" y1="44" x2="900" y2="44" stroke="#ECE9E2" stroke-opacity=".1"/>
+    <text x="24" y="27" class="mono" font-size="11" letter-spacing="1.8" fill="#ECE9E2" fill-opacity=".55">FIG. 04 — RUNTIME MONITOR (PREVIEW)</text>
+    <circle cx="690" cy="23" r="4" fill="#7C3AED"/>
+    <text x="702" y="27" class="mono" font-size="10" letter-spacing="1.2" fill="#ECE9E2" fill-opacity=".55">LOCAL ONLY</text>
+    <circle cx="806" cy="23" r="4" fill="#F5C542"/>
+    <text x="818" y="27" class="mono" font-size="10" letter-spacing="1.2" fill="#ECE9E2" fill-opacity=".55">OPT-IN</text>
+
+    <!-- row A: the live connection -->
+    <g text-anchor="middle">
+      <rect x="20" y="80" width="150" height="88" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="95" y="116" class="head" font-size="13" fill="#ECE9E2">AI agent</text>
+      <text x="95" y="138" class="mono" font-size="9.5" fill="#9C9A93">Claude · Cursor · CrewAI</text>
+
+      <rect x="300" y="80" width="300" height="88" rx="12" fill="#1F1D26" stroke="#7C3AED" stroke-opacity=".9" stroke-width="1.5"/>
+      <text x="450" y="112" class="head" font-size="13" fill="#ECE9E2">agent-latch-runtime proxy</text>
+      <text x="450" y="134" class="mono" font-size="9.5" fill="#A78BFA">MONITOR ONLY · never blocks</text>
+      <text x="450" y="152" class="mono" font-size="9.5" fill="#9C9A93">every message passes through unchanged</text>
+
+      <rect x="730" y="80" width="150" height="88" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="805" y="116" class="head" font-size="13" fill="#ECE9E2">MCP server</text>
+      <text x="805" y="138" class="mono" font-size="9.5" fill="#9C9A93">your real tools</text>
+    </g>
+    <g stroke="#7C3AED" stroke-width="1.5" fill="none" marker-end="url(#arrow)">
+      <path class="flow" d="M170 114 H298"/>
+      <path class="flow" d="M600 114 H728"/>
+    </g>
+    <g stroke="#7C3AED" stroke-width="1.5" fill="none" marker-end="url(#arrow)" stroke-opacity=".6">
+      <path d="M298 140 H172"/>
+      <path d="M728 140 H602"/>
+    </g>
+    <circle class="dot" r="4.5" fill="#7C3AED"><animateMotion dur="2.4s" begin="0s" repeatCount="indefinite" path="M170 114 H298 M600 114 H728"/></circle>
+    <g text-anchor="middle" class="mono" font-size="9.5" fill="#9C9A93">
+      <text x="234" y="104">request</text>
+      <text x="234" y="156">response</text>
+      <text x="664" y="104">request</text>
+      <text x="664" y="156">response</text>
+    </g>
+
+    <!-- proxy writes the logs -->
+    <path class="flow" d="M450 168 C450 222 115 214 115 268" stroke="#7C3AED" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+    <text x="330" y="222" class="mono" font-size="9.5" fill="#9C9A93">writes, secrets masked</text>
+
+    <!-- row B: the pipeline -->
+    <g text-anchor="middle">
+      <rect x="20" y="270" width="190" height="88" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="115" y="300" class="head" font-size="13" fill="#ECE9E2">Masked logs</text>
+      <text x="115" y="321" class="mono" font-size="9.5" fill="#9C9A93">trace.jsonl</text>
+      <text x="115" y="337" class="mono" font-size="9.5" fill="#F5C542">payloads.jsonl (--payloads)</text>
+
+      <rect x="270" y="270" width="170" height="88" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="355" y="300" class="head" font-size="13" fill="#ECE9E2">import-logs</text>
+      <text x="355" y="321" class="mono" font-size="9.5" fill="#9C9A93">one event per message</text>
+      <text x="355" y="337" class="mono" font-size="9.5" fill="#9C9A93">runs gate ALR04</text>
+
+      <rect x="500" y="270" width="190" height="88" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="595" y="300" class="head" font-size="13" fill="#ECE9E2">Events + findings</text>
+      <text x="595" y="321" class="mono" font-size="9" fill="#9C9A93">events.csv · gate-results.csv</text>
+      <text x="595" y="337" class="mono" font-size="9" fill="#F5C542">runtime.db (--database)</text>
+
+      <rect x="750" y="270" width="130" height="88" rx="12" fill="#1F1D26" stroke="#7C3AED" stroke-opacity=".9" stroke-width="1.5"/>
+      <text x="815" y="300" class="head" font-size="13" fill="#ECE9E2">Report</text>
+      <text x="815" y="321" class="mono" font-size="9.5" fill="#9C9A93">agent-latch</text>
+      <text x="815" y="337" class="mono" font-size="9.5" fill="#A78BFA">--runtime-result</text>
+    </g>
+    <g stroke="#7C3AED" stroke-width="1.5" fill="none" marker-end="url(#arrow)">
+      <path class="flow" d="M210 314 H268"/>
+      <path class="flow" d="M440 314 H498"/>
+      <path class="flow" d="M690 314 H748"/>
+    </g>
+
+    <text x="450" y="394" text-anchor="middle" class="mono" font-size="11" fill="#3FB67D">Nothing is blocked and nothing is uploaded. The report lists findings only.</text>
+  </g>
+  <rect x=".5" y=".5" width="899" height="423" rx="16" fill="none" stroke="#ECE9E2" stroke-opacity=".12"/>
+</svg>

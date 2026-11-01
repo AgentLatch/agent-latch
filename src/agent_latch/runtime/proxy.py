@@ -14,6 +14,7 @@ from fastmcp.client.transports import StdioTransport
 from fastmcp.server import create_proxy
 
 from agent_latch.runtime.middleware import AgentLatchMiddleware
+from agent_latch.runtime.payloads import PayloadTap
 from agent_latch.runtime.trace import TraceLog
 
 
@@ -23,6 +24,7 @@ def build_proxy(
     trace: TraceLog,
     command: Sequence[str] = (),
     upstream_url: str | None = None,
+    tap: PayloadTap | None = None,
 ) -> FastMCP:
     """Proxy to a server started from ``command`` (stdio) or reached at ``upstream_url``."""
     if bool(command) == bool(upstream_url):
@@ -38,5 +40,5 @@ def build_proxy(
         target = upstream_url
     # mode="auto" lets the upstream negotiate its own protocol version, as the gateway does.
     proxy = create_proxy(target, name=name, mode="auto")
-    proxy.add_middleware(AgentLatchMiddleware(trace, server=name))
+    proxy.add_middleware(AgentLatchMiddleware(trace, server=name, tap=tap))
     return proxy

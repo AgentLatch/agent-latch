@@ -9,7 +9,8 @@ starts the tunnel. Later runs skip the steps that are already done, ask for your
 the tunnel. The key is typed into a hidden prompt and is never saved.
 
 Creating the tunnel and the API key on platform.openai.com, and adding the plugin in ChatGPT, are
-still done by hand: see docs/clients/chatgpt.md.
+still done by hand: see docs/clients/chatgpt.md. This script writes a trace only. It does not
+pass --payloads and it does not run import-logs, so it does not produce a finding.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\agentlatch-chatgpt.ps1
