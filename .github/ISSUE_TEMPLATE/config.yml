@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions, rule ideas and setups
+    url: https://github.com/AgentLatch/agent-latch/discussions
+    about: Ask how to use AgentLatch, suggest a new check, or share your setup.
+  - name: Report a vulnerability in AgentLatch
+    url: https://github.com/AgentLatch/agent-latch/blob/main/SECURITY.md
+    about: Please do not open a public issue or discussion for a security problem. Follow SECURITY.md.

@@ -2,6 +2,8 @@
 
 Thanks for helping improve AgentLatch. This is an early proof of concept; keep changes small, explain limitations, and avoid overstating detection coverage.
 
+Not sure where to start? Ask a question or propose a rule in [GitHub Discussions](https://github.com/AgentLatch/agent-latch/discussions) before writing code. Report vulnerabilities in AgentLatch itself through [SECURITY.md](SECURITY.md), not in a public thread.
+
 ## Development
 
 ```sh

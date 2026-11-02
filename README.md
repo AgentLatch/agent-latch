@@ -576,6 +576,8 @@ The project will not claim to be an industry standard or a universal security gu
 
 See [CONTRIBUTING.md](https://github.com/AgentLatch/agent-latch/blob/main/CONTRIBUTING.md) for development and rule authoring, and [SECURITY.md](https://github.com/AgentLatch/agent-latch/blob/main/SECURITY.md) for responsible vulnerability reporting. Please submit synthetic test fixtures rather than real secrets or confidential source code.
 
+Questions, rule ideas, false-positive reports and setups are welcome in [GitHub Discussions](https://github.com/AgentLatch/agent-latch/discussions). Use [SECURITY.md](https://github.com/AgentLatch/agent-latch/blob/main/SECURITY.md), not a public thread, for a vulnerability in AgentLatch itself.
+
 ## Name and standards references
 
 AgentLatch is an independent open-source project. It references selected categories from the [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) where useful. OWASP is not affiliated with or endorsing AgentLatch.
