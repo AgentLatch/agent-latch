@@ -268,8 +268,11 @@ Before building a check, look at how established open-source tools handle it. Bo
 ## Releasing
 
 - Bump the version in **both** `pyproject.toml` and `src/agent_latch/__init__.py`.
-- Add `docs/release-notes/vX.Y.Z.md`, and update version references in `README.md`, `docs/ci.md`, and `llms.txt` (for example `AgentLatch/agent-latch@vX.Y.Z` and `agentlatch-security==X.Y.Z`).
-- The package is published to PyPI as `agentlatch-security` (PyPI rejects `agent-latch` as too similar to an unrelated `agentlatch` project). The commands stay `agent-latch` and `agent-latch-runtime`, and the import stays `agent_latch`. It is published by `.github/workflows/publish.yml` using Trusted Publishing (no API token). Run it manually first to publish to TestPyPI and check `pipx install` from there. Publishing a GitHub release tagged `vX.Y.Z` then uploads to PyPI; the workflow fails if the tag does not match both version files.
+- Add `docs/release-notes/vX.Y.Z.md`, and update version references in `README.md`, `docs/ci.md`, `llms.txt` and the status line of this file (for example `AgentLatch/agent-latch@vX.Y.Z` and `agentlatch-security==X.Y.Z`; `git grep -n "OLD_VERSION"` finds them all).
+- Release notes describe only code that is merged on `main`. Check every feature they name before tagging; a feature whose PR is still open moves to the next release's notes.
+- The package is published to PyPI as `agentlatch-security` (PyPI rejects `agent-latch` as too similar to an unrelated `agentlatch` project). The commands stay `agent-latch` and `agent-latch-runtime`, and the import stays `agent_latch`. It is published by `.github/workflows/publish.yml` using Trusted Publishing (no API token). Run it manually first to publish to TestPyPI, then install from there into a throwaway virtual environment and check `agent-latch --version`, a scan of `examples/vulnerable-agent` (exit `1` with `--fail-on high`) and `agent-latch-runtime --help`. Publishing a GitHub release tagged `vX.Y.Z` then uploads to PyPI; the workflow fails if the tag does not match both version files. Do not publish to PyPI with a manual run.
+- The GitHub release description is the release notes with relative links (`../ledger.md`) turned into absolute links to the tag (`https://github.com/AgentLatch/agent-latch/blob/vX.Y.Z/docs/ledger.md`), because relative links break on the release page. Check it in the Preview tab, and tick "Publish this Action to the GitHub Marketplace" so the Action listing moves to the new tag.
+- After the PyPI run finishes, install `agentlatch-security==X.Y.Z` from PyPI into a fresh environment and repeat the checks above.
 - PyPI versions cannot be replaced or reused, even after deletion, so fix problems with a new patch release.
 
 ## Documentation map
