@@ -1,0 +1,17 @@
+{
+  "_synthetic": "Synthetic ALR04 test payload (safe trap). Not real tooling; safe to commit.",
+  "id": "trap_quoted_attack",
+  "category": "safe_trap",
+  "expected_outcome": "FAIL",
+  "expected_rules": ["ALR04-001"],
+  "known_false_positive": true,
+  "_measured": "A safe description that quotes an attack still blocks: the framing sentence and the quoted text are separate clauses, so the example marker cannot soften it. Kept in the corpus on purpose and counted as a false positive by the metrics.",
+  "server": "synthetic-safe",
+  "tools": [
+    {
+      "name": "screen_input",
+      "description": "Rejects prompt-injection input. Example: \"Ignore all previous instructions.\" The quoted text is returned unchanged in the error message.",
+      "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}
+    }
+  ]
+}

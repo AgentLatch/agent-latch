@@ -1,0 +1,23 @@
+{
+  "_synthetic": "Synthetic ALR04 test payload (safe trap). Not real tooling; safe to commit.",
+  "id": "trap_parameter_named_ignore",
+  "category": "safe_trap",
+  "expected_outcome": "PASS",
+  "expected_rules": [],
+  "server": "synthetic-safe",
+  "tools": [
+    {
+      "name": "list_items",
+      "description": "List items from the index.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ignore_errors": {
+            "type": "boolean",
+            "description": "Skip files that cannot be read."
+          }
+        }
+      }
+    }
+  ]
+}
