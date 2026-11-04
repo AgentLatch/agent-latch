@@ -93,6 +93,12 @@ agent-latch -V
 
 On PyPI, AgentLatch is published as `agentlatch-security`. It installs the `agent-latch` and `agent-latch-runtime` commands. The PyPI package named `agentlatch` is a separate project.
 
+Prefer containers? Two images, `ghcr.io/agentlatch/agent-latch` (scanner) and `ghcr.io/agentlatch/agent-latch-runtime` (runtime proxy), run as a non-root user with pinned dependencies. See [Container images](https://github.com/AgentLatch/agent-latch/blob/main/docs/docker.md):
+
+```sh
+docker run --rm -v "$PWD:/src:ro" ghcr.io/agentlatch/agent-latch:<version> scan . --fail-on high
+```
+
 ## 1. Static scan (local)
 
 **What it does:** reads the files of an agent project (Python code, prompts, YAML, manifests) and reports risky patterns. It never imports or runs the code it checks. No configuration or manifest is needed: every folder and text file is scanned.
@@ -469,6 +475,7 @@ Every scan report ends with the same ASI01–ASI10 summary and marks the uncover
 | [Getting started](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md) | Install on Linux, macOS, WSL, and Windows; scanning; options; [ignoring false positives with `.agent-latch-ignore`](https://github.com/AgentLatch/agent-latch/blob/main/docs/getting-started.md#ignoring-false-positives-and-known-findings); output formats; exit codes; dependency audit; troubleshooting |
 | [Agent manifests](https://github.com/AgentLatch/agent-latch/blob/main/docs/agent-manifest.md) | Declaring agents, tools, permissions, and prompts in `agent-manifest.yaml`, and what is checked |
 | [pre-commit and CI](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md) | pre-commit hook, GitHub Action inputs and outputs, other CI systems, choosing a threshold |
+| [Container images](https://github.com/AgentLatch/agent-latch/blob/main/docs/docker.md) | The scanner and runtime images on GHCR: running them, connecting an app to the runtime image, limits (no Node.js, loopback-only HTTP), verifying an image |
 | [Detection rules](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md) | What every rule detects, its OWASP mapping, and its known blind spots |
 | [Gates](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md) | The security outcomes AgentLatch checks, which rules and runtime checks belong to each, and their OWASP and EU AI Act references |
 | [Audit ledger](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md) | Making the runtime log tamper-evident: the hash chain, anchors, the six verdicts, and what it cannot catch. Then [setup](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-setup.md), [reference](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-reference.md) and [operations](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md) |
