@@ -44,6 +44,9 @@ async def _drive(directory: Path, log_file: TextIO) -> None:
         await client.call_tool("get_weather", {"city": "London"})
         await client.call_tool("leaky_lookup", {"user": "alice"})
         await client.call_tool("broken_tool", {"reason": "demo"}, raise_on_error=False)
+        # ALR05 contrast: instruction-like output (finding) vs ordinary instructions (none).
+        await client.call_tool("echo_injection", {"city": "London"})
+        await client.call_tool("recipe_steps", {"dish": "pancakes"})
         await client.list_prompts()
         await client.get_prompt("summarize", {"topic": "Mars"})
 

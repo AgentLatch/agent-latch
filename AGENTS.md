@@ -88,6 +88,7 @@ src/agent_latch/
   gates/          # runtime gate plugins discovered by the importer (monitor only, never block)
     __init__.py
     alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; reports findings only)
+    alr05.py      # ALR05: instruction-like content in MCP tool results (preview; review signals only)
   runtime/        # MCP traffic recording (preview, monitor only; `[runtime]` extra). Logs go to runtime-logs/, not here.
     events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
     redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file
@@ -107,6 +108,7 @@ tests/test_runtime.py          # runtime tests that need no FastMCP
 tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests (no FastMCP)
 tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
 tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
+tests/test_alr05.py            # ALR05 tool-output checks: positive, benign and coverage cases
 tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
 tests/runtime_fixtures/        # demo-server wrapper, plus the ALR04 event dataset and expected outcomes
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
