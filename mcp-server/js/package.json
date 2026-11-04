@@ -1,0 +1,37 @@
+{
+  "name": "@agentlatch/connector",
+  "version": "0.1.0",
+  "description": "Connect JavaScript and TypeScript agents to the AgentLatch MCP gateway, and use its tools from Claude or Cursor.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "smoke": "node examples/smoke.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.134.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    }
+  }
+}
