@@ -242,6 +242,14 @@ A trace record waits for its payload record (matched on session, request, server
 
 **ALR04 (preview).** The one gate that ships. It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. The rules can miss reworded instructions, and they do not look at tool results or what the agent does next. ALR04 never blocks a call.
 
+**Reading ALR04 on its own.** `python -m agent_latch.gates.alr04 PATH` runs the gate over stored
+`tools/list` payloads without the proxy: each file is one response, the table names severity,
+rule, `tool@server` and the decision reason, and the command exits `1` when a tool fails.
+`--sarif FILE` writes the same findings as a SARIF 2.1.0 log for GitHub, GitLab or a dashboard;
+results carry logical locations (`server/tool`) and fingerprints, because a runtime finding has no
+source file. The labelled corpus the tests use is `tests/runtime_fixtures/alr04_unit/`, whose
+payloads are synthetic and declare their expected outcome before the gate runs.
+
 **gate-results.csv.** Columns are `run_id`, `order`, `gate_id`, `result_json`, and `result_json` always has the same shape: `{"gate_id":"...","status":"ok","findings":[],"error":null}`. If a gate raises, its row has `"status":"error"` and only the exception type in `error`; later gates still run.
 
 **Report.** From the repo root, after `import-logs` has written the CSV:
