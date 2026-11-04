@@ -664,7 +664,7 @@ def _clause_marker(clauses: list[Clause], predicate) -> tuple[Clause | None, Cla
     return outright, partial
 
 
-def check_instruction_override(clauses: list[Clause], _ctx: "ToolContext") -> Verdict:
+def check_instruction_override(clauses: list[Clause], _ctx: ToolContext) -> Verdict:
     """ALR04-001: the definition tells the model to discard its instructions."""
     category = "instruction_override"
     outright, partial = _clause_marker(
@@ -687,7 +687,7 @@ def check_instruction_override(clauses: list[Clause], _ctx: "ToolContext") -> Ve
     return _pass(category)
 
 
-def check_authority_spoofing(clauses: list[Clause], _ctx: "ToolContext") -> Verdict:
+def check_authority_spoofing(clauses: list[Clause], _ctx: ToolContext) -> Verdict:
     """ALR04-002: the definition claims to speak for the system, developer or user."""
     category = "authority_spoofing"
     outright, partial = _clause_marker(
@@ -705,7 +705,7 @@ def check_authority_spoofing(clauses: list[Clause], _ctx: "ToolContext") -> Verd
     return _pass(category)
 
 
-def check_concealment(clauses: list[Clause], _ctx: "ToolContext") -> Verdict:
+def check_concealment(clauses: list[Clause], _ctx: ToolContext) -> Verdict:
     """ALR04-003: the definition asks the model to hide an action from the user."""
     category = "concealment"
     outright, partial = _clause_marker(clauses, lambda c: c.conceal)
@@ -718,10 +718,10 @@ def check_concealment(clauses: list[Clause], _ctx: "ToolContext") -> Verdict:
     return _pass(category)
 
 
-def check_sensitive_access(clauses: list[Clause], _ctx: "ToolContext") -> Verdict:
+def check_sensitive_access(clauses: list[Clause], _ctx: ToolContext) -> Verdict:
     """ALR04-004: the definition steers the model toward secrets or private files."""
     category = "sensitive_access"
-    outright, partial = _clause_marker(
+    outright, _partial = _clause_marker(
         clauses, lambda c: "read" in c.verbs and c.secret_path)
     if outright is not None:
         return _fail(category, "access_target_in_one_clause",
@@ -750,7 +750,7 @@ def check_sensitive_access(clauses: list[Clause], _ctx: "ToolContext") -> Verdic
     return _pass(category)
 
 
-def check_data_exfiltration(clauses: list[Clause], _ctx: "ToolContext") -> Verdict:
+def check_data_exfiltration(clauses: list[Clause], _ctx: ToolContext) -> Verdict:
     """ALR04-005: the definition sends secrets or private files to a destination.
 
     A clause qualifies when it carries a transfer verb, a reference to secret material and a
@@ -789,7 +789,7 @@ def _earlier_reference(clauses: list[Clause], clause: Clause) -> bool:
     return False
 
 
-def check_cross_tool_manipulation(clauses: list[Clause], ctx: "ToolContext") -> Verdict:
+def check_cross_tool_manipulation(clauses: list[Clause], ctx: ToolContext) -> Verdict:
     """ALR04-006: the definition changes how the model uses other tools."""
     category = "cross_tool_manipulation"
     for clause in clauses:
@@ -810,7 +810,7 @@ def check_cross_tool_manipulation(clauses: list[Clause], ctx: "ToolContext") -> 
     return _pass(category)
 
 
-def check_tool_selection_hijack(clauses: list[Clause], _ctx: "ToolContext") -> Verdict:
+def check_tool_selection_hijack(clauses: list[Clause], _ctx: ToolContext) -> Verdict:
     """ALR04-008: the definition pushes the model to always pick this tool.
 
     Picking this tool for a kind of input ("always use this tool for PDFs") is an ordinary usage
@@ -834,7 +834,7 @@ def check_tool_selection_hijack(clauses: list[Clause], _ctx: "ToolContext") -> V
     return _pass(category)
 
 
-def check_malicious_prerequisite(clauses: list[Clause], _ctx: "ToolContext") -> Verdict:
+def check_malicious_prerequisite(clauses: list[Clause], _ctx: ToolContext) -> Verdict:
     """ALR04-009: the definition demands a harmful step before the tool can be used."""
     category = "malicious_prerequisite"
     outright, partial = _clause_marker(
@@ -856,7 +856,7 @@ def check_malicious_prerequisite(clauses: list[Clause], _ctx: "ToolContext") -> 
     return _pass(category)
 
 
-def check_hidden_or_encoded(clauses: list[Clause], ctx: "ToolContext") -> Verdict:
+def check_hidden_or_encoded(clauses: list[Clause], ctx: ToolContext) -> Verdict:
     """ALR04-007: instructions are hidden with encoding or invisible characters.
 
     Invisibility is the one place where the surface alone can settle a check: a tag-block payload
@@ -905,7 +905,7 @@ class ToolContext:
     structural: tuple[Signal, ...] = ()
 
 
-def _record(*, category: str, verdict: Verdict, ctx: "ToolContext", event: Mapping[str, Any],
+def _record(*, category: str, verdict: Verdict, ctx: ToolContext, event: Mapping[str, Any],
             definition_sha256: str, coverage: float, notes: set[str],
             policy: Mapping[str, Any] | None) -> dict[str, Any]:
     """One check's record in the shared shape every runtime gate emits."""
@@ -1389,8 +1389,8 @@ def format_terminal(records: Sequence[Mapping[str, Any]]) -> str:
     for record in reported:
         severity = str(record.get("severity") or "unknown").upper()
         lines.append(
-            f"{severity:<8} {str(record.get('rule_id') or GATE_ID):<10} "
-            f"{str(record.get('outcome') or ''):<12} {_label(record)[:44]:<44} "
+            f"{severity:<8} {record.get('rule_id') or GATE_ID!s:<10} "
+            f"{record.get('outcome') or ''!s:<12} {_label(record)[:44]:<44} "
             f"{record.get('decision_reason') or ''}"
         )
     return "\n".join(lines)

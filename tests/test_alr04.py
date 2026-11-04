@@ -197,7 +197,7 @@ def _measure() -> tuple[Score, list[str]]:
             metric = "TN"
         counts[metric] += 1
         rows.append(
-            f"{str(payload['category']):<22} {path.stem:<30} {expected:<13} {actual:<13} "
+            f"{payload['category']!s:<22} {path.stem:<30} {expected:<13} {actual:<13} "
             f"{metric}"
         )
     return Score(tp=counts["TP"], fp=counts["FP"], tn=counts["TN"], fn=counts["FN"]), rows
