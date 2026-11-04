@@ -21,7 +21,6 @@
   },
   "scripts": {
     "smoke": "node examples/smoke.js",
-    "demo": "node examples/claude-agent.js",
     "test": "node --test"
   },
   "dependencies": {
@@ -34,8 +33,5 @@
     "@anthropic-ai/sdk": {
       "optional": true
     }
-  },
-  "devDependencies": {
-    "@anthropic-ai/sdk": "0.134.0"
   }
 }

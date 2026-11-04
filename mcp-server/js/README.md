@@ -10,7 +10,7 @@ This **connector** is a small JavaScript library that lets a **JavaScript or Typ
 your JavaScript program ──(this connector)──▶ AgentLatch gateway ──▶ tools (echo, time, fetch, …)
 ```
 
-It can also hand the tools to **Claude**, so Claude decides which tools to use. See [Step 5](#step-5-optional-let-claude-use-the-tools).
+It can also hand the tools to **Claude**, so Claude decides which tools to use. See [Using the tools from Claude in your own code](#using-the-tools-from-claude-in-your-own-code).
 
 ## Before you start
 
@@ -82,48 +82,7 @@ echo -> connector works
 
 The exact tools depend on what's turned on in `servers.json`. If you see an error instead, check [If something goes wrong](#if-something-goes-wrong).
 
-## Step 5 (optional): Let Claude use the tools
-
-So far your code chose which tool to call. In this demo, **Claude** chooses. Your program tells Claude which tools exist, Claude asks for one, the connector runs it through the gateway, and Claude uses the answer in its reply.
-
-**1. Get a Claude API key.** Create one at [console.anthropic.com](https://console.anthropic.com) under **API Keys**. It starts with `sk-ant-`. Keep it private, and never commit it to git.
-
-**2. Give the key to the terminal.** This lasts until you close the terminal.
-
-Windows (PowerShell):
-
-```powershell
-$env:ANTHROPIC_API_KEY = "sk-ant-your-key-here"
-```
-
-macOS / Linux:
-
-```sh
-export ANTHROPIC_API_KEY="sk-ant-your-key-here"
-```
-
-**3. Run the demo** in the `js` folder, with any question:
-
-```sh
-npm run demo -- "What time is it in Tokyo and in London?"
-```
-
-✅ You see each step as it happens. `->` is Claude asking for a tool, `<-` is the tool's answer from the gateway, and then Claude's reply:
-
-```
-Connected to the gateway: 7 tool(s).
-You: What time is it in Tokyo and in London?
-  -> time_get_current_time {"timezone":"Asia/Tokyo"}
-  -> time_get_current_time {"timezone":"Europe/London"}
-  <- {"timezone": "Asia/Tokyo", "datetime": "...", ...}
-  <- {"timezone": "Europe/London", "datetime": "...", ...}
-
-Claude: It's ... in Tokyo and ... in London.
-```
-
-The demo stops after 8 rounds of tool calls at most, so a confused AI can't keep calling tools forever. The code is in [`examples/claude-agent.js`](examples/claude-agent.js).
-
-## Step 6: Use it in your own code
+## Step 5: Use it in your own code
 
 The connector is a library: you don't run it on its own. You add a few lines of JavaScript to **your program's code**, and your program can then use the gateway's tools. Pick the option that matches where your program lives.
 
@@ -194,7 +153,7 @@ To check it from the terminal: `npm run smoke -- --client cursor`.
 | `Cannot find path ... mcp-server\js\mcp-server\js` | You're already in the `js` folder. Skip the `cd`. |
 | `Cannot find path ... path\to\...` | `path/to/` is a placeholder. Use your real folder. |
 | `Could not read package.json` | You're in the wrong folder. `cd` into `mcp-server/js` ([Step 2](#step-2-open-a-terminal-in-the-js-folder)). |
-| `The term 'import' is not recognized` | That's JavaScript code, not a terminal command. Put it in a `.js` file and run the file with `node` ([Step 6](#step-6-use-it-in-your-own-code)). |
+| `The term 'import' is not recognized` | That's JavaScript code, not a terminal command. Put it in a `.js` file and run the file with `node` ([Step 5](#step-5-use-it-in-your-own-code)). |
 | `Cannot use import statement outside a module` | Your project needs `"type": "module"` in its `package.json` (Option 2, step 3). |
 | `GatewayConnectionError: Could not start the gateway: ... was not found` | The gateway isn't set up yet. Follow [SETUP.md Part 1](../SETUP.md#part-1-set-up-the-server) so `mcp-server/.venv` exists. |
 | `GatewayConnectionError: Could not reach the gateway at http://...` | You gave a `url`, but no gateway is running there. Start one with `python server.py --http` in `mcp-server`, and leave that terminal open. |
@@ -202,7 +161,6 @@ To check it from the terminal: `npm run smoke -- --client cursor`.
 | `GatewayTimeoutError` | The gateway or a tool took too long to answer. Try again, or pass a bigger `timeoutMs`. |
 | `GatewayToolError: No such tool` | The tool name is wrong. The message lists the tools that exist. |
 | `ClientConfigError` | The Cursor or Claude Desktop config is missing, has no `agentlatch-gateway` entry, or isn't valid JSON. Check [SETUP.md Option B](../SETUP.md#option-b-claude-desktop-or-cursor). A common cause is single backslashes in Windows paths. |
-| `Could not resolve authentication method` or `Claude rejected the API key` (demo) | Set your Claude API key ([Step 5](#step-5-optional-let-claude-use-the-tools)) in the same terminal you run the demo from. |
 
 ## Reference
 
@@ -250,7 +208,7 @@ When the connector starts the gateway, it passes only basic settings like `PATH`
 
 ### Using the tools from Claude in your own code
 
-This is the core of [`examples/claude-agent.js`](examples/claude-agent.js), without the printing and error handling:
+Hand the tools to Claude, run the tools it asks for through the gateway, and send back the results. Set your Claude API key in `ANTHROPIC_API_KEY` first:
 
 ```js
 import Anthropic from "@anthropic-ai/sdk";

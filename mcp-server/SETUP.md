@@ -336,7 +336,7 @@ From JavaScript, see [Option E](#option-e-your-own-javascript-or-typescript-code
 
 ### Option E: Your own JavaScript or TypeScript code
 
-The [JS connector](js/README.md) lets a JavaScript program use the gateway's tools, and includes a demo where Claude uses them. Its README walks through setup step by step: installing Node.js, a first test, and adding it to your own code.
+The [JS connector](js/README.md) lets a JavaScript program use the gateway's tools, or hand them to Claude. Its README walks through setup step by step: installing Node.js, a first test, and adding it to your own code.
 
 ## Part 3: Connect tools to the server
 
