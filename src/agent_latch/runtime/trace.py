@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from agent_latch.runtime.events import ToolCall, ToolInfo, ToolOutput, utc_now
+from agent_latch.runtime.ledger.chain import Ledger, LedgerError
 from agent_latch.runtime.redact import excerpt, payload_bytes, payload_sha256
 
 TRACE_SCHEMA = "agentlatch.runtime.trace/1"
@@ -32,10 +33,15 @@ class TraceLog:
         *,
         summary: TextIO | None = sys.stderr,
         excerpt_chars: int = DEFAULT_EXCERPT_CHARS,
+        ledger: Ledger | None = None,
+        warn: TextIO | None = sys.stderr,
     ) -> None:
         self.path = path
         self.summary = summary
         self.excerpt_chars = max(0, excerpt_chars)
+        self.ledger = ledger
+        self.warn = warn
+        self.ledger_failures = 0
         self._file: TextIO | None = None
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -46,16 +52,40 @@ class TraceLog:
         if self._file is not None:
             self._file.close()
             self._file = None
+        if self.ledger is not None:
+            self.ledger.close()
 
     def write(self, record: Mapping[str, Any]) -> dict[str, Any]:
         line = {"schema": TRACE_SCHEMA, "timestamp": utc_now(), **record}
+        encoded = json.dumps(line, ensure_ascii=False, default=str)
         if self._file is not None:
-            self._file.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
+            self._file.write(encoded + "\n")
             self._file.flush()
+            self._seal(encoded, line)
         if self.summary is not None:
             self.summary.write(f"agent-latch-runtime: {summarize_record(line)}\n")
             self.summary.flush()
         return line
+
+    def _seal(self, encoded: str, line: Mapping[str, Any]) -> None:
+        """Chain the record just written. Never raises: recording must not break a call."""
+        if self.ledger is None:
+            return
+        try:
+            self.ledger.append(
+                encoded,
+                method=str(line.get("method", "")),
+                stage=str(line.get("stage", "")),
+                timestamp=str(line.get("timestamp", "")),
+            )
+        except LedgerError as error:
+            self.ledger_failures += 1
+            if self.warn is not None and self.ledger_failures == 1:
+                self.warn.write(
+                    f"agent-latch-runtime: ledger append failed ({error}); the trace is still "
+                    "being written and verification will report a gap\n"
+                )
+                self.warn.flush()
 
     # Record builders. Each returns the written record, which keeps tests simple.
 

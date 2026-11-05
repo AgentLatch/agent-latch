@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 384" width="900" height="384" role="img" aria-labelledby="t d">
+  <title id="t">What stays on your machine</title>
+  <desc id="d">Project files flow through the AgentLatch scanner to reports and to CI and hooks, all inside your machine. An optional dependency audit, off by default, sends only package names and versions to an advisory service.</desc>
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .head { font-family: Syne, "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; font-weight: 800; }
+    .flow { stroke-dasharray: 6 6; animation: flow 1.2s linear infinite; }
+    @keyframes flow { to { stroke-dashoffset: -12; } }
+    @media (prefers-reduced-motion: reduce) { .flow { animation: none; } .dot { display: none; } }
+  </style>
+  <defs>
+    <clipPath id="card"><rect width="900" height="384" rx="16"/></clipPath>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="900" height="384" fill="#17161C"/>
+    <rect width="900" height="44" fill="#121211"/>
+    <line x1="0" y1="44" x2="900" y2="44" stroke="#ECE9E2" stroke-opacity=".1"/>
+    <text x="24" y="27" class="mono" font-size="11" letter-spacing="1.8" fill="#ECE9E2" fill-opacity=".55">FIG. 01 — WHAT STAYS ON YOUR MACHINE</text>
+    <circle cx="640" cy="23" r="4" fill="#7C3AED"/>
+    <text x="652" y="27" class="mono" font-size="10" letter-spacing="1.2" fill="#ECE9E2" fill-opacity=".55">LOCAL ONLY</text>
+    <circle cx="752" cy="23" r="4" fill="#F5C542"/>
+    <text x="764" y="27" class="mono" font-size="10" letter-spacing="1.2" fill="#ECE9E2" fill-opacity=".55">OPTIONAL CALL</text>
+
+    <g transform="translate(0 44)">
+      <rect x="10" y="20" width="652" height="290" rx="20" fill="none" stroke="#7C3AED" stroke-width="1.5" stroke-dasharray="7 7"/>
+      <text x="30" y="50" class="mono" font-size="11" letter-spacing="1.6" fill="#A78BFA">YOUR MACHINE</text>
+
+      <g text-anchor="middle">
+        <rect x="24" y="110" width="166" height="76" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+        <text x="107" y="144" class="head" font-size="12" fill="#ECE9E2">Your project</text>
+        <text x="107" y="166" class="mono" font-size="9.5" fill="#9C9A93">code · manifests · prompts</text>
+
+        <rect x="260" y="110" width="150" height="76" rx="12" fill="#1F1D26" stroke="#7C3AED" stroke-opacity=".8" stroke-width="1.5"/>
+        <text x="335" y="144" class="head" font-size="12" fill="#ECE9E2">AgentLatch</text>
+        <text x="335" y="166" class="mono" font-size="9.5" fill="#9C9A93">static scanner</text>
+
+        <rect x="484" y="70" width="152" height="76" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+        <text x="560" y="104" class="head" font-size="12" fill="#ECE9E2">Report</text>
+        <text x="560" y="126" class="mono" font-size="9.5" fill="#9C9A93">text · JSON · SARIF</text>
+
+        <rect x="484" y="170" width="152" height="76" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+        <text x="560" y="204" class="head" font-size="12" fill="#ECE9E2">CI and hooks</text>
+        <text x="560" y="226" class="mono" font-size="9.5" fill="#9C9A93">pre-commit · Action</text>
+
+        <rect x="716" y="110" width="176" height="76" rx="12" fill="#1F1D26" stroke="#F5C542" stroke-opacity=".6" stroke-dasharray="4 5"/>
+        <text x="804" y="144" class="head" font-size="12" fill="#ECE9E2">Advisory service</text>
+        <text x="804" y="166" class="mono" font-size="9.5" fill="#9C9A93">package names + versions</text>
+      </g>
+
+      <g stroke="#7C3AED" stroke-width="1.5" fill="none">
+        <path class="flow" d="M190 148 H260"/>
+        <path class="flow" d="M410 148 C450 148 450 108 484 108"/>
+        <path class="flow" d="M410 148 C450 148 450 208 484 208"/>
+      </g>
+      <path class="flow" d="M636 148 H716" stroke="#F5C542" stroke-width="1.5" fill="none"/>
+
+      <circle class="dot" r="4.5" fill="#7C3AED"><animateMotion dur="3s" begin="0s" repeatCount="indefinite" path="M190 148 H260"/></circle>
+      <circle class="dot" r="4.5" fill="#7C3AED"><animateMotion dur="3s" begin="-2s" repeatCount="indefinite" path="M410 148 C450 148 450 108 484 108"/></circle>
+      <circle class="dot" r="4.5" fill="#7C3AED"><animateMotion dur="3s" begin="-1.5s" repeatCount="indefinite" path="M410 148 C450 148 450 208 484 208"/></circle>
+
+      <g text-anchor="middle" class="mono" font-size="11">
+        <text x="335" y="240" fill="#3FB67D">0 bytes of source uploaded</text>
+        <text x="335" y="260" fill="#3FB67D">no model called</text>
+        <text x="676" y="132" font-size="10" fill="#F5C542">OPTIONAL</text>
+        <text x="804" y="206" font-size="10.5" fill="#9C9A93">off by default</text>
+        <text x="804" y="222" font-size="10.5" fill="#9C9A93">--dependencies</text>
+      </g>
+    </g>
+  </g>
+  <rect x=".5" y=".5" width="899" height="383" rx="16" fill="none" stroke="#ECE9E2" stroke-opacity=".12"/>
+</svg>
