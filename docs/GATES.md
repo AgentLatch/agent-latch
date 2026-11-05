@@ -16,7 +16,7 @@ A gate is a security outcome AgentLatch checks for, such as "destructive actions
 | `ALR02` | Tool definition integrity | Tool definitions are pinned and changes are detected | none | `ASI02`, `ASI04` | Art. 15 | no checks yet |
 | `ALR03` | Tool and agent endpoint trust | Remote tools, MCP servers and peer agents are identified and authenticated | `MAN003`, `ALR03-S01` | `ASI02`, `ASI03`, `ASI04`, `ASI07` | Art. 15 | partial |
 | `ALR04` | Tool schema injection | Tool definitions contain no instruction-like or hidden content | `ALR04-001`, `ALR04-002`, `ALR04-003`, `ALR04-004`, `ALR04-005`, `ALR04-006`, `ALR04-007`, `ALR04-008`, `ALR04-009` | `ASI01`, `ASI02`, `ASI04` | Art. 15 | preview (runtime) |
-| `ALR05` | Untrusted content isolation | Web, HTTP and tool output reaches the model fenced as data | `AG003`, `ALR05-R01` | `ASI01` | Art. 15 | partial |
+| `ALR05` | Untrusted content isolation | Web, HTTP and tool output reaches the model fenced as data | `AG003`, `ALR05-R01`, `ALR05-R02`, `ALR05-R03` | `ASI01` | Art. 15 | partial |
 | `ALR06` | Code execution containment | No unsandboxed eval, shell or model-driven code execution | `PY001`, `PY002`, `AG002`, `ALR06-S01`, `ALR06-S02` | `ASI02`, `ASI05` | Art. 15 | partial |
 | `ALR07` | Least-privilege tools | Tools and delegation are scoped, not wildcard or unrestricted | `AG001`, `AG005`, `MAN002` | `ASI02`, `ASI03`, `ASI05` | Art. 15 | partial |
 | `ALR08` | Bounded execution | Agent loops and recursion have effective limits | `AG007`, `ALR08-S01`, `ALR08-S02` | `ASI08` | Art. 15 | partial |
@@ -48,7 +48,9 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `ALR04-008` | `ALR04` | runtime | The tool definition pushes the model to always pick this tool | `ASI01`, `ASI02`, `ASI04` |
 | `ALR04-009` | `ALR04` | runtime | The tool definition demands a harmful step before it can be used | `ASI01`, `ASI02`, `ASI04` |
 | `AG003` | `ALR05` | static | Content from outside reaches the model as if it were instructions, not data | `ASI01` |
-| `ALR05-R01` | `ALR05` | runtime | Output that tells the agent what to do is indistinguishable from instructions unless the host fences it | `ASI01` |
+| `ALR05-R01` | `ALR05` | runtime | Output that reads as instructions for the model is indistinguishable from data unless the host fences it | `ASI01` |
+| `ALR05-R02` | `ALR05` | runtime | Instructions hidden in invisible characters or encoding still reach the model | `ASI01` |
+| `ALR05-R03` | `ALR05` | runtime | Output that names the next tool, destination or URL steers the agent's next step | `ASI01` |
 | `PY001` | `ALR06` | static | Runs arbitrary code inside the agent process | `ASI05`, `ASI02` |
 | `PY002` | `ALR06` | static | Model-influenced strings can become shell commands | `ASI05`, `ASI02` |
 | `AG002` | `ALR06` | static | The agent writes Python and the framework executes it | `ASI05`, `ASI02` |
@@ -74,7 +76,7 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `ALR14-S02` | `ALR14` | static | Persistence brings the agent back after it is stopped, outside a user's view | `ASI10` |
 | `ALR14-S03` | `ALR14` | static | Installing packages at runtime pulls unreviewed code into the agent process | `ASI10` |
 
-Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary; `ALR05-090` alr05 could not inspect enough of a tool output (coverage).
+Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary; `ALR05-R90` alr05 could not inspect tool output (no payload recorded, or output was cut).
 
 ## Framework references
 

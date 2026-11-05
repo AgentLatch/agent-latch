@@ -229,3 +229,28 @@ def test_demo_command_records_and_imports_a_session(
     for name in ("trace.jsonl", "payloads.jsonl", "events.csv", "normalized.jsonl"):
         assert FAKE_TOKEN not in (tmp_path / name).read_text(encoding="utf-8")
     assert FAKE_TOKEN not in err
+
+
+def test_demo_poisoned_output_scenario_fires_alr05(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent_latch.runtime import cli
+
+    assert cli.main(["demo", "--dir", str(tmp_path), "--scenario", "poisoned-output"]) == 0
+    err = capsys.readouterr().err
+    assert "tools/call fetch_page -> ok" in err
+    with (tmp_path / "gate-results.csv").open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    findings = [
+        finding
+        for row in rows
+        for finding in json.loads(row["result_json"])["findings"]
+        if finding.get("is_finding")
+    ]
+    fired = {finding["rule_id"] for finding in findings}
+    assert {"ALR05-R02", "ALR05-R03"} <= fired
+    r03 = next(finding for finding in findings if finding["rule_id"] == "ALR05-R03")
+    assert r03["outcome"] == "FAIL" and r03["severity"] == "high"
+    assert r03["entity"]["tool"] == "fetch_page"
+    # The hidden instruction and the attacker's address never reach the findings.
+    assert "attacker@example.com" not in json.dumps(findings)
