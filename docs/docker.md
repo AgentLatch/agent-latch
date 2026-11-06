@@ -153,7 +153,7 @@ For a fixed deployment, refer to the image by digest (`ghcr.io/agentlatch/agent-
 
 ## Publishing (maintainers)
 
-[`.github/workflows/images.yml`](../.github/workflows/images.yml) builds and smoke-tests both images on every pull request that can affect them. Publishing to GHCR runs on a published GitHub release (tags `X.Y.Z`, `X.Y` and `latest`), or on a manual run (tag `sha-<commit>`; pick a release tag as the ref to publish that version). It builds `linux/amd64` and `linux/arm64`, and checks that the release tag matches both version files, as the PyPI workflow does. After the first publish, make each package public in the organization's package settings.
+[`.github/workflows/images.yml`](../.github/workflows/images.yml) builds and smoke-tests both images on every pull request that can affect them. Publishing to GHCR runs on a published GitHub release (tags `X.Y.Z`, `X.Y` and `latest`), or on a manual run (tag `sha-<commit>`; pick a release tag as the ref to publish that version). It builds `linux/amd64` and `linux/arm64`, reuses the layers the test job already built and tested (amd64), runs each pushed image by digest on both platforms before attesting it, and checks that the release tag matches both version files, as the PyPI workflow does. After the first publish, make each package public in the organization's package settings.
 
 The dependency locks are regenerated with [uv](https://docs.astral.sh/uv/):
 

@@ -2,7 +2,8 @@ name: Container images
 
 # Builds the two images from the Dockerfile and smoke-tests them on every change that can affect
 # them. Publishing to GitHub Container Registry happens only on a GitHub release (tags X.Y.Z,
-# X.Y and latest) or a manual run (tag sha-<commit>), with signed build provenance and an SBOM:
+# X.Y and latest) or a manual run (tag sha-<commit>), with signed build provenance and an SBOM.
+# Each pushed image is run by digest on amd64 and arm64 before it is attested:
 #   ghcr.io/agentlatch/agent-latch          static scanner
 #   ghcr.io/agentlatch/agent-latch-runtime  MCP runtime proxy (preview)
 # Actions are pinned to commit SHAs; Dependabot keeps them and the base image digest current.
@@ -41,6 +42,8 @@ jobs:
           target: scanner
           tags: agent-latch:test
           load: true
+          cache-from: type=gha,scope=scanner
+          cache-to: type=gha,scope=scanner,mode=max
       - name: Build the runtime image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -48,6 +51,8 @@ jobs:
           target: runtime
           tags: agent-latch-runtime:test
           load: true
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,scope=runtime,mode=max
       - name: Smoke-test the scanner image
         run: |
           set -u
@@ -147,6 +152,18 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: mode=max
           sbom: true
+          # Reuse the layers the test job built and tested (amd64). arm64 is built here.
+          cache-from: type=gha,scope=${{ matrix.target }}
+      - name: Smoke-test the pushed image on both platforms
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          for platform in linux/amd64 linux/arm64; do
+            docker run --rm --platform "$platform" "$IMAGE@$DIGEST" --version
+            test "$(docker run --rm --platform "$platform" --entrypoint id "$IMAGE@$DIGEST" -u)" = 10001
+          done
       - name: Attest build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
