@@ -38,6 +38,34 @@ _BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
 _PEM = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.DOTALL
 )
+# Masked-location kinds for the well-known token shapes, by matched prefix (checked in order).
+_TOKEN_KINDS = (
+    ("sk-", "token:openai"),
+    ("github_pat_", "token:github"),
+    ("gh", "token:github"),
+    ("xox", "token:slack"),
+    ("AKIA", "token:aws"),
+    ("eyJ", "jwt"),
+)
+
+
+def _token_kind(matched: str) -> str:
+    for prefix, kind in _TOKEN_KINDS:
+        if matched.startswith(prefix):
+            return kind
+    return "token"
+
+
+def value_kind(value: str) -> str | None:
+    """The token shape of a whole value, or ``None`` when it has no recognized shape."""
+    if _PEM.search(value):
+        return "pem"
+    match = _TOKENS.search(value)
+    if match:
+        return _token_kind(match.group(0))
+    if _BEARER.search(value):
+        return "bearer"
+    return None
 
 
 def canonical_json(value: Any) -> str:
@@ -55,36 +83,88 @@ def payload_bytes(value: Any) -> int:
     return len(text.encode("utf-8"))
 
 
-def mask_secrets(text: str) -> str:
-    text = _PEM.sub(MASK, text)
-    text = _ASSIGNMENT.sub(lambda m: m.group(0).replace(m.group("value"), MASK), text)
-    text = _BEARER.sub(lambda m: f"{m.group(1)} {MASK}", text)
-    return _TOKENS.sub(MASK, text)
+def mask_secrets(text: str, kinds: list[str] | None = None) -> str:
+    """``text`` with secret-like spans replaced by ``MASK``.
+
+    With ``kinds``, the kind of every masked span (``pem``, ``assignment``, ``bearer``,
+    ``token:github``, ``jwt``, ...) is appended to it. Kinds carry no masked value.
+    """
+
+    def note(kind: str) -> None:
+        if kinds is not None:
+            kinds.append(kind)
+
+    def pem(m: re.Match[str]) -> str:
+        note("pem")
+        return MASK
+
+    def assignment(m: re.Match[str]) -> str:
+        note("assignment")
+        return m.group(0).replace(m.group("value"), MASK)
+
+    def bearer(m: re.Match[str]) -> str:
+        note("bearer")
+        return f"{m.group(1)} {MASK}"
+
+    def token(m: re.Match[str]) -> str:
+        note(_token_kind(m.group(0)))
+        return MASK
+
+    text = _PEM.sub(pem, text)
+    text = _ASSIGNMENT.sub(assignment, text)
+    text = _BEARER.sub(bearer, text)
+    return _TOKENS.sub(token, text)
 
 
-def mask_value(value: Any, max_chars: int) -> Any:
+def _pointer_segment(key: Any) -> str:
+    return str(key).replace("~", "~0").replace("/", "~1")
+
+
+def mask_value(
+    value: Any,
+    max_chars: int,
+    *,
+    locations: list[dict[str, str]] | None = None,
+    path: str = "$",
+) -> Any:
     """A JSON-ready copy of ``value`` with secrets masked and each string cut to ``max_chars``.
 
     Strings under a secret-like key (``api_key``, ``password``, ``token``, ...) are masked whole;
     other strings go through ``mask_secrets``. Masking runs before the cut, on the full string.
+
+    With ``locations``, one ``{"path", "kind"}`` entry per masked spot is appended to it: the
+    JSON-pointer-like path of the string and the kind of secret the masking recognized
+    (``key_name``, ``assignment``, ``token:github``, ``jwt``, ``pem``, ...). Entries hold only
+    the kind and path, never any part of the masked value.
     """
     if isinstance(value, str):
-        text = mask_secrets(value)
+        kinds: list[str] | None = [] if locations is not None else None
+        text = mask_secrets(value, kinds)
+        if kinds and locations is not None:
+            locations.extend({"path": path, "kind": kind} for kind in dict.fromkeys(kinds))
         if len(text) <= max_chars:
             return text
         return f"{text[:max_chars]}…[{len(text) - max_chars} more chars]"
     if isinstance(value, Mapping):
-        return {
-            str(key): MASK
-            if isinstance(item, str) and item and _SECRET_KEY.search(str(key))
-            else mask_value(item, max_chars)
-            for key, item in value.items()
-        }
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key)
+            child = f"{path}/{_pointer_segment(name)}"
+            if isinstance(item, str) and item and _SECRET_KEY.search(name):
+                out[name] = MASK
+                if locations is not None:
+                    locations.append({"path": child, "kind": value_kind(item) or "key_name"})
+            else:
+                out[name] = mask_value(item, max_chars, locations=locations, path=child)
+        return out
     if isinstance(value, list | tuple):
-        return [mask_value(item, max_chars) for item in value]
+        return [
+            mask_value(item, max_chars, locations=locations, path=f"{path}/{i}")
+            for i, item in enumerate(value)
+        ]
     if value is None or isinstance(value, bool | int | float):
         return value
-    return mask_value(str(value), max_chars)
+    return mask_value(str(value), max_chars, locations=locations, path=path)
 
 
 def excerpt(text: str, limit: int) -> str:

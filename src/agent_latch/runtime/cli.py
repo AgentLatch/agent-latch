@@ -146,6 +146,11 @@ def _parser() -> argparse.ArgumentParser:
         "--dir", type=Path, default=Path(DEFAULT_LOG_DIR) / "demo", metavar="DIR",
         help=f"folder for the demo's files, replaced on each run (default {DEFAULT_LOG_DIR}/demo)",
     )
+    demo.add_argument(
+        "--scenario", choices=("default", "secret-leak"), default="default",
+        help="what the demo client does: a mixed session (default), or secret-leak, which sends"
+        " a fake credential to a tool and reads one back so the ALR10 checks fire",
+    )
     return parser
 
 
@@ -200,6 +205,7 @@ def _proxy(args: argparse.Namespace) -> int:
             args.trace,
             summary=None if args.quiet else sys.stderr,
             excerpt_chars=args.excerpt_chars,
+            transport="http" if args.upstream_url else "stdio",
         )
     except OSError as error:
         print(f"agent-latch-runtime: cannot open trace file: {error}", file=sys.stderr)
@@ -286,7 +292,7 @@ def _demo(args: argparse.Namespace) -> int:
     from agent_latch.runtime.demo import run_demo
 
     try:
-        run_demo(args.dir)
+        run_demo(args.dir, scenario=args.scenario)
     except KeyboardInterrupt:
         return 0
     except Exception as error:  # noqa: BLE001 - report any demo failure as a setup error

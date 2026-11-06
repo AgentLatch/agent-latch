@@ -19,7 +19,7 @@
 
 ![Example AgentLatch scan showing detected security findings](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/gent-latch-scan-example.png)
 
-> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs one preview gate, ALR04, on MCP tool definitions. It reports findings and does not block calls.
+> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs two preview gates: ALR04 on MCP tool definitions, and ALR10 on secret-like values crossing the tool boundary. It reports findings and does not block calls.
 
 ## Contents
 
@@ -121,7 +121,7 @@ The scanner never imports or runs the code it checks. The proxy passes every MCP
 
 ## Runtime monitoring for MCP (preview)
 
-`agent-latch-runtime` records what an AI agent asks its MCP tools to do and what comes back, so you can review an agent's tool use after a run. It is a **preview and monitor only**. It records every message and runs ALR04, which reports a finding when a tool definition contains instruction-like content. It does not block calls. After a run, `agent-latch --runtime-result` prints those findings in the same table as a scan, including a local tool's file and line when the project defines that tool. The report lists findings only.
+`agent-latch-runtime` records what an AI agent asks its MCP tools to do and what comes back, so you can review an agent's tool use after a run. It is a **preview and monitor only**. It records every message and runs two gates: ALR04, which reports a finding when a tool definition contains instruction-like content, and ALR10, which reports a secret-like value sent to a tool or returned into the model's context (the logs hold only `[REDACTED]`; the finding points at the masked spot). It does not block calls. After a run, `agent-latch --runtime-result` prints those findings in the same table as a scan, including a local tool's file and line when the project defines that tool. The report lists findings only. Try `agent-latch-runtime demo --scenario secret-leak` to see the ALR10 checks fire on fake credentials.
 
 ### Try it in one command
 
@@ -236,7 +236,7 @@ Every rule belongs to one **gate**: the security outcome it checks, such as `ALR
 
 ## OWASP Agentic Top 10 coverage
 
-How the scanner's rules map to the [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/). This table is the static scanner. The runtime gate ALR04 also cites ASI01, ASI02, and ASI04 on a finding. That does not add a scanner check.
+How the scanner's rules map to the [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/). This table is the static scanner. The runtime gates also cite categories on a finding (ALR04: ASI01, ASI02 and ASI04; ALR10: ASI03). That does not add a scanner check.
 
 | ID | Category | Coverage | Rules |
 |---|---|---|---|

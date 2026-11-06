@@ -211,6 +211,10 @@ GATES: tuple[Gate, ...] = (
             ("AGENTLATCH-SEC001", "static",
              ("A secret in the project can be read by the agent, its prompts or anyone with the "
               "code")),
+            ("ALR10-R01", "runtime",
+             "A credential sent with a tool call crosses to that tool's server and its logs"),
+            ("ALR10-R02", "runtime",
+             "A credential in tool output lands in the model's context and transcripts"),
         ),
     ),
     Gate(
@@ -282,6 +286,14 @@ DIAGNOSTICS: dict[str, str] = {
     "AGENTLATCH-MAN000": "Manifest could not be read or has an invalid field",
     "ALR04-090": "ALR04 could not inspect enough of a tool definition (coverage)",
     "ALR04-099": "ALR04 per-scan summary",
+    "ALR10-R90": "ALR10 saw a tool call but no payload record (coverage)",
+}
+
+# Runtime detectors that cite only a subset of their gate's OWASP categories. Other runtime
+# detectors cite their gate's full list; static rules list their own in owasp.RULE_CATEGORIES.
+RUNTIME_DETECTOR_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "ALR10-R01": ("ASI03",),
+    "ALR10-R02": ("ASI03",),
 }
 
 GATES_BY_ID: dict[str, Gate] = {gate.id: gate for gate in GATES}
@@ -326,8 +338,12 @@ def detectors_for(gate_id: str) -> list[Detector]:
 
 
 def detector_owasp(detector: Detector) -> tuple[str, ...]:
-    """Static detectors list their own categories in owasp.py; runtime ones cite their gate's."""
-    return RULE_CATEGORIES.get(detector.id, GATES_BY_ID[detector.gate].owasp)
+    """Static detectors list their own categories in owasp.py; runtime ones cite their gate's,
+    unless RUNTIME_DETECTOR_CATEGORIES narrows them to a subset."""
+    specific = RULE_CATEGORIES.get(detector.id)
+    if specific is None:
+        specific = RUNTIME_DETECTOR_CATEGORIES.get(detector.id)
+    return specific if specific is not None else GATES_BY_ID[detector.gate].owasp
 
 
 def gate_status(gate_id: str) -> str:

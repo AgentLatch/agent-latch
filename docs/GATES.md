@@ -21,7 +21,7 @@ A gate is a security outcome AgentLatch checks for, such as "destructive actions
 | `ALR07` | Least-privilege tools | Tools and delegation are scoped, not wildcard or unrestricted | `AG001`, `AG005`, `MAN002` | `ASI02`, `ASI03`, `ASI05` | Art. 15 | partial |
 | `ALR08` | Bounded execution | Agent loops and recursion have effective limits | `AG007`, `ALR08-S01`, `ALR08-S02` | `ASI08` | Art. 15 | partial |
 | `ALR09` | Human approval for sensitive actions | Destructive or outward-facing actions need human approval | `AG004`, `AG006`, `MAN001` | `ASI02`, `ASI03`, `ASI05`, `ASI09` | Art. 14 | partial |
-| `ALR10` | Secret hygiene | No credentials in source, config or prompts | `SEC001` | `ASI03`, `ASI04` | Art. 15 | partial |
+| `ALR10` | Secret hygiene | No credentials in source, config or prompts | `SEC001`, `ALR10-R01`, `ALR10-R02` | `ASI03`, `ASI04` | Art. 15 | partial |
 | `ALR11` | Dependency integrity | Pinned dependencies have no known advisories | `DEP001`, `ALR11-S01` | `ASI04` | Art. 15 | partial |
 | `ALR12` | Secure transport | TLS is verified and agent or tool traffic does not use plain HTTP | `PY003`, `ALR12-S01` | `ASI02`, `ASI07` | Art. 15 | partial |
 | `ALR13` | Memory and context integrity | Untrusted content is not written to agent memory or vector stores | `ALR13-S01`, `ALR13-S02` | `ASI06` | Art. 15 | partial |
@@ -63,6 +63,8 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `AG006` | `ALR09` | static | Approval exists in the framework but the code switches it off | `ASI09`, `ASI02`, `ASI05` |
 | `MAN001` | `ALR09` | manifest | The manifest declares a dangerous capability with no approval step | `ASI02`, `ASI03`, `ASI05`, `ASI09` |
 | `SEC001` | `ALR10` | static | A secret in the project can be read by the agent, its prompts or anyone with the code | `ASI03`, `ASI04` |
+| `ALR10-R01` | `ALR10` | runtime | A credential sent with a tool call crosses to that tool's server and its logs | `ASI03` |
+| `ALR10-R02` | `ALR10` | runtime | A credential in tool output lands in the model's context and transcripts | `ASI03` |
 | `DEP001` | `ALR11` | dependency audit (opt-in) | A known-vulnerable package is part of the agent's supply chain | `ASI04` |
 | `ALR11-S01` | `ALR11` | static | Trusting remote model code makes a hub repository part of the agent's supply chain | `ASI04` |
 | `PY003` | `ALR12` | static | Disabled TLS checks let anyone on the network read or alter the agent's traffic | `ASI02` |
@@ -73,7 +75,7 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `ALR14-S02` | `ALR14` | static | Persistence brings the agent back after it is stopped, outside a user's view | `ASI10` |
 | `ALR14-S03` | `ALR14` | static | Installing packages at runtime pulls unreviewed code into the agent process | `ASI10` |
 
-Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary.
+Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary; `ALR10-R90` alr10 saw a tool call but no payload record (coverage).
 
 ## Framework references
 

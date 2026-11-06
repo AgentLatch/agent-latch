@@ -229,3 +229,30 @@ def test_demo_command_records_and_imports_a_session(
     for name in ("trace.jsonl", "payloads.jsonl", "events.csv", "normalized.jsonl"):
         assert FAKE_TOKEN not in (tmp_path / name).read_text(encoding="utf-8")
     assert FAKE_TOKEN not in err
+
+
+def test_demo_secret_leak_scenario_fires_alr10(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent_latch.runtime import cli
+    from agent_latch.runtime.demo import FAKE_GITHUB_TOKEN
+
+    assert cli.main(["demo", "--dir", str(tmp_path), "--scenario", "secret-leak"]) == 0
+    err = capsys.readouterr().err
+    with (tmp_path / "gate-results.csv").open(encoding="utf-8", newline="") as stream:
+        findings = [
+            finding
+            for row in csv.DictReader(stream)
+            for finding in json.loads(row["result_json"])["findings"]
+            if finding.get("gate_id") == "ALR10"
+        ]
+    by_rule = {finding["rule_id"]: finding for finding in findings}
+    assert by_rule["ALR10-R01"]["entity"]["tool"] == "search_issues"
+    assert by_rule["ALR10-R01"]["severity"] == "high"
+    assert by_rule["ALR10-R02"]["entity"]["tool"] == "read_config"
+    assert by_rule["ALR10-R02"]["severity"] == "high"
+    for name in ("trace.jsonl", "payloads.jsonl", "events.csv", "normalized.jsonl",
+                 "gate-results.csv"):
+        text = (tmp_path / name).read_text(encoding="utf-8")
+        assert FAKE_GITHUB_TOKEN not in text and "AKIA" + "FAKEFAKEFAKEFAKE" not in text
+    assert FAKE_GITHUB_TOKEN not in err

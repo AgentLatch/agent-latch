@@ -32,10 +32,13 @@ class TraceLog:
         *,
         summary: TextIO | None = sys.stderr,
         excerpt_chars: int = DEFAULT_EXCERPT_CHARS,
+        transport: str | None = None,
     ) -> None:
         self.path = path
         self.summary = summary
         self.excerpt_chars = max(0, excerpt_chars)
+        # How the proxy reaches the upstream server ("stdio" or "http"); None when unknown.
+        self.transport = transport
         self._file: TextIO | None = None
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +52,8 @@ class TraceLog:
 
     def write(self, record: Mapping[str, Any]) -> dict[str, Any]:
         line = {"schema": TRACE_SCHEMA, "timestamp": utc_now(), **record}
+        if self.transport is not None:
+            line.setdefault("transport", self.transport)
         if self._file is not None:
             self._file.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
             self._file.flush()
