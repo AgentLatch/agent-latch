@@ -71,16 +71,36 @@ def _redacted_url(parts: SplitResult) -> str:
     return f"{parts.scheme}://{host}{port}"
 
 
+def _endpoint_values(call: ast.Call) -> list[tuple[str, ast.expr]]:
+    """(template, value) for each endpoint-named argument of one call.
+
+    Covers keywords (url="...") and string keys of a dict literal passed straight to the call,
+    as in the OpenAI Agents SDK's MCPServerStreamableHttp(params={"url": "..."}). A dict built
+    elsewhere and passed by name is not followed. The template shows where the argument sat,
+    with {} standing for the redacted URL.
+    """
+    values: list[tuple[str, ast.expr]] = []
+    for keyword in call.keywords:
+        if keyword.arg in _ENDPOINT_KWARGS:
+            values.append((f"{keyword.arg}={{}}", keyword.value))
+    owners: list[tuple[str, ast.expr]] = [("", arg) for arg in call.args]
+    owners += [(f"{kw.arg}=" if kw.arg else "", kw.value) for kw in call.keywords]
+    for owner, argument in owners:
+        if not isinstance(argument, ast.Dict):
+            continue
+        for key, value in zip(argument.keys, argument.values, strict=True):
+            if isinstance(key, ast.Constant) and key.value in _ENDPOINT_KWARGS:
+                values.append((f'{owner}{{{{"{key.value}": {{}}}}}}', value))
+    return values
+
+
 def _endpoint_checks(tree: ast.Module, path: str) -> list[Finding]:
     """ALR12-S01: plaintext URL passed as an endpoint for a remote service."""
     findings: list[Finding] = []
     for node in walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        for keyword in node.keywords:
-            if keyword.arg not in _ENDPOINT_KWARGS:
-                continue
-            value = keyword.value
+        for template, value in _endpoint_values(node):
             if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
                 continue
             if not _PLAINTEXT.match(value.value):
@@ -94,22 +114,23 @@ def _endpoint_checks(tree: ast.Module, path: str) -> list[Finding]:
                 continue
             callee = _last(_dotted(node.func)) or "call"
             endpoint = _redacted_url(parts)
+            argument = template.format(endpoint)
             findings.append(
                 Finding(
                     rule_id="ALR12-S01",
                     title="Plaintext agent endpoint",
                     severity="medium",
                     message=(
-                        f"{callee}({keyword.arg}={endpoint}) uses an unencrypted scheme for a remote "
+                        f"{callee}({argument}) uses an unencrypted scheme for a remote "
                         "service, so anyone on the path can read or rewrite agent, tool or model traffic. "
                         "Use https:// or wss://, and keep the host reachable only from where it is needed."
                     ),
                     path=path,
-                    line=keyword.value.lineno,
-                    column=keyword.value.col_offset + 1,
+                    line=value.lineno,
+                    column=value.col_offset + 1,
                     owasp=("ASI02", "ASI07"),
                     confidence="medium",
-                    evidence=f"{callee}({keyword.arg}={endpoint}) over plaintext",
+                    evidence=f"{callee}({argument}) over plaintext",
                 )
             )
     return findings

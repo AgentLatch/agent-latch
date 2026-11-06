@@ -542,6 +542,142 @@ def test_plaintext_endpoint_message_redacts_credentials(tmp_path: Path) -> None:
     assert "ChatClient(base_url=http://host.example) uses an unencrypted scheme" in finding.message
 
 
+def test_plaintext_endpoint_in_a_params_dict_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text(
+        "remote = MCPServerStreamableHttp(params={'url': 'http://tools.example.com/mcp?token=t0k'})\n"
+        "sse = MCPServerSse({'url': 'http://sse.example.com/sse'})\n"
+        "local = MCPServerStreamableHttp(params={'url': 'http://127.0.0.1:8765/mcp'})\n"
+        "secure = MCPServerStreamableHttp(params={'url': 'https://tools.example.com/mcp'})\n"
+        "other = MCPServerStreamableHttp(params={**defaults, 'timeout': 5})\n",
+        encoding="utf-8",
+    )
+
+    findings = [item for item in scan_project(tmp_path) if item.rule_id == "ALR12-S01"]
+
+    assert [item.line for item in findings] == [1, 2]
+    assert 'MCPServerStreamableHttp(params={"url": http://tools.example.com})' in findings[0].message
+    assert "t0k" not in findings[0].message
+
+
+_HANDOFF_AGENTS = (
+    "import requests\n"
+    "from agents import Agent, function_tool, handoff\n"
+    "@function_tool\n"
+    "def lookup(order_id: str) -> str:\n"
+    "    return requests.get('https://api.example/orders', timeout=5).text\n"
+    "@function_tool{refund_decorator}\n"
+    "def refund(order_id: str) -> str:\n"
+    "    return requests.post('https://api.example/refunds', json={{}}, timeout=5).text\n"
+    "billing = Agent(name='billing', tools=[lookup, refund])\n"
+    "triage = Agent(name='triage', tools=[{triage_tools}], handoffs=[handoff(billing)])\n"
+)
+
+
+def test_handoff_to_agent_with_unapproved_risky_tool_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "agents_app.py").write_text(
+        _HANDOFF_AGENTS.format(refund_decorator="", triage_tools="lookup"), encoding="utf-8"
+    )
+
+    [finding] = [item for item in scan_project(tmp_path) if item.rule_id == "ALR07-S01"]
+
+    assert finding.line == 10
+    assert finding.owasp == ("ASI03", "ASI02")
+    assert "'triage' can hand off to 'billing', which has 'refund'" in finding.message
+    assert "'lookup'" not in finding.evidence  # read-only, and triage has it already
+
+
+def test_handoff_without_new_risky_tools_is_not_reported(tmp_path: Path) -> None:
+    cases = {
+        "approved.py": _HANDOFF_AGENTS.format(refund_decorator="(needs_approval=True)", triage_tools="lookup"),
+        "same_tools.py": _HANDOFF_AGENTS.format(refund_decorator="", triage_tools="lookup, refund"),
+    }
+    for name, source in cases.items():
+        (tmp_path / name).write_text(source, encoding="utf-8")
+
+    assert [item for item in scan_project(tmp_path) if item.rule_id == "ALR07-S01"] == []
+
+
+def test_handoff_to_inline_and_named_agents_is_resolved(tmp_path: Path) -> None:
+    (tmp_path / "agents_app.py").write_text(
+        "import subprocess\n"
+        "from agents import Agent, function_tool\n"
+        "@function_tool\n"
+        "def run(cmd: str) -> str:\n"
+        "    return subprocess.run(cmd.split(), capture_output=True, text=True).stdout\n"
+        "ops = Agent(name='ops', tools=[run])\n"
+        "front = Agent(name='front', handoffs=[ops, Agent(name='inline', tools=[run])])\n",
+        encoding="utf-8",
+    )
+
+    found = sorted(item.evidence for item in scan_project(tmp_path) if item.rule_id == "ALR07-S01")
+
+    assert found == ["'front' -> 'inline' gains 'run'", "'front' -> 'ops' gains 'run'"]
+
+
+def test_unattached_guardrail_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "agents_app.py").write_text(
+        "from agents import Agent, InputGuardrail, input_guardrail, output_guardrail\n"
+        "@input_guardrail\n"
+        "async def unused_input(ctx, agent, data): ...\n"
+        "@output_guardrail(name='pii')\n"
+        "async def unused_output(ctx, agent, data): ...\n"
+        "@input_guardrail\n"
+        "async def attached(ctx, agent, data): ...\n"
+        "async def check(ctx, agent, data): ...\n"
+        "wrapped = InputGuardrail(guardrail_function=check)\n"
+        "agent = Agent(name='a', input_guardrails=[attached])\n",
+        encoding="utf-8",
+    )
+
+    found = sorted(
+        (item.line, item.evidence) for item in scan_project(tmp_path) if item.rule_id == "ALR01-S02"
+    )
+
+    assert found == [
+        (3, "@input_guardrail 'unused_input' is not referenced"),
+        (5, "@output_guardrail 'unused_output' is not referenced"),
+        (9, "InputGuardrail(...) 'wrapped' is not referenced"),
+    ]
+
+
+def test_guardrail_module_without_agents_is_not_reported(tmp_path: Path) -> None:
+    (tmp_path / "guardrails.py").write_text(
+        "from agents import input_guardrail\n"
+        "@input_guardrail\n"
+        "async def shared(ctx, agent, data): ...\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "exported.py").write_text(
+        "from agents import Agent, input_guardrail\n"
+        "__all__ = ['public']\n"
+        "@input_guardrail\n"
+        "async def public(ctx, agent, data): ...\n"
+        "agent = Agent(name='a')\n",
+        encoding="utf-8",
+    )
+
+    assert [item for item in scan_project(tmp_path) if item.rule_id == "ALR01-S02"] == []
+
+
+def test_openai_agents_example_produces_its_documented_findings() -> None:
+    example = Path(__file__).resolve().parents[1] / "examples" / "openai-agents"
+
+    found = sorted(
+        item.rule_id for item in scan_project(example) if item.path == "support_agents.py"
+    )
+
+    assert found == sorted(
+        [
+            "AGENTLATCH-AG004",
+            "AGENTLATCH-AG007",
+            "AGENTLATCH-PRM002",
+            "ALR01-S02",
+            "ALR07-S01",
+            "ALR12-S01",
+        ]
+    )
+
+
 def test_untrusted_web_content_written_to_memory_is_reported(tmp_path: Path) -> None:
     (tmp_path / "agent.py").write_text(
         "import requests\n"
@@ -742,6 +878,7 @@ def test_every_rule_maps_only_to_known_owasp_categories() -> None:
         "oversight.py",
         "memory.py",
         "endpoints.py",
+        "agent_wiring.py",
         "resilience.py",
         "rogue.py",
         "sandbox.py",

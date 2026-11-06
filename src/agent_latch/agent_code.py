@@ -24,6 +24,7 @@ from typing import Any
 
 import yaml
 
+from agent_latch.agent_wiring import scan_agent_wiring
 from agent_latch.astutil import walk
 from agent_latch.endpoints import scan_endpoints
 from agent_latch.findings import Finding
@@ -397,14 +398,20 @@ class _ToolAnalysis:
                     queue.append((helper, depth + 1))
         return operations, approved
 
-    def findings(self) -> list[Finding]:
+    def unapproved(self) -> list[tuple[str, ast.AST, list[tuple[str, str]]]]:
+        """(tool name, report node, risky operations) for each high-risk tool with no approval gate."""
         if self.file_has_approval_gate():
             return []
-        results: list[Finding] = []
+        risky: list[tuple[str, ast.AST, list[tuple[str, str]]]] = []
         for name, node, bodies, declared in self.tools():
             operations, approved = self.inspect(bodies)
-            if declared or approved or not operations:
-                continue
+            if not (declared or approved or not operations):
+                risky.append((name, node, operations))
+        return risky
+
+    def findings(self, risky: list[tuple[str, ast.AST, list[tuple[str, str]]]]) -> list[Finding]:
+        results: list[Finding] = []
+        for name, node, operations in risky:
             kinds = list(dict.fromkeys(kind for kind, _ in operations))
             executes_code = "code_execution" in kinds
             results.append(
@@ -490,9 +497,16 @@ def scan_agent_code(
     tree: ast.Module, path: str, memory_flows: Sequence[MemoryFlow] = ()
 ) -> list[Finding]:
     """Manifest-independent agent checks for one parsed Python file."""
+    tools = _ToolAnalysis(tree, path)
+    risky = tools.unapproved()
+    # Shared with the handoff check (ALR07-S01): tool name -> what it can do, in words.
+    actions = {
+        name: tuple(dict.fromkeys(_KIND_TEXT[kind] for kind, _ in operations)) for name, _, operations in risky
+    }
     return [
         *_PromptCollector(path).visit(tree),
-        *_ToolAnalysis(tree, path).findings(),
+        *tools.findings(risky),
+        *scan_agent_wiring(tree, path, actions),
         *_builtin_tool_findings(tree, path),
         *scan_oversight(tree, path),
         *memory_write_findings(memory_flows, path),

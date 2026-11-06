@@ -12,13 +12,13 @@ A gate is a security outcome AgentLatch checks for, such as "destructive actions
 
 | Gate | Name | Outcome | Detectors | OWASP Agentic | EU AI Act | Status |
 |---|---|---|---|---|---|---|
-| `ALR01` | Prompt integrity | System prompts carry no injected instructions or raw user input | `PRM001`, `PRM002`, `ALR01-S01` | `ASI01` | Art. 15 | partial |
+| `ALR01` | Prompt integrity | System prompts carry no injected instructions or raw user input | `PRM001`, `PRM002`, `ALR01-S01`, `ALR01-S02` | `ASI01` | Art. 15 | partial |
 | `ALR02` | Tool definition integrity | Tool definitions are pinned and changes are detected | none | `ASI02`, `ASI04` | Art. 15 | no checks yet |
 | `ALR03` | Tool and agent endpoint trust | Remote tools, MCP servers and peer agents are identified and authenticated | `MAN003`, `ALR03-S01` | `ASI02`, `ASI03`, `ASI04`, `ASI07` | Art. 15 | partial |
 | `ALR04` | Tool schema injection | Tool definitions contain no instruction-like or hidden content | `ALR04-001`, `ALR04-002`, `ALR04-003`, `ALR04-004`, `ALR04-005`, `ALR04-006`, `ALR04-007`, `ALR04-008`, `ALR04-009` | `ASI01`, `ASI02`, `ASI04` | Art. 15 | preview (runtime) |
 | `ALR05` | Untrusted content isolation | Web, HTTP and tool output reaches the model fenced as data | `AG003` | `ASI01` | Art. 15 | partial |
 | `ALR06` | Code execution containment | No unsandboxed eval, shell or model-driven code execution | `PY001`, `PY002`, `AG002`, `ALR06-S01`, `ALR06-S02` | `ASI02`, `ASI05` | Art. 15 | partial |
-| `ALR07` | Least-privilege tools | Tools and delegation are scoped, not wildcard or unrestricted | `AG001`, `AG005`, `MAN002` | `ASI02`, `ASI03`, `ASI05` | Art. 15 | partial |
+| `ALR07` | Least-privilege tools | Tools and delegation are scoped, not wildcard or unrestricted | `AG001`, `AG005`, `MAN002`, `ALR07-S01` | `ASI02`, `ASI03`, `ASI05` | Art. 15 | partial |
 | `ALR08` | Bounded execution | Agent loops and recursion have effective limits | `AG007`, `ALR08-S01`, `ALR08-S02` | `ASI08` | Art. 15 | partial |
 | `ALR09` | Human approval for sensitive actions | Destructive or outward-facing actions need human approval | `AG004`, `AG006`, `MAN001` | `ASI02`, `ASI03`, `ASI05`, `ASI09` | Art. 14 | partial |
 | `ALR10` | Secret hygiene | No credentials in source, config or prompts | `SEC001` | `ASI03`, `ASI04` | Art. 15 | partial |
@@ -37,6 +37,7 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `PRM001` | `ALR01` | static | Injected text inside a prompt the author ships breaks the prompt itself | `ASI01` |
 | `PRM002` | `ALR01` | static | User text placed in the system prompt gains system-level authority over the agent's goal | `ASI01` |
 | `ALR01-S01` | `ALR01` | static | Invisible or direction-control characters hide instructions from the reviewer while the model still reads them | `ASI01` |
+| `ALR01-S02` | `ALR01` | static | A guardrail that is never attached lets user input reach the agent unchecked | `ASI01` |
 | `MAN003` | `ALR03` | manifest | The agent cannot tell a real remote tool from an impostor if the endpoint is unauthenticated | `ASI03`, `ASI02` |
 | `ALR03-S01` | `ALR03` | static | A server on every interface lets any reachable peer call the agent and its tools | `ASI03`, `ASI07` |
 | `ALR04-001` | `ALR04` | runtime | The tool definition tells the model to ignore its instructions | `ASI01`, `ASI02`, `ASI04` |
@@ -57,6 +58,7 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `AG001` | `ALR07` | static | The agent can hand work to other agents, and with it their tools | `ASI02`, `ASI03` |
 | `AG005` | `ALR07` | static | The tool has no scope limit, so the agent holds full shell or file access | `ASI02`, `ASI03`, `ASI05` |
 | `MAN002` | `ALR07` | manifest | The manifest grants everything instead of what the tool needs | `ASI02`, `ASI03` |
+| `ALR07-S01` | `ALR07` | static | A handoff lets anyone talking to one agent reach another agent's riskier tools | `ASI03`, `ASI02` |
 | `AG007` | `ALR08` | static | An unbounded loop turns one bad step into runaway cost or repeated actions | `ASI08` |
 | `ALR08-S01` | `ALR08` | static | One stalled peer without a timeout holds up every step queued behind it | `ASI08` |
 | `ALR08-S02` | `ALR08` | static | A retry without a limit never gives up, so a failing dependency stalls the step | `ASI08` |
