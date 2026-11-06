@@ -38,9 +38,9 @@ AgentLatch is often run on agents someone else wrote, so nothing inside the scan
 
 | ID | Category | Gates | Current rules |
 |---|---|---|---|
-| ASI01 | Agent Goal Hijack | `ALR01`, `ALR04`, `ALR05` | `AG003`, `PRM001`, `PRM002`, `ALR01-S01` |
-| ASI02 | Tool Misuse and Exploitation | `ALR02`, `ALR03`, `ALR04`, `ALR06`, `ALR07`, `ALR09`, `ALR12` | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003`, `ALR06-S02`, `ALR12-S01` |
-| ASI03 | Identity and Privilege Abuse | `ALR03`, `ALR07`, `ALR09`, `ALR10` | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003`, `ALR03-S01` |
+| ASI01 | Agent Goal Hijack | `ALR01`, `ALR04`, `ALR05` | `AG003`, `PRM001`, `PRM002`, `ALR01-S01`, `ALR01-S02` |
+| ASI02 | Tool Misuse and Exploitation | `ALR02`, `ALR03`, `ALR04`, `ALR06`, `ALR07`, `ALR09`, `ALR12` | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003`, `ALR06-S02`, `ALR07-S01`, `ALR12-S01` |
+| ASI03 | Identity and Privilege Abuse | `ALR03`, `ALR07`, `ALR09`, `ALR10` | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003`, `ALR03-S01`, `ALR07-S01` |
 | ASI04 | Agentic Supply Chain Vulnerabilities | `ALR02`, `ALR03`, `ALR04`, `ALR10`, `ALR11` | `SEC001`, `DEP001`, `ALR11-S01` |
 | ASI05 | Unexpected Code Execution (RCE) | `ALR06`, `ALR07`, `ALR09` | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `ALR06-S01`, `ALR06-S02` |
 | ASI06 | Memory & Context Poisoning | `ALR13` | `ALR13-S01`, `ALR13-S02` (partial) |
@@ -73,6 +73,7 @@ src/agent_latch/
   oversight.py    # AG006 human approval disabled (ASI09), AG007 unbounded agent loops (ASI08)
   memory.py       # ALR13: untrusted memory writes (ASI06), memory shared across sessions
   endpoints.py    # ALR12-S01 plaintext endpoints, ALR03-S01 server bound to all interfaces (ASI07)
+  agent_wiring.py # ALR07-S01 handoff to a more privileged agent, ALR01-S02 unattached guardrail
   resilience.py   # ALR08-S01 missing timeout, ALR08-S02 unbounded retry (ASI08)
   rogue.py        # ALR14: self-modification, persistence, runtime installs (ASI10)
   sandbox.py      # ALR06 unsafe deserialization and unsandboxed code, ALR11-S01 trust_remote_code
@@ -118,6 +119,7 @@ tests/test_alr04.py            # ALR04 baseline against the synthetic normalized
 tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
 tests/runtime_fixtures/        # demo-server wrapper, plus the ALR04 event dataset and expected outcomes
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
+examples/openai-agents/        # insecure OpenAI Agents SDK project (tested) + runtime proxy example
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
 action.yml                     # composite GitHub Action (isolated venv, SARIF path rewrite, summary)
@@ -206,13 +208,15 @@ Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown
 | `PRM001` | `ALR01` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | prompt-injection signatures in prompts |
 | `PRM002` | `ALR01` | `prompts.py` (via `agent_code.py`, `rules.py`, `manifest.py`) | user-input placeholder in a system prompt |
 | `ALR01-S01` | `ALR01` | `prompts.py` | invisible, bidi, or zero-width characters in a prompt |
+| `ALR01-S02` | `ALR01` | `agent_wiring.py` | guardrail defined but never attached to an agent |
 | `ALR03-S01` | `ALR03` | `endpoints.py` | agent or MCP server bound to every interface |
 | `ALR06-S01` | `ALR06` | `sandbox.py` | unsafe deserialization (`yaml.load`, `pickle`, `torch.load`, dangerous loader options) |
 | `ALR06-S02` | `ALR06` | `sandbox.py` | model-written code runs without a sandbox |
+| `ALR07-S01` | `ALR07` | `agent_wiring.py` | handoff to an agent holding unapproved high-risk tools the caller lacks |
 | `ALR08-S01` | `ALR08` | `resilience.py` | outbound HTTP call without a timeout |
 | `ALR08-S02` | `ALR08` | `resilience.py` | retry without a limit |
 | `ALR11-S01` | `ALR11` | `sandbox.py` | `trust_remote_code=True` on a model or dataset loader |
-| `ALR12-S01` | `ALR12` | `endpoints.py` | plaintext `http://` or `ws://` endpoint |
+| `ALR12-S01` | `ALR12` | `endpoints.py` | plaintext `http://` or `ws://` endpoint (keyword or `params={"url": ...}`) |
 | `ALR13-S01` | `ALR13` | `memory.py` | web/tool output written to memory without validation |
 | `ALR13-S02` | `ALR13` | `memory.py` | memory shared across sessions (module-level store) |
 | `ALR14-S01` | `ALR14` | `rogue.py` | agent writes to its own prompts or settings |

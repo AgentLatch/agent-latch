@@ -95,6 +95,8 @@ GATES: tuple[Gate, ...] = (
             ("ALR01-S01", "static",
              ("Invisible or direction-control characters hide instructions from the reviewer "
               "while the model still reads them")),
+            ("ALR01-S02", "static",
+             "A guardrail that is never attached lets user input reach the agent unchecked"),
         ),
     ),
     Gate(
@@ -170,6 +172,8 @@ GATES: tuple[Gate, ...] = (
              "The tool has no scope limit, so the agent holds full shell or file access"),
             ("AGENTLATCH-MAN002", "manifest",
              "The manifest grants everything instead of what the tool needs"),
+            ("ALR07-S01", "static",
+             "A handoff lets anyone talking to one agent reach another agent's riskier tools"),
         ),
     ),
     Gate(

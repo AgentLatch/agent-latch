@@ -33,9 +33,11 @@ ASI_CATEGORIES: dict[str, str] = {
 # Keep in sync with the rules and with the coverage table in AGENTS.md.
 RULE_CATEGORIES: dict[str, tuple[str, ...]] = {
     "ALR01-S01": ("ASI01",),
+    "ALR01-S02": ("ASI01",),
     "ALR03-S01": ("ASI03", "ASI07"),
     "ALR06-S01": ("ASI05",),
     "ALR06-S02": ("ASI05", "ASI02"),
+    "ALR07-S01": ("ASI03", "ASI02"),
     "ALR08-S01": ("ASI08",),
     "ALR08-S02": ("ASI08",),
     "ALR11-S01": ("ASI04",),

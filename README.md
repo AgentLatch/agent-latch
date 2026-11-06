@@ -434,9 +434,11 @@ sequenceDiagram
 | `PRM001` | `ALR01` | Prompt-injection signatures in prompts in code, YAML, prompt template files, and manifests | ASI01 Agent Goal Hijack |
 | `PRM002` | `ALR01` | User-input placeholder interpolated into a system prompt | ASI01 Agent Goal Hijack |
 | `ALR01-S01` | `ALR01` | Invisible, bidi, or zero-width characters in a prompt | ASI01 Agent Goal Hijack |
+| `ALR01-S02` | `ALR01` | Guardrail defined but never attached to an agent | ASI01 Agent Goal Hijack |
 | `ALR03-S01` | `ALR03` | Agent or MCP server bound to every interface (`host="0.0.0.0"`) | ASI03 Identity and Privilege Abuse; ASI07 |
 | `ALR06-S01` | `ALR06` | Unsafe deserialization (`yaml.load` without a safe loader, `pickle`, `torch.load` without `weights_only`) | ASI05 Unexpected Code Execution (RCE) |
 | `ALR06-S02` | `ALR06` | Model-written code runs without a sandbox (`use_docker=False`, `code_execution_mode="unsafe"`, local executor) | ASI05 Unexpected Code Execution (RCE); ASI02 |
+| `ALR07-S01` | `ALR07` | Handoff to an agent with riskier tools the caller lacks | ASI03 Identity and Privilege Abuse; ASI02 |
 | `ALR08-S01` | `ALR08` | Outbound HTTP call without a timeout | ASI08 Cascading Failures |
 | `ALR08-S02` | `ALR08` | Unbounded retry (`@retry` without `stop`, `Retry(total=None)`, `max_retries=None`) | ASI08 Cascading Failures |
 | `ALR11-S01` | `ALR11` | Model or dataset loaded with `trust_remote_code=True` | ASI04 Agentic Supply Chain Vulnerabilities |
@@ -457,9 +459,9 @@ How the scanner's rules map to the [OWASP Top 10 for Agentic Applications 2026](
 
 | ID | Category | Coverage | Rules |
 |---|---|---|---|
-| ASI01 | Agent Goal Hijack | ✅ checks | `AG003`, `PRM001`, `PRM002`, `ALR01-S01` |
-| ASI02 | Tool Misuse and Exploitation | ✅ checks | `PY001`–`PY003`, `AG001`, `AG002`, `AG004`–`AG006`, `MAN001`–`MAN003`, `ALR06-S02`, `ALR12-S01` |
-| ASI03 | Identity and Privilege Abuse | ✅ checks | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`–`MAN003`, `ALR03-S01` |
+| ASI01 | Agent Goal Hijack | ✅ checks | `AG003`, `PRM001`, `PRM002`, `ALR01-S01`, `ALR01-S02` |
+| ASI02 | Tool Misuse and Exploitation | ✅ checks | `PY001`–`PY003`, `AG001`, `AG002`, `AG004`–`AG006`, `MAN001`–`MAN003`, `ALR06-S02`, `ALR07-S01`, `ALR12-S01` |
+| ASI03 | Identity and Privilege Abuse | ✅ checks | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`–`MAN003`, `ALR03-S01`, `ALR07-S01` |
 | ASI04 | Agentic Supply Chain Vulnerabilities | ✅ checks | `SEC001`, `DEP001`, `ALR11-S01` |
 | ASI05 | Unexpected Code Execution (RCE) | ✅ checks | `PY001`, `PY002`, `AG002`, `AG004`–`AG006`, `MAN001`, `ALR06-S01`, `ALR06-S02` |
 | ASI06 | Memory & Context Poisoning | 🟨 partial | `ALR13-S01`, `ALR13-S02` |
@@ -482,6 +484,7 @@ Every scan report ends with the same ASI01–ASI10 summary and marks the uncover
 | [Gates](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md) | The security outcomes AgentLatch checks, which rules and runtime checks belong to each, and their OWASP and EU AI Act references |
 | [Audit ledger](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md) | Making the runtime log tamper-evident: the hash chain, anchors, the six verdicts, and what it cannot catch. Then [setup](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-setup.md), [reference](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-reference.md) and [operations](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md) |
 | [Vulnerable example](https://github.com/AgentLatch/agent-latch/tree/main/examples/vulnerable-agent) | A demo project and the findings it should produce |
+| [OpenAI Agents SDK example](https://github.com/AgentLatch/agent-latch/tree/main/examples/openai-agents) | Function tools, handoffs, guardrails and MCP servers, the findings they produce, and recording a run through the runtime proxy with `MCPServerStdio` |
 | [Runtime proxy for MCP (preview)](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md) | Install, connecting an app, what is recorded, `import-logs` and `demo`, limits. Optional local SQLite: [Store events in SQLite](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#store-events-in-sqlite) |
 | [MCP gateway](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/README.md) | A local MCP gateway for running agents against real tools, with [step-by-step setup](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md) for Claude Code, Claude Desktop, Cursor, Codex CLI, and HTTP clients, and [live runs through the runtime proxy](https://github.com/AgentLatch/agent-latch/blob/main/mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) |
 
@@ -536,7 +539,7 @@ It detects three static signals: instruction-override phrases such as "ignore al
 
 ### Which AI agent frameworks does it support?
 
-The source rules work on any Python code. Framework-specific checks cover CrewAI delegation, LangChain's dataframe agent and web/search tools (Tavily, DuckDuckGo, WebBaseLoader, and others), and data flowing through LangGraph state. Manifest and prompt checks are framework-agnostic. JavaScript and TypeScript agents are not scanned yet. The runtime proxy works with any agent or app that talks to MCP servers, whatever language it is written in.
+The source rules work on any Python code. Framework-specific checks cover CrewAI delegation, LangChain's dataframe agent and web/search tools (Tavily, DuckDuckGo, WebBaseLoader, and others), data flowing through LangGraph state, and the OpenAI Agents SDK (`@function_tool`, handoffs to agents with riskier tools, unattached guardrails, `MCPServerStreamableHttp` URLs, `max_turns`). Manifest and prompt checks are framework-agnostic. JavaScript and TypeScript agents are not scanned yet. The runtime proxy works with any agent or app that talks to MCP servers, whatever language it is written in.
 
 ### How do I check AI agent security in CI or GitHub Actions?
 
