@@ -1,0 +1,172 @@
+name: Container images
+
+# Builds the two images from the Dockerfile and smoke-tests them on every change that can affect
+# them. Publishing to GitHub Container Registry happens only on a GitHub release (tags X.Y.Z,
+# X.Y and latest) or a manual run (tag sha-<commit>), with signed build provenance and an SBOM.
+# Each pushed image is run by digest on amd64 and arm64 before it is attested:
+#   ghcr.io/agentlatch/agent-latch          static scanner
+#   ghcr.io/agentlatch/agent-latch-runtime  MCP runtime proxy (preview)
+# Actions are pinned to commit SHAs; Dependabot keeps them and the base image digest current.
+on:
+  pull_request:
+    paths: &image-paths
+      - Dockerfile
+      - .dockerignore
+      - docker/**
+      - src/**
+      - pyproject.toml
+      - .github/workflows/images.yml
+  push:
+    branches: [main]
+    paths: *image-paths
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and smoke-test both images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the scanner image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          target: scanner
+          tags: agent-latch:test
+          load: true
+          cache-from: type=gha,scope=scanner
+          cache-to: type=gha,scope=scanner,mode=max
+      - name: Build the runtime image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          target: runtime
+          tags: agent-latch-runtime:test
+          load: true
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,scope=runtime,mode=max
+      - name: Smoke-test the scanner image
+        run: |
+          set -u
+          docker run --rm agent-latch:test --version
+          test "$(docker run --rm --entrypoint id agent-latch:test -u)" = 10001
+          # The demo project has high findings: exit 1 with --fail-on high, 0 without.
+          set +e
+          docker run --rm -v "$PWD/examples/vulnerable-agent:/src:ro" agent-latch:test \
+            scan . --plain --fail-on high
+          code=$?
+          set -e
+          test "$code" = 1
+          mkdir -m 777 out
+          docker run --rm -v "$PWD/examples/vulnerable-agent:/src:ro" -v "$PWD/out:/out" \
+            agent-latch:test scan . --format sarif --output /out/agent-latch.sarif
+          test -s out/agent-latch.sarif
+      - name: Smoke-test the runtime image
+        run: |
+          set -eu
+          docker run --rm agent-latch-runtime:test --version
+          test "$(docker run --rm --entrypoint id agent-latch-runtime:test -u)" = 10001
+          # Records a synthetic MCP session through the proxy, then imports it and runs the gates.
+          docker run --rm agent-latch-runtime:test demo
+      - name: Check that the images hold no Node.js or compiler
+        run: |
+          for image in agent-latch:test agent-latch-runtime:test; do
+            if docker run --rm --entrypoint sh "$image" -c 'command -v node npm npx gcc cc'; then
+              echo "::error::$image contains a tool it should not"
+              exit 1
+            fi
+          done
+
+  publish:
+    name: Publish ${{ matrix.image }} to GHCR
+    needs: test
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io
+      id-token: write # sign the build provenance
+      attestations: write # store the build provenance
+    strategy:
+      matrix:
+        include:
+          - target: scanner
+            image: agent-latch
+          - target: runtime
+            image: agent-latch-runtime
+    steps:
+      - name: Check out code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check that the release tag matches the package version
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          pyproject=$(python3 -I -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          package=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/agent_latch/__init__.py)
+          echo "tag=$TAG pyproject=$pyproject __init__=$package"
+          test "$TAG" = "v$pyproject" && test "$pyproject" = "$package"
+      - name: Image name (GHCR needs lowercase)
+        id: name
+        env:
+          OWNER: ${{ github.repository_owner }}
+          IMAGE: ${{ matrix.image }}
+        run: echo "image=ghcr.io/${OWNER,,}/${IMAGE}" >> "$GITHUB_OUTPUT"
+      - name: Set up QEMU for arm64
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ steps.name.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=long,enable=${{ github.event_name == 'workflow_dispatch' }}
+          flavor: latest=${{ github.event_name == 'release' }}
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          # Reuse the layers the test job built and tested (amd64). arm64 is built here.
+          cache-from: type=gha,scope=${{ matrix.target }}
+      - name: Smoke-test the pushed image on both platforms
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          for platform in linux/amd64 linux/arm64; do
+            docker run --rm --platform "$platform" "$IMAGE@$DIGEST" --version
+            test "$(docker run --rm --platform "$platform" --entrypoint id "$IMAGE@$DIGEST" -u)" = 10001
+          done
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ${{ steps.name.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

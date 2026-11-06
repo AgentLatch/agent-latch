@@ -5,6 +5,7 @@
 Key facts:
 
 - Install: `pipx install agentlatch-security` or `python -m pip install agentlatch-security` (Python 3.11+); add the `[runtime]` extra for the MCP proxy and `[audit]` for `--dependencies`. The PyPI package is `agentlatch-security` (it provides the `agent-latch` command); `agentlatch` on PyPI is an unrelated project.
+- Containers: `ghcr.io/agentlatch/agent-latch` (scanner) and `ghcr.io/agentlatch/agent-latch-runtime` (MCP proxy), non-root, pinned dependencies, no Node.js.
 - Scan: `agent-latch scan /path/to/agent`; audit a manifest with `--config agent-manifest.yaml`; fail CI with `--fail-on high`; a manifest is optional, and every folder and text file is scanned. Suppressions inside the scanned project (`.agent-latch-ignore`, inline ignore comments) apply only with `--project-ignores`.
 - GitHub Action: `uses: AgentLatch/agent-latch@v0.5.0` (https://github.com/marketplace/actions/agentlatch-scan).
 - Frameworks with specific checks: CrewAI, LangChain, LangGraph, AutoGen, smolagents, and common memory and vector-store clients. Generic rules apply to any Python code. JavaScript/TypeScript are not scanned.
@@ -22,6 +23,7 @@ Key facts:
 - [Detection rules](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md): every rule, its OWASP mapping, and known blind spots
 - [Gates](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md): security outcomes (`ALR01`–`ALR15`); every rule and runtime check belongs to one gate, reported as `PY001 (ALR06)`
 - [Audit ledger](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md): making the runtime log tamper-evident — hash chain, anchors, the six verdicts, limits; then [setup](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-setup.md), [reference](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-reference.md), [operations](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md)
+- [Container images](https://github.com/AgentLatch/agent-latch/blob/main/docs/docker.md): scanner and runtime images, `docker run -i` for MCP apps, limits, verifying an image; then [setup](https://github.com/AgentLatch/agent-latch/blob/main/docs/docker-setup.md)
 - [Runtime proxy (preview)](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md): install, connecting an MCP client, what is recorded, limits
 
 ## Examples

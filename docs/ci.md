@@ -136,6 +136,8 @@ agent-latch:
     paths: [agent-latch.sarif]
 ```
 
+A CI system that runs containers can use the scanner image `ghcr.io/agentlatch/agent-latch` instead of installing from PyPI. See [Container images](docker.md#use-the-scanner-image-in-ci).
+
 ## Known findings and false positives
 
 The pre-commit hook always reads `.agent-latch-ignore` from the scanned directory. The GitHub Action reads it only with `project-ignores: "true"`, and other CI needs `--project-ignores`. With those set, one committed file keeps local and CI results consistent:
