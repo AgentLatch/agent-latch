@@ -160,9 +160,16 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           set -eu
-          for platform in linux/amd64 linux/arm64; do
-            docker run --rm --platform "$platform" "$IMAGE@$DIGEST" --version
-            test "$(docker run --rm --platform "$platform" --entrypoint id "$IMAGE@$DIGEST" -u)" = 10001
+          # The pushed digest is a multi-platform index. Docker refuses to pull one index digest
+          # for two platforms ("cannot overwrite digest"), so run each platform's own manifest.
+          index=$(docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw)
+          for arch in amd64 arm64; do
+            manifest=$(echo "$index" | jq -r --arg arch "$arch" \
+              '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest')
+            test -n "$manifest"
+            echo "linux/$arch -> $manifest"
+            docker run --rm --platform "linux/$arch" "$IMAGE@$manifest" --version
+            test "$(docker run --rm --platform "linux/$arch" --entrypoint id "$IMAGE@$manifest" -u)" = 10001
           done
       - name: Attest build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
