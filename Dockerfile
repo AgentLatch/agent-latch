@@ -7,15 +7,14 @@
 #
 # How they are hardened:
 # - The Python base image is pinned by digest, so a build cannot silently pick up a changed image.
+#   It is written out in each FROM line (not an ARG) so Dependabot can update it. Keep both equal.
 # - Dependencies come from hash-pinned locks (docker/requirements-*.txt, made by
 #   scripts/update-docker-locks.sh) as prebuilt wheels only: no package's setup code runs at build.
 # - The final images hold no compiler, no source tree and no Node.js, and run as a non-root user.
 # docs/docker.md explains how to run them.
 
-ARG PYTHON_IMAGE=python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1
-
 # ---- build: package AgentLatch itself as a wheel. Thrown away after the build. ---------------
-FROM ${PYTHON_IMAGE} AS build
+FROM python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1 AS build
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 COPY pyproject.toml README.md LICENSE ./
@@ -23,7 +22,7 @@ COPY src ./src
 RUN pip wheel --no-deps --wheel-dir /wheels .
 
 # ---- base: what both images share ------------------------------------------------------------
-FROM ${PYTHON_IMAGE} AS base
+FROM python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1 AS base
 LABEL org.opencontainers.image.source="https://github.com/AgentLatch/agent-latch" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.vendor="AgentLatch"

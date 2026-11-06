@@ -47,7 +47,7 @@ workflow actions ([`.github/dependabot.yml`](../.github/dependabot.yml)).
 
 ## Changing the Python version
 
-The base image is pinned by digest in the `PYTHON_IMAGE` argument at the top of the `Dockerfile`.
+The base image is pinned by digest in the two `FROM` lines of the `Dockerfile`, which Dependabot updates together.
 The locks are resolved for the same Python version (`--python-version 3.13` in
 [`scripts/update-docker-locks.sh`](../scripts/update-docker-locks.sh)). Change both together, then
 run the script.
