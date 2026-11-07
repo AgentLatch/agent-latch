@@ -14,6 +14,14 @@ on:
         type: choice
         options: [testpypi, pypi]
         default: testpypi
+  # Dry run on pull requests that change how a release is built or handed to the publisher, so a
+  # bump of an action used here (Dependabot) is tested before a release depends on it. A pull
+  # request builds, uploads and downloads the distributions but never publishes: the publish job
+  # below must keep its `pull_request` guard.
+  pull_request:
+    paths:
+      - .github/workflows/publish.yml
+      - pyproject.toml
 
 permissions:
   contents: read
@@ -56,8 +64,32 @@ jobs:
           name: dist
           path: dist/
 
+  # Pull requests only: take the same steps the publish job takes before uploading, and check
+  # that the files that arrive are the ones the build produced. Nothing is published.
+  verify-handoff:
+    name: Check the download step (dry run, no publish)
+    if: github.event_name == 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Check the downloaded distributions
+        run: |
+          set -eu
+          ls -l dist/
+          test -n "$(ls dist/*.whl 2>/dev/null)"
+          test -n "$(ls dist/*.tar.gz 2>/dev/null)"
+          python3 -m pip install --user twine
+          python3 -m twine check --strict dist/*
+
   publish:
     name: Publish to ${{ github.event_name == 'release' && 'pypi' || inputs.repository }}
+    # Never publish from a pull request.
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:
