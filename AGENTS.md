@@ -128,7 +128,7 @@ docker/requirements-*.txt      # hash-pinned image dependency locks; regenerate 
 .agent-latch-ignore            # suppressions for the repo's own self-scan
 .github/workflows/tests.yml    # CI: tests + ruff (py3.11–3.14), runtime tests, action smoke test, self-scan
 .github/workflows/code-quality.yml # CI: ruff check across the repo, npm audit --audit-level=high for web/
-.github/workflows/publish.yml  # PyPI release via Trusted Publishing (on GitHub release; manual run → TestPyPI)
+.github/workflows/publish.yml  # PyPI release via Trusted Publishing (on GitHub release; manual run → TestPyPI; PRs get a dry run that never publishes)
 .github/workflows/images.yml   # build + smoke-test both images on PRs; push to GHCR on release (provenance, SBOM)
 .github/dependabot.yml         # weekly updates: base image digest, action SHAs, image dependency locks
 MANIFEST.in                    # sdist extras (test fixtures the shipped tests read)
