@@ -17,7 +17,7 @@ You do not need Python. Everything runs inside the two images:
 |---|---|
 | Docker Desktop (macOS, Windows) or Docker Engine (Linux) | Runs the images |
 | About 1 GB of free disk space | The images are about 270 MB and 340 MB, and building them also keeps a build cache |
-| `git`, only if you build the images yourself | Images are published from GitHub releases after v0.5.0. Until then, you build them from this repository (Step 2) |
+| `git`, only if you build the images yourself | Images are published from GitHub releases, starting with v0.5.1. You only build them yourself for an unreleased commit (Step 2) |
 
 ## Step 1 — Install Docker
 
