@@ -13,7 +13,7 @@ Guidance for AI coding agents (and humans) working in this repository.
 
 It reports findings as a terminal table / plain text, JSON, or SARIF, and runs as a CLI, a pre-commit hook, or a composite GitHub Action. Findings map to the OWASP Top 10 for Agentic Applications (informational only).
 
-Status: **early proof of concept (v0.4.0)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
+Status: **early proof of concept (v0.5.1)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
 
 ## Design principle: the scanned project is untrusted
 
@@ -47,7 +47,7 @@ AgentLatch is often run on agents someone else wrote, so nothing inside the scan
 | ASI07 | Insecure Inter-Agent Communication | `ALR03`, `ALR12` | `ALR03-S01`, `ALR12-S01` (partial) |
 | ASI08 | Cascading Failures | `ALR08` | `AG007`, `ALR08-S01`, `ALR08-S02` (partial) |
 | ASI09 | Human-Agent Trust Exploitation | `ALR09` | `AG004`, `AG006`, `MAN001` (partial) |
-| ASI10 | Rogue Agents | `ALR14` | `ALR14-S01`, `ALR14-S02`, `ALR14-S03` (partial) |
+| ASI10 | Rogue Agents | `ALR14`, `ALR15` | `ALR14-S01`, `ALR14-S02`, `ALR14-S03`, `ALR15-R01` (partial) |
 
 Keep this table up to date whenever a rule is added or its OWASP mapping changes.
 
@@ -58,6 +58,7 @@ A gate is a security outcome (for example `ALR09` Human approval for sensitive a
 - A detector's OWASP IDs must be a subset of its gate's. A test checks this, and that every rule in `RULE_CATEGORIES` and every ALR04 rule ID has a gate (or is listed in `DIAGNOSTICS`).
 - `docs/GATES.md` is generated: `python -I -m agent_latch.catalog > docs/GATES.md`. A test fails when it is out of date.
 - Framework mappings are informational. Never claim compliance with the EU AI Act, ISO/IEC 42001 or OWASP.
+- `ALR15` (tamper-evident audit trail, `ASI10`) is verified by `runtime/ledger/verify.py`, not by a module in `gates/`. Its detector is `ALR15-R01`. A gate whose evidence is a whole-file property, like this one, belongs in the catalog and in the report, not in the per-event plugin loader.
 - `agent_latch/gates/` holds runtime gate plugins only (one module per gate, `GATE_ID` = the gate ID). Keep the catalog out of that package: the importer loads every module in it as a plugin.
 
 ## Repository layout
@@ -98,12 +99,19 @@ src/agent_latch/
     importer.py   # RuntimeLogImporter: tails logs, writes events, runs gates; optional EventStore
     sqlite_store.py # SQLiteEventStore: first EventStore, local SQLite via stdlib sqlite3 (`--database`)
     results.py    # agent-latch --runtime-result: findings table from gate-results.csv, for every gate
+    ledger/       # ALR15: tamper-evident hash chain over trace records, plus anchor points (stdlib, local)
+      canonical.py # stable JSON bytes: the same value always hashes to the same digest
+      chain.py    # block format, digest, Ledger (resumes from the last block), iter_blocks
+      anchor.py   # AnchorPoint and FileAnchor; the only destination that ships
+      verify.py   # verify_ledger: intact, unanchored, tampered, deleted, rewritten, missing
+      report.py   # audit table rows (terminal and plain) and SARIF results for the verdict
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
     demo_server.py # synthetic MCP server for `demo` and the runtime tests [needs fastmcp]
     demo.py       # `demo`: drives demo_server through the proxy (`--scenario secret-leak` for ALR10), then imports the logs [needs fastmcp]
     cli.py        # agent-latch-runtime console script (`proxy`, `import-logs`, `demo`)
 tests/test_scanner.py          # scanner unit tests (synthetic fixtures via tmp_path)
+tests/test_ledger.py           # ledger: chain, anchor, and every tamper case (edit, delete, truncate, rebuild)
 tests/test_runtime.py          # runtime tests that need no FastMCP
 tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests (no FastMCP)
 tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
@@ -114,11 +122,16 @@ examples/vulnerable-agent/     # deliberately insecure demo project + expected S
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
 action.yml                     # composite GitHub Action (isolated venv, SARIF path rewrite, summary)
+Dockerfile                     # two images: --target scanner (agent-latch), --target runtime (agent-latch-runtime)
+.dockerignore                  # allow-list build context: pyproject.toml, README.md, LICENSE, src/, docker/ only
+docker/requirements-*.txt      # hash-pinned image dependency locks; regenerate with scripts/update-docker-locks.sh
 .pre-commit-hooks.yaml         # pre-commit hook definition (`agent-latch scan --fail-on high`)
 .agent-latch-ignore            # suppressions for the repo's own self-scan
 .github/workflows/tests.yml    # CI: tests + ruff (py3.11–3.14), runtime tests, action smoke test, self-scan
 .github/workflows/code-quality.yml # CI: ruff check across the repo, npm audit --audit-level=high for web/
-.github/workflows/publish.yml  # PyPI release via Trusted Publishing (on GitHub release; manual run → TestPyPI)
+.github/workflows/publish.yml  # PyPI release via Trusted Publishing (on GitHub release; manual run → TestPyPI; PRs get a dry run that never publishes)
+.github/workflows/images.yml   # build + smoke-test both images on PRs; push to GHCR on release (provenance, SBOM)
+.github/dependabot.yml         # weekly updates: base image digest, action SHAs, image dependency locks
 MANIFEST.in                    # sdist extras (test fixtures the shipped tests read)
 llms.txt                       # LLM-oriented project summary
 ```
@@ -151,10 +164,10 @@ agent-latch [scan] [path] [--config MANIFEST] [--exclude PATH]... [--ignore-file
             [--project-ignores] [--dependencies] [-i/--interactive]
             [--format text|json|sarif] [--output FILE] [--plain] [--min-severity LEVEL]
             [--fail-on none|low|medium|high|critical]
-            [--runtime-result [CSV]] [-V]
+            [--runtime-result [CSV]] [--ledger FILE] [--anchor PATH] [--ledger-rows N] [-V]
 
 agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
-            [--payloads FILE] [--payload-max-chars N] [--quiet]
+            [--payloads FILE] [--payload-max-chars N] [--ledger FILE] [--quiet]
             [--http HOST:PORT] (--upstream-url URL | -- SERVER COMMAND...)
 agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
             [--events-csv FILE] [--output-csv FILE] [--normalized-out FILE]
@@ -166,7 +179,9 @@ agent-latch-runtime demo [--dir DIR] [--scenario default|secret-leak]
 
 `--database FILE` is the operator's choice of a local store. It saves each normalized event in a SQLite file (`SQLiteEventStore`) and is off when omitted. The importer talks to that file only through the `EventStore` contract in `importer.py` (`open`, `save`, `close`). SQLite is the first implementation, using the standard-library `sqlite3` module, so it adds no dependency and makes no network request. A later destination (a warehouse or an opt-in trace exporter) implements the same contract and is selected the same way: by a flag on `import-logs`, not by a default. The database can hold payload data, so a new file is created with mode `0600` where the platform supports it. Keep it local. Do not add a vendor client as a required dependency.
 
-Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them.
+`--ledger FILE` (with `--trace`) seals every trace record into a local hash chain, and `anchor` publishes one short digest to a path the operator chooses. `verify` and `agent-latch --runtime-result --ledger FILE [--anchor PATH]` report `intact`, `unanchored`, `tampered`, `deleted`, `rewritten` or `missing`. `verify PATH` finds the trace beside a ledger by name, and `verify FOLDER [--all]` checks every ledger below it and prints one row each. The report adds a per-record audit table (`--ledger-rows N`, default 20, problem records always shown), and `--runtime-result ... --format sarif` exports the verdict (rule `ALR15-R01`) with the runtime findings; `--format json` is refused there. Standard library only, no network, never in the request path: an append failure warns once on stderr and the call continues. The verifier lives in `runtime/ledger/`, not in `gates/` (that package is for per-event plugins). Docs: `docs/ledger.md` (model), `docs/ledger-setup.md`, `docs/ledger-reference.md`, `docs/ledger-operations.md`.
+
+Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them. One deliberate addition: a runtime report with `--ledger` exits `1` when the trail fails verification even with `--fail-on none` (log integrity is not a severity threshold), and `2` when the ledger path is missing; a run without `--ledger` is unchanged.
 
 ## Rules
 
@@ -218,6 +233,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 
 ## Conventions
 
+- Container images: keep them free of Node.js, compilers and the source tree, running as user `10001`, with the base image pinned by digest and dependencies installed from the hash-pinned locks with `--only-binary=:all:`. A server that needs another runtime goes in its own container or a user-built derived image (`docs/docker.md`).
 - Keep runtime dependencies minimal: `rich`, `rich-argparse`, `PyYAML`. `pip-audit` is an optional `[audit]` extra, and pinned `fastmcp` is the optional `[runtime]` extra (`import agent_latch.runtime` must not import it). Do not add new runtime dependencies without strong justification.
 - Use `from __future__ import annotations`, type hints, and `pathlib.Path` throughout. Use frozen dataclasses for value types.
 - Rules are static heuristics. Parse with `ast` and never import or execute scanned code. Load YAML only with `yaml.SafeLoader` (see `manifest._LineLoader`).
@@ -260,16 +276,24 @@ Before building a check, look at how established open-source tools handle it. Bo
 - Add `docs/release-notes/vX.Y.Z.md`, and update version references in `README.md`, `docs/ci.md`, and `llms.txt` (for example `AgentLatch/agent-latch@vX.Y.Z` and `agentlatch-security==X.Y.Z`).
 - The package is published to PyPI as `agentlatch-security` (PyPI rejects `agent-latch` as too similar to an unrelated `agentlatch` project). The commands stay `agent-latch` and `agent-latch-runtime`, and the import stays `agent_latch`. It is published by `.github/workflows/publish.yml` using Trusted Publishing (no API token). Run it manually first to publish to TestPyPI and check `pipx install` from there. Publishing a GitHub release tagged `vX.Y.Z` then uploads to PyPI; the workflow fails if the tag does not match both version files.
 - PyPI versions cannot be replaced or reused, even after deletion, so fix problems with a new patch release.
+- The same GitHub release also publishes both container images to GHCR (`.github/workflows/images.yml`, tags `X.Y.Z`, `X.Y`, `latest`). When `pyproject.toml` dependencies change, run `scripts/update-docker-locks.sh` and commit `docker/requirements-*.txt` in the same change, or the images keep the old dependencies.
 
 ## Documentation map
 
-- `README.md`: overview, quick start, FAQ, limitations, roadmap
+- `README.md`: overview, install, the five how-to sections (scan, CI, runtime monitor, ledger, connect an app), FAQ, limitations, roadmap
 - `docs/getting-started.md`: install (incl. Windows), options, ignores, output formats, exit codes, troubleshooting
 - `docs/agent-manifest.md`: manifest schema and checks
 - `docs/ci.md`: pre-commit, GitHub Action inputs and outputs, other CI
 - `docs/RULES.md`: per-rule detection, OWASP mapping, blind spots
 - `docs/GATES.md`: gates, their detectors and framework references (generated from `catalog.py`)
+- `docs/docker.md`: container images (scanner and runtime): running them, connecting an app over `docker run -i`, limits (no Node.js, loopback-only HTTP), verifying, publishing
+- `docs/docker-setup.md`: step-by-step setup of the images: installing Docker, building or pulling them, a first scan, connecting Claude Desktop, updating and removing, troubleshooting
+- `docker/README.md`: the image dependency locks, the Dockerfile stages, updating the locks and the Python version, checking a change locally
 - `docs/runtime.md`: runtime proxy for MCP (preview, monitor only): install, connecting an app, supported clients, what is recorded, limits
+- `docs/ledger.md`: the tamper-evident audit ledger — the chain, anchors, the six verdicts, what it catches and cannot
+- `docs/ledger-setup.md`: ten-minute setup, where to put the anchor, wiring the report and CI, troubleshooting
+- `docs/ledger-reference.md`: on-disk formats, digest inputs, Python API, CLI and exit codes, adding an anchor destination
+- `docs/ledger-operations.md`: cost, anchor cadence, retention and rotation, incident runbook
 - `docs/clients/chatgpt.md`: ChatGPT reaches the proxy through OpenAI's Secure MCP Tunnel. Local apps use the config change in `docs/runtime.md`
 - `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions, including starting `import-logs --database` before a live CrewAI or Claude Desktop run; `mcp-server/README.md` is an overview that links to it
 - `CONTRIBUTING.md`, `SECURITY.md`, `llms.txt`

@@ -40,6 +40,8 @@ agent-latch-runtime proxy --help
 
 The `runtime` extra adds FastMCP; the scanner alone doesn't need it. From a clone of the repository, `python -m pip install -e ".[runtime]"` works too.
 
+Or use the container image `ghcr.io/agentlatch/agent-latch-runtime`; an app starts it with `docker run -i`. It holds no Node.js, so `npx` servers need a separate container or your own derived image. See [Container images](docker.md#runtime-image).
+
 - **Keep MCP servers out of this environment.** Run them the usual way (`uvx`, `npx`, their own virtual environment). Installing a server into AgentLatch's environment can break it: FastMCP may need a newer MCP library than the server was written for.
 - **Windows: keep the environment path short**, such as `$HOME\agentlatch-runtime`. FastMCP installs `pywin32`, whose deeply nested files can exceed Windows' 260-character path limit under a long folder (`WinError 206`). Alternatively, turn on long path support in Windows.
 
@@ -261,6 +263,30 @@ agent-latch --runtime-result
 That prints the same kind of table as `agent-latch scan`: severity, rule, location, OWASP category, and the finding. It reads every gate in the file, not only ALR04, and it lists findings only. A finding that sets `path` and `line` uses that location. Otherwise, when `entity.tool` matches a function in the project path (the positional argument, default `.`), the location is that function's docstring line, for example `mcp-server/tools/alr04_fixture_tools.py:14`. A tool that comes from a mounted server and has no function in the project is shown as `server/tool #event`. `--plain` prints text instead of the table. `--fail-on` applies to these rows the same way it applies to a scan. The default CSV is `runtime-logs/gate-results.csv`; pass another file as `--runtime-result FILE`.
 
 Restarting the importer skips events and results already in its output files, so rows and lines are not repeated. Malformed lines are logged and skipped. The importer does not block or modify MCP traffic. Its output files can hold payload data, so keep them local and access-controlled (they are created with mode `0600`; `runtime-logs/` is in `.gitignore`).
+
+## Tamper-evident audit ledger (preview)
+
+A trace file is only evidence if nobody can quietly rewrite it. `--ledger FILE` seals every trace record into a local hash chain, and `anchor` publishes one short digest where the agent cannot write, so an edit, a deletion or a full rebuild shows up when you verify.
+
+```sh
+agent-latch-runtime proxy --trace runtime-logs/trace.jsonl \
+  --ledger runtime-logs/trace.ledger.jsonl -- <server command>
+
+agent-latch-runtime anchor --ledger runtime-logs/trace.ledger.jsonl --to /mnt/audit/anchors.jsonl
+agent-latch-runtime verify --ledger runtime-logs/trace.ledger.jsonl \
+  --trace runtime-logs/trace.jsonl --anchor /mnt/audit/anchors.jsonl
+```
+
+`agent-latch --runtime-result FILE --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl` prints the verdict as the first thing in the report, in bold in a terminal:
+
+```
+AUDIT TRAIL TAMPERED — a record was altered; the log cannot be trusted.
+  #2: the block's digest does not match its content
+```
+
+The verdicts are `intact`, `unanchored`, `tampered`, `deleted`, `rewritten` and `missing`. A failed trail exits `1` even with `--fail-on none`; a missing ledger at a path you gave exits `2`. It is off unless you pass `--ledger`, it never blocks a call, it uses the standard library only, and it makes no network request. `--ledger` requires `--trace`.
+
+Start here: [the audit ledger](ledger.md) (the model and the verdicts), [setup](ledger-setup.md) (ten minutes, including where to put the anchor), [reference](ledger-reference.md) (formats and API) and [operations](ledger-operations.md) (schedule, retention, incidents). The gate is `ALR15`.
 
 ## Limits
 

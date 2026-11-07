@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 262" width="900" height="262" role="img" aria-labelledby="t d">
+  <title id="t">The scan, end to end</title>
+  <desc id="d">Source files are parsed with ast and line-aware YAML and never run, checked by static rules and taint analysis, mapped to OWASP Agentic categories ASI01 to ASI10, and reported as text, JSON or SARIF.</desc>
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .head { font-family: Syne, "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; font-weight: 800; }
+    .flow { stroke-dasharray: 6 6; animation: flow 1.2s linear infinite; }
+    @keyframes flow { to { stroke-dashoffset: -12; } }
+    @media (prefers-reduced-motion: reduce) { .flow { animation: none; } }
+  </style>
+  <defs>
+    <clipPath id="card"><rect width="900" height="262" rx="16"/></clipPath>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#7C3AED"/>
+    </marker>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="900" height="262" fill="#17161C"/>
+    <rect width="900" height="44" fill="#121211"/>
+    <line x1="0" y1="44" x2="900" y2="44" stroke="#ECE9E2" stroke-opacity=".1"/>
+    <text x="24" y="27" class="mono" font-size="11" letter-spacing="1.8" fill="#ECE9E2" fill-opacity=".55">FIG. 02 — THE SCAN, END TO END</text>
+    <circle cx="738" cy="23" r="4" fill="#7C3AED"/>
+    <text x="750" y="27" class="mono" font-size="10" letter-spacing="1.2" fill="#ECE9E2" fill-opacity=".55">LOCAL ONLY</text>
+
+    <!-- steps -->
+    <g class="head" text-anchor="middle">
+      <rect x="20" y="80" width="140" height="112" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="90" y="106" class="mono" font-size="12" font-weight="400" fill="#A78BFA">01</text>
+      <text x="90" y="132" font-size="16" fill="#ECE9E2">Source</text>
+      <text x="90" y="154" class="mono" font-size="10" font-weight="400" fill="#9C9A93">Python, YAML,</text>
+      <text x="90" y="169" class="mono" font-size="10" font-weight="400" fill="#9C9A93">prompts, manifests</text>
+
+      <rect x="200" y="80" width="140" height="112" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="270" y="106" class="mono" font-size="12" font-weight="400" fill="#A78BFA">02</text>
+      <text x="270" y="132" font-size="16" fill="#ECE9E2">Parse</text>
+      <text x="270" y="154" class="mono" font-size="10" font-weight="400" fill="#9C9A93">ast + line-aware</text>
+      <text x="270" y="169" class="mono" font-size="10" font-weight="400" fill="#9C9A93">YAML, never run</text>
+
+      <rect x="380" y="80" width="140" height="112" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="450" y="106" class="mono" font-size="12" font-weight="400" fill="#A78BFA">03</text>
+      <text x="450" y="132" font-size="16" fill="#ECE9E2">Rules</text>
+      <text x="450" y="154" class="mono" font-size="10" font-weight="400" fill="#9C9A93">static checks</text>
+      <text x="450" y="169" class="mono" font-size="10" font-weight="400" fill="#9C9A93">+ taint analysis</text>
+
+      <rect x="560" y="80" width="140" height="112" rx="12" fill="#1F1D26" stroke="#ECE9E2" stroke-opacity=".25"/>
+      <text x="630" y="106" class="mono" font-size="12" font-weight="400" fill="#A78BFA">04</text>
+      <text x="630" y="132" font-size="16" fill="#ECE9E2">Map</text>
+      <text x="630" y="154" class="mono" font-size="10" font-weight="400" fill="#9C9A93">OWASP Agentic</text>
+      <text x="630" y="169" class="mono" font-size="10" font-weight="400" fill="#9C9A93">ASI01–ASI10</text>
+
+      <rect x="740" y="80" width="140" height="112" rx="12" fill="#1F1D26" stroke="#7C3AED" stroke-opacity=".8" stroke-width="1.5"/>
+      <text x="810" y="106" class="mono" font-size="12" font-weight="400" fill="#A78BFA">05</text>
+      <text x="810" y="132" font-size="16" fill="#ECE9E2">Report</text>
+      <text x="810" y="154" class="mono" font-size="10" font-weight="400" fill="#9C9A93">text · JSON ·</text>
+      <text x="810" y="169" class="mono" font-size="10" font-weight="400" fill="#9C9A93">SARIF</text>
+    </g>
+
+    <!-- arrows -->
+    <g stroke="#7C3AED" stroke-width="1.5" fill="none" marker-end="url(#arrow)">
+      <path class="flow" d="M160 136 H198"/>
+      <path class="flow" d="M340 136 H378"/>
+      <path class="flow" d="M520 136 H558"/>
+      <path class="flow" d="M700 136 H738"/>
+    </g>
+
+    <text x="450" y="232" text-anchor="middle" class="mono" font-size="11" fill="#3FB67D">The scanner never imports or runs the code it checks.</text>
+  </g>
+  <rect x=".5" y=".5" width="899" height="261" rx="16" fill="none" stroke="#ECE9E2" stroke-opacity=".12"/>
+</svg>
