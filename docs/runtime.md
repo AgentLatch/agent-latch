@@ -1,6 +1,6 @@
 # Runtime proxy for MCP (preview)
 
-`agent-latch-runtime proxy` sits between an AI app and one MCP server and records the traffic: the tool list, every tool call and result, and prompt templates. **Preview, monitor only:** it passes every message through unchanged and never blocks anything. `import-logs` then runs ALR04, a preview check that reports findings for instruction-like content in tool definitions. The report lists findings only. Opt-in blocking is planned.
+`agent-latch-runtime proxy` sits between an AI app and one MCP server and records the traffic: the tool list, every tool call and result, and prompt templates. **Preview, monitor only:** it passes every message through unchanged and never blocks anything. `import-logs` then runs the preview gates: ALR04 reports findings for instruction-like content in tool definitions, and ALR05 reports findings for instruction-like content in tool results. The report lists findings only. Opt-in blocking is planned.
 
 ```
 AI app (MCP client) ──▶ agent-latch-runtime proxy ──▶ real MCP server
@@ -108,7 +108,7 @@ The HTTP listener has no authentication, so it accepts loopback addresses only. 
 
 Where an app's MCP client runs decides how it reaches the proxy:
 
-- **Local apps** (Claude Desktop, Cursor, VS Code, Antigravity) run their MCP client on your PC. They start the proxy themselves over stdio, using the config change above. No network is involved. Use a real server after `--`. A trace from that connection shows calls; a finding still needs [Import logs](#import-logs) with `--payloads`, because ALR04 reads tool definitions, not the text a tool returns.
+- **Local apps** (Claude Desktop, Cursor, VS Code, Antigravity) run their MCP client on your PC. They start the proxy themselves over stdio, using the config change above. No network is involved. Use a real server after `--`. A trace from that connection shows calls; a finding still needs [Import logs](#import-logs). ALR04 reads tool definitions and ALR05 reads tool results, so `--payloads` gives both gates the full text; without it, ALR05 has nothing to scan and reports one coverage record per run.
 - **ChatGPT on the web** calls tools from OpenAI's servers. It cannot start a program on your PC or reach `localhost`. OpenAI's Secure MCP Tunnel connects out from your PC, so the proxy's unauthenticated HTTP listener is not published. The steps are in [docs/clients/chatgpt.md](clients/chatgpt.md). That guide records a trace of the bundled practice server. It is not the findings path.
 
 | Client | Connection | Status |
@@ -168,7 +168,9 @@ Before a record is written, string values under secret-like keys (`api_key`, `pa
 agent-latch-runtime demo
 ```
 
-This runs a bundled synthetic MCP server behind the proxy, lists its tools, calls three tools (one returns a fake credential, one fails), gets a prompt, then imports the logs and prints one line per event. Everything stays on your machine. The files land in `runtime-logs/demo/` and are replaced on each run: `trace.jsonl`, `payloads.jsonl`, `events.csv`, `normalized.jsonl` and `proxy.log` (the proxy's own messages).
+This runs a bundled synthetic MCP server behind the proxy, lists its tools, calls five tools (one returns a fake credential, one fails, one returns a prompt-injection payload that ALR05 flags, and one returns ordinary cooking steps that correctly raise no finding), gets a prompt, then imports the logs and prints one line per event. Everything stays on your machine. The files land in `runtime-logs/demo/` and are replaced on each run: `trace.jsonl`, `payloads.jsonl`, `events.csv`, `normalized.jsonl` and `proxy.log` (the proxy's own messages). Run `agent-latch --runtime-result runtime-logs/demo/gate-results.csv` afterwards to see the findings report.
+
+`demo --scenario poisoned-output` runs a shorter session aimed at ALR05: one `fetch_page` call whose page hides an instruction in invisible Unicode tag characters and visibly steers the agent toward the sibling `send_email` tool. `ALR05-R02` (hidden content) and `ALR05-R03` (action steering) both fire on that one result.
 
 ## Import logs
 
@@ -176,7 +178,7 @@ This runs a bundled synthetic MCP server behind the proxy, lists its tools, call
 
 1. **Normalizes** it: the trace record and its payload record are joined into one event (below).
 2. **Shows** it: one line on stderr, one row in `events.csv`, and the full event (arguments, payload and response) in `normalized.jsonl`.
-3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR04 ships with the package, so this file is created. It records findings and does not block or change the call.
+3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR04 and ALR05 ship with the package, so this file is created. They record findings and do not block or change the call.
 
 With no file options it reads and writes in `runtime-logs/`:
 
@@ -242,7 +244,9 @@ A trace record waits for its payload record (matched on session, request, server
 
 **Gates.** The importer discovers Python modules in `agent_latch.gates` in module-name order. A module exports a unique string `GATE_ID` and `evaluate(event)`, which returns `{"findings": [...]}`. Each gate gets its own copy of the event.
 
-**ALR04 (preview).** The one gate that ships. It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. The rules can miss reworded instructions, and they do not look at tool results or what the agent does next. ALR04 never blocks a call.
+**ALR04 (preview).** It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. The rules can miss reworded instructions, and they do not look at tool results or what the agent does next. ALR04 never blocks a call.
+
+**ALR05 (preview).** It inspects tool *results*: the text blocks and structured content of `tools/call` responses, and tool error messages. Three detectors share the text engine in `agent_latch/gates/_text.py` (also used by ALR04): `ALR05-R01` flags instruction-like text (override phrases, forged authority or conversation turns, concealment requests, instructions to read sensitive files), `ALR05-R02` flags hidden or encoded instructions (invisible or bidi characters, Unicode tag sequences, HTML comments, Base64/hex layers that decode to instruction-like text), and `ALR05-R03` flags output that steers the next action (naming another tool of the same server, sending data somewhere, opening a URL). Severity is raised for tools expected to return outside content (`openWorldHint`, or a name like `fetch_page`) and lowered otherwise; context never skips the check. Ordinary instructions in benign data (a recipe's steps, a CLI's manual) do not raise a finding on their own, and one weak signal alone cannot reach FAIL. Payload records exist only with `--payloads`; without them the gate emits one coverage record per run (`ALR05-R90`), and output cut by `--payload-max-chars` gets one coverage record per tool. The proxy sits between the app and the server, so it cannot show whether the output later reached a model or was fenced as data — a finding is a review signal about suspicious untrusted output, never a claim that an injection succeeded. The static rule AG003 checks the code side of the same gate. Findings carry the OWASP category ASI01 as context, not as a coverage claim. ALR05 never blocks a call.
 
 **gate-results.csv.** Columns are `run_id`, `order`, `gate_id`, `result_json`, and `result_json` always has the same shape: `{"gate_id":"...","status":"ok","findings":[],"error":null}`. If a gate raises, its row has `"status":"error"` and only the exception type in `error`; later gates still run.
 

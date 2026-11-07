@@ -38,7 +38,7 @@ AgentLatch is often run on agents someone else wrote, so nothing inside the scan
 
 | ID | Category | Gates | Current rules |
 |---|---|---|---|
-| ASI01 | Agent Goal Hijack | `ALR01`, `ALR04`, `ALR05` | `AG003`, `PRM001`, `PRM002`, `ALR01-S01` |
+| ASI01 | Agent Goal Hijack | `ALR01`, `ALR04`, `ALR05` | `AG003`, `PRM001`, `PRM002`, `ALR01-S01`, `ALR05-R01`, `ALR05-R02`, `ALR05-R03` |
 | ASI02 | Tool Misuse and Exploitation | `ALR02`, `ALR03`, `ALR04`, `ALR06`, `ALR07`, `ALR09`, `ALR12` | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003`, `ALR06-S02`, `ALR12-S01` |
 | ASI03 | Identity and Privilege Abuse | `ALR03`, `ALR07`, `ALR09`, `ALR10` | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003`, `ALR03-S01` |
 | ASI04 | Agentic Supply Chain Vulnerabilities | `ALR02`, `ALR03`, `ALR04`, `ALR10`, `ALR11` | `SEC001`, `DEP001`, `ALR11-S01` |
@@ -88,7 +88,9 @@ src/agent_latch/
   action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
   gates/          # runtime gate plugins discovered by the importer (monitor only, never block)
     __init__.py
+    _text.py      # shared text engine (normalisation, decode layers, phrase families, walk, verdict); not a gate
     alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; reports findings only)
+    alr05.py      # ALR05: instruction-like content in MCP tool results (preview; review signals only)
   runtime/        # MCP traffic recording (preview, monitor only; `[runtime]` extra). Logs go to runtime-logs/, not here.
     events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
     redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file
@@ -115,10 +117,13 @@ tests/test_runtime.py          # runtime tests that need no FastMCP
 tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests (no FastMCP)
 tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
 tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
+tests/test_alr05.py            # ALR05 tool-output checks: positive, benign and coverage cases
+tests/test_alr05_eval.py       # ALR05 held-out detection targets (recall >= 80%, FP <= 10%)
 tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
-tests/runtime_fixtures/        # demo-server wrapper, plus the ALR04 event dataset and expected outcomes
+tests/runtime_fixtures/        # demo-server wrapper, the ALR04 event dataset, and the ALR05 labeled output cases
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
+scripts/eval_alr05.py          # ALR05 eval harness over the labeled output cases (tuning vs held-out split)
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
 action.yml                     # composite GitHub Action (isolated venv, SARIF path rewrite, summary)
 Dockerfile                     # two images: --target scanner (agent-latch), --target runtime (agent-latch-runtime)
