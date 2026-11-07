@@ -7,7 +7,7 @@ AgentLatch ships as two container images, built from the [`Dockerfile`](../Docke
 | `ghcr.io/agentlatch/agent-latch` | `agent-latch` | Static scans of a project, locally or in any CI system |
 | `ghcr.io/agentlatch/agent-latch-runtime` | `agent-latch-runtime` | The MCP runtime proxy (preview), `import-logs`, `verify`, `anchor` and `demo` |
 
-Replace `<version>` below with a release number. Images are published from GitHub releases, starting after v0.5.0. Until the first one is published, build them yourself (next section).
+Replace `<version>` below with a release number. Images are published from GitHub releases, starting with v0.5.1. To try an unreleased commit, build the images yourself (next section).
 
 New to Docker? [Setting up the container images](docker-setup.md) walks through installing Docker, getting the images, a first scan and connecting Claude Desktop, step by step.
 
