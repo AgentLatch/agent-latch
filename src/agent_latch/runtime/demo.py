@@ -48,8 +48,9 @@ async def _drive(directory: Path, log_file: TextIO) -> None:
         await client.get_prompt("summarize", {"topic": "Mars"})
 
 
-def run_demo(directory: Path, *, out: TextIO = sys.stderr) -> None:
+def run_demo(directory: Path, *, out: TextIO | None = None) -> None:
     """Record a demo session into ``directory`` and import it; raises on failure."""
+    out = out if out is not None else sys.stderr
     directory.mkdir(parents=True, exist_ok=True)
     for name in DEMO_FILES:
         (directory / name).unlink(missing_ok=True)

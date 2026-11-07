@@ -19,7 +19,7 @@
 
 ![Example AgentLatch scan showing detected security findings](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/gent-latch-scan-example.png)
 
-> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs one preview gate, ALR04, on MCP tool definitions. It reports findings and does not block calls.
+> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs two preview gates: ALR03 on the connection handshake and ALR04 on MCP tool definitions. It reports findings and does not block calls.
 
 ## What AgentLatch does so far
 
@@ -395,7 +395,47 @@ flowchart LR
 
 The scanner never imports or runs the code it checks. The proxy passes every MCP message through unchanged and never blocks anything.
 
-For one tool call, the runtime path looks like this:
+## Runtime monitoring for MCP (preview)
+
+`agent-latch-runtime` records what an AI agent asks its MCP tools to do and what comes back, so you can review an agent's tool use after a run. It is a **preview and monitor only**. It records every message and runs two gates: ALR03, which reports a finding when a server does not identify itself, its identity changes, or its declared name is a look-alike of a known server, and ALR04, which reports a finding when a tool definition contains instruction-like content. It does not block calls. After a run, `agent-latch --runtime-result` prints those findings in the same table as a scan, including a local tool's file and line when the project defines that tool. The report lists findings only.
+
+### Try it in one command
+
+Install with the `runtime` extra, which adds FastMCP:
+
+```sh
+pipx install "agentlatch-security[runtime]"      # or: python -m pip install "agentlatch-security[runtime]"
+agent-latch-runtime demo
+```
+
+`demo` starts a bundled synthetic MCP server behind the real proxy, lists its tools, calls three of them (one returns a fake credential, one fails), gets a prompt, then imports the logs. This is real output:
+
+![Output of agent-latch-runtime demo: ten MCP events, from tools/list to prompts/get, each joined with its payload](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/runtime-demo.svg)
+
+The files land in `runtime-logs/demo/` (git-ignored). The fake credential appears only as `[REDACTED]` in every one of them.
+
+### Watch a real agent
+
+Put the proxy in front of any MCP server, then follow its logs from a second terminal:
+
+```sh
+# Terminal 1: the agent's MCP traffic goes through the proxy.
+agent-latch-runtime proxy --trace runtime-logs/trace.jsonl --payloads runtime-logs/payloads.jsonl \
+  -- npx -y @modelcontextprotocol/server-github
+
+# Terminal 2: one line per message, plus events.csv and normalized.jsonl in runtime-logs/.
+agent-latch-runtime import-logs
+```
+
+Run both from the same folder, in the environment where AgentLatch is installed. `mcp-server/.venv` does not provide `agent-latch-runtime`.
+
+To also keep a queryable copy, name a local SQLite file. That flag is the choice of store. Leave it off and nothing is written except the CSV and JSONL files. Nothing is uploaded.
+
+```sh
+agent-latch-runtime import-logs --database runtime-logs/runtime.db
+```
+
+SQLite is the first store. The importer calls it through a small `EventStore` interface, so a later destination can be selected the same way without becoming part of the default install. Details: [Store events in SQLite](https://github.com/AgentLatch/agent-latch/blob/main/docs/runtime.md#store-events-in-sqlite).
 
 ```mermaid
 sequenceDiagram
@@ -493,7 +533,7 @@ The goal is to grow in layers:
 
 1. **Now: local scanner.** Focused checks of Python source, agent manifests, and prompt templates; optional Python dependency advisories; portable reports; and pre-commit and GitHub Action integrations.
 2. **Now, preview: runtime recording for MCP.** A proxy records live MCP tool traffic with secrets masked, and an importer turns it into reviewable events. `--database FILE` optionally keeps those events in a local SQLite file. It never blocks, and it does not upload them.
-3. **Now, preview: one runtime gate.** ALR04 reports a finding when a MCP tool definition (name, description, or schema) contains instruction-like content, and maps that finding to ASI01, ASI02, and ASI04. Calls are not blocked. The report lists findings only.
+3. **Now, preview: two runtime gates.** ALR03 reports a finding when an MCP server does not identify itself, its identity changes, or its declared name impersonates a known server, and ALR04 reports a finding when a MCP tool definition (name, description, or schema) contains instruction-like content. Calls are not blocked. The report lists findings only.
 4. **Planned: enforcement and adapters.** Blocking only when the operator turns it on in their own policy; framework adapters and broader evaluation checks after that.
 
 These layers will remain clearly distinguished: detecting a risky pattern is not the same as testing agent behavior, and neither alone guarantees runtime enforcement.

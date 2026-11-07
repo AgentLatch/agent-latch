@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import mcp.types as mt
@@ -27,9 +27,10 @@ log = logging.getLogger("agent_latch.runtime")
 
 
 class AgentLatchMiddleware(Middleware):
-    """Records tools/list, tools/call, prompts/list and prompts/get through a ``TraceLog``.
+    """Records initialize, tools/list, tools/call, prompts/list and prompts/get.
 
-    An optional ``PayloadTap`` also gets tools/list, tools/call and prompts/get as payload records.
+    An optional ``PayloadTap`` also gets initialize, tools/list, tools/call and prompts/get as
+    payload records.
     """
 
     def __init__(
@@ -38,6 +39,64 @@ class AgentLatchMiddleware(Middleware):
         self.trace = trace
         self.server = server
         self.tap = tap
+
+    async def on_initialize(
+        self,
+        context: MiddlewareContext[mt.InitializeRequest],
+        call_next: CallNext[mt.InitializeRequest, mt.InitializeResult | None],
+    ) -> mt.InitializeResult | None:
+        # Legacy handshake: identity is on the request params and the InitializeResult.
+        result = await call_next(context)
+        params = context.message.params
+        client_info = getattr(params, "client_info", None) if params is not None else None
+        server_info = getattr(result, "server_info", None) if result is not None else None
+        self._emit_handshake(
+            context,
+            protocol_version=getattr(result, "protocol_version", None),
+            client=_implementation(client_info),
+            server_info=_implementation(server_info),
+        )
+        return result
+
+    async def on_discover(
+        self,
+        context: MiddlewareContext[Any],
+        call_next: CallNext[Any, Any],
+    ) -> Any:
+        # Modern handshake (server/discover): identity is in the request/result ``meta``.
+        result = await call_next(context)
+        request_meta = getattr(getattr(context.message, "params", None), "meta", None) or {}
+        result_meta = getattr(result, "meta", None) or {}
+        self._emit_handshake(
+            context,
+            protocol_version=(
+                result_meta.get("io.modelcontextprotocol/protocolVersion")
+                or request_meta.get("io.modelcontextprotocol/protocolVersion")
+            ),
+            client=_implementation(request_meta.get("io.modelcontextprotocol/clientInfo")),
+            server_info=_implementation(result_meta.get("io.modelcontextprotocol/serverInfo")),
+        )
+        return result
+
+    def _emit_handshake(
+        self,
+        context: MiddlewareContext[Any],
+        *,
+        protocol_version: Any,
+        client: dict[str, str],
+        server_info: dict[str, str],
+    ) -> None:
+        session_id, request_id = _ids(context)
+        ids = {"session_id": session_id, "request_id": request_id, "server": self.server}
+        _record(lambda: self.trace.initialized(
+            **ids, protocol_version=protocol_version, client=client, server_info=server_info,
+        ))
+        tap = self.tap
+        if tap is not None:
+            _record(lambda: tap.initialized(
+                **ids, client_id=_client_id(context), protocol_version=protocol_version,
+                client=client, server_info=server_info,
+            ))
 
     async def on_list_tools(
         self,
@@ -145,6 +204,22 @@ class AgentLatchMiddleware(Middleware):
                 **ids, client_id=client_id, prompt=name, roles=roles, texts=texts
             ))
         return result
+
+
+def _implementation(info: Any) -> dict[str, str]:
+    """Name/version of an MCP Implementation (client/server info); never secret.
+
+    Accepts either a model object (``client_info``/``server_info``) or a plain ``meta`` dict.
+    """
+    if info is None:
+        return {}
+    getter = info.get if isinstance(info, Mapping) else lambda key, default=None: getattr(info, key, default)
+    out: dict[str, str] = {}
+    for field in ("name", "title", "version"):
+        value = getter(field)
+        if isinstance(value, str) and value:
+            out[field] = value
+    return out
 
 
 def _record(write: Callable[[], Any]) -> None:
