@@ -165,7 +165,7 @@ statuses), `deleted`, `edited`, `reordered`. `headline()` returns the one senten
 | `malformed` | A line is not JSON or not a block; a file cannot be read |
 | `unanchored` | `--anchor` was given but holds no points; or, for a store, rows exist past the newest anchor point |
 | `added` | (event store) A row has no valid seal: it was added outside AgentLatch |
-| `schema` | (event store) The table layout, view or triggers differ from what AgentLatch creates, or from the layout the anchor recorded for the same schema version |
+| `schema` | (event store) The table layout, view or triggers differ from what AgentLatch creates, or from the layout the anchor recorded for the same schema version; or the file reports a schema version lower than its anchor recorded (the version number was lowered). The importer checks this before it opens the file, because opening an older file would migrate and seal whatever rows it holds |
 | `missing` | There is no ledger at the path |
 
 The verdict comes from one shared function (`verify.status_for`), so the trace ledger and the event
@@ -208,12 +208,19 @@ A ledger that is gone or empty counts as `deleted` (exit `1`) when `--anchor` ha
 trace has lines. An empty ledger with neither is a fresh start (`missing`), because the proxy
 creates the file before the first record.
 
-### `agent-latch-runtime anchor --database FILE --to PATH [--quiet]`
+### `agent-latch-runtime anchor --database FILE --to PATH [--accept-unchecked-rows] [--quiet]`
 
-`anchor` takes `--ledger` or `--database`, not both. For a store it first checks the seals, the schema
-and any earlier point in `PATH`, and **refuses a store that fails (exit `1`, nothing published)**, so a
-changed store is never blessed. It is also the only way to create the first point for a store that
-already has seals. Exit `2` on a store that cannot be opened, an unsealed (older) database, a
+`anchor` takes `--ledger` or `--database`, not both. `PATH` may be `file:/path` or a bare path, and is
+resolved the same way when the store is checked and when the point is written. For a store it first checks
+the seals, the schema and any earlier point in `PATH`, and **refuses a store that fails (exit `1`, nothing
+published)**, so a changed store is never blessed. It is also the way to create the first point for a store
+that already has seals, but only after you have confirmed it was never anchored.
+
+Once an anchor exists, `anchor --database` **refuses rows past the newest point** (exit `1`), because they
+were never compared with the logs and anchoring them here would make a forged row look trusted. Run
+`import-logs --database FILE --anchor PATH`, which checks them and anchors them, or pass
+`--accept-unchecked-rows` to anchor them as they are when you trust the store. A store with no rows has
+nothing to anchor (exit `2`). Exit `2` on a store that cannot be opened, an unsealed (older) database, a
 destination that holds a trace ledger's points, an unwritable destination, or a `seq` that would go
 backwards.
 
@@ -228,7 +235,7 @@ and compares the head with the newest point in `--anchor`. Not combined with `PA
 |---|---|
 | `0` | `intact`, or `unanchored` (no anchor, or rows past the newest point that it does not cover yet) |
 | `1` | `tampered`, `deleted` or `rewritten`. A store that is gone counts as `deleted` when the anchor holds a point |
-| `2` | No store at the path and no anchor to say it existed, a database not yet sealed (run `import-logs --database` once), a newer schema, or a usage error |
+| `2` | No store at the path and no anchor to say it existed, a store with no rows and no anchor point (nothing to verify), a database not yet sealed (run `import-logs --database` once), a newer schema, or a usage error |
 
 ### `agent-latch-runtime import-logs … --database FILE [--anchor PATH]`
 

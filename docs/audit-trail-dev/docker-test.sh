@@ -81,9 +81,18 @@ out=$(verify "$DATA" "$ANCHOR")
 echo "$out" | grep -q "AUDIT TRAIL INTACT" && ok "store still INTACT after those attempts" || bad "store changed" "$out"
 
 echo "== 3. the read-only audit tool over a real MCP session (docker run -i)"
-rpc() { printf '%s\n' \
- '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}' \
- '{"jsonrpc":"2.0","method":"notifications/initialized"}' "$@"; sleep 3; }
+# Send the requests, then keep stdin open until every reply has arrived (or 30 seconds pass), so
+# closing it never cancels a call that is still running.
+rpc() { # outfile expected-replies request...
+  local out="$1" expected="$2"; shift 2
+  printf '%s\n' \
+   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}' \
+   '{"jsonrpc":"2.0","method":"notifications/initialized"}' "$@"
+  local waited=0
+  while [ "$(grep -c '"id":' "$out" 2>/dev/null)" -lt "$expected" ] && [ "$waited" -lt 60 ]; do
+    sleep 0.5; waited=$((waited + 1))
+  done
+}
 call() { # id sql
   printf '{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":"query_audit_log","arguments":{"sql":"%s"}}}' "$1" "$2"; }
 attacks=("DELETE FROM events" "UPDATE events SET name='x'" "DROP TABLE events" "DROP TRIGGER events_no_update"
@@ -91,8 +100,11 @@ attacks=("DELETE FROM events" "UPDATE events SET name='x'" "DROP TABLE events" "
          "VACUUM INTO '/tmp/copy.db'" "WITH x AS (SELECT 1) DELETE FROM events")
 lines=("$(call 2 'SELECT COUNT(*) AS n FROM events')"); id=3
 for sql in "${attacks[@]}"; do lines+=("$(call $id "$sql")"); id=$((id + 1)); done
-reply=$(rpc "${lines[@]}" | docker run -i --rm --network none --read-only --cap-drop=ALL \
-  --security-opt no-new-privileges -v "$DATA:/data:ro" "$IMG" audit-tool --database /data/audit.db 2>/dev/null)
+outfile=$(mktemp); : > "$outfile"
+rpc "$outfile" $((id - 1)) "${lines[@]}" | docker run -i --rm --network none --read-only --cap-drop=ALL \
+  --security-opt no-new-privileges -v "$DATA:/data:ro" "$IMG" audit-tool --database /data/audit.db \
+  > "$outfile" 2>/dev/null
+reply=$(cat "$outfile"); rm -f "$outfile"
 echo "$reply" | grep -q '"id":2' && echo "$reply" | grep '"id":2' | grep -q '"isError":false' \
   && ok "the tool answers a read (SELECT COUNT)" || bad "the read did not work" "$reply"
 refused=$(echo "$reply" | grep -E '"id":([3-9]|1[0-1])[,}]' | grep -c '"isError":true')

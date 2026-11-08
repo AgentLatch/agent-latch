@@ -216,8 +216,12 @@ The same idea covers the SQLite store written by `import-logs --database`. It ta
    `import-logs --database` opens it. Keep a copy first: the upgrade is one way, and the seal vouches
    for old rows only from that moment. `verify --database` on an older file says it is not sealed yet
    (exit `2`).
-5. **A store that already has seals but no anchor file** is refused by `import-logs --anchor`. Create
-   the first point on purpose, once: `agent-latch-runtime anchor --database FILE --to PATH`.
+5. **A store that already has seals but no anchor file** is refused by `import-logs --anchor`, because
+   that is also what a deleted anchor looks like. First find out which it is. If an anchor existed,
+   **restore it from its backup or investigate before doing anything else**: a new point made now would
+   be taken from the store as it stands, so a rebuilt store would then look intact. Only when you are
+   sure this store was never anchored (for example an older store you have just upgraded) create the first
+   point, once: `agent-latch-runtime anchor --database FILE --to PATH`.
 6. **Give an agent a view, never the file.** A tool that shows events to the agent should hold a
    `SQLiteEventReader` (read-only connection that refuses every write, even raw SQL) and run on
    AgentLatch's side, not in the agent's process. See [the container layout](docker.md#keep-the-audit-store-out-of-the-agents-reach).
@@ -225,7 +229,7 @@ The same idea covers the SQLite store written by `import-logs --database`. It ta
 | Message | Meaning | Fix |
 |---|---|---|
 | `the event store changed after it was sealed; keep this file as evidence…` (exit 1) | The store no longer matches its seals, layout or anchor | Do not repair it. Follow [the runbook](ledger-operations.md#when-import-logs-refuses-the-event-store) |
-| `the anchor … is missing or empty, but the event store already holds sealed rows` (exit 1) | A sealed store with no anchor looks like a deleted anchor | Run `anchor --database FILE --to PATH` once, on purpose |
+| `the anchor … is missing or empty, but the event store already holds sealed rows` (exit 1) | Either this store was never anchored, or its anchor was deleted | Do not re-anchor by reflex. Restore the original anchor, or investigate. Only if this store was never anchored, run `anchor --database FILE --to PATH` once |
 | `… is not sealed yet: run import-logs --database once` (exit 2) | An older database; the read-only reader never upgrades | Run `import-logs --database FILE` once |
 | `… holds points for another source` (exit 2) | The anchor file belongs to a trace ledger | Use a separate anchor file for the store |
 | `… is a SQLite database, not a ledger` (exit 2) | `verify PATH` was given a database | Use `verify --database FILE` |

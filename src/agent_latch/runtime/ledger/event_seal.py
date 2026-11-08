@@ -191,6 +191,48 @@ def schema_issues(source: SealedSource, point: AnchorPoint | None = None) -> lis
     return []
 
 
+def downgrade_issues(stored_version: int | None, point: AnchorPoint | None) -> list[Issue]:
+    """A file that reports an older schema version than its anchor recorded was tampered with.
+
+    ``PRAGMA user_version`` is just a number in the file. Lowering it would make a sealed store
+    look like an old unsealed one (which the reader refuses and the writer would re-seal), so a
+    point that recorded a higher version is the evidence that it was lowered.
+    """
+    if (
+        stored_version is None
+        or point is None
+        or point.source != SOURCE
+        or point.schema_version is None
+        or stored_version >= point.schema_version
+    ):
+        return []
+    return [
+        Issue(
+            "schema",
+            0,
+            f"the store reports schema version {stored_version}, but the anchor recorded"
+            f" version {point.schema_version}: the version was lowered",
+        )
+    ]
+
+
+def downgrade_verdict(name: str, point: AnchorPoint, issues: list[Issue]) -> Verification:
+    """The ``tampered`` verdict for a store whose schema version was lowered below its anchor's."""
+    return Verification(
+        status=STATUS_TAMPERED,
+        blocks=0,
+        head_seq=0,
+        head_digest="",
+        issues=tuple(issues),
+        anchored=True,
+        anchor_seq=point.seq,
+        anchor_digest=point.digest,
+        anchor_time=point.timestamp,
+        ledger=Path(name).name,
+        trace_checked=False,
+    )
+
+
 def verify_store(
     source: SealedSource, *, name: str, anchor_path: Path | None = None
 ) -> Verification:
@@ -290,6 +332,8 @@ __all__ = [
     "StoreTampered",
     "StoredRow",
     "changed_message",
+    "downgrade_issues",
+    "downgrade_verdict",
     "event_sha256",
     "is_sqlite_file",
     "next_seal",

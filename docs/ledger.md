@@ -155,7 +155,7 @@ Layers 2 and 3 *detect*; layer 4 *prevents*. SQLite triggers (migration 4) abort
 | Save an event again with different content | Ignored | The first write stays |
 | Edit, delete or swap rows directly | Yes | The row no longer matches its seal; `import-logs` refuses the store |
 | Drop the table, or cut the newest rows | Yes, `deleted` | The anchored head is higher than the store |
-| Add a forged row after the newest anchor | Yes | `verify` reports `unanchored` for rows past the anchor; `import-logs` keeps only rows the trace and payload files rebuild exactly |
+| Add a forged row after the newest anchor | Yes, **if the logs are intact** | `verify` only reports `unanchored` for rows past the anchor: it cannot tell a forgery from an honest row not yet anchored. `import-logs` keeps such a row only if the trace and payload files rebuild it exactly, so an attacker who can change the store *and* those logs can get a forged row accepted. Seal the trace with `--ledger` and anchor it too |
 | Rewrite every row with fresh seals | Yes, `rewritten`, **only with an anchor** | The newest seal no longer equals the published digest |
 | Add a column, edit the `event_log` view, drop a trigger | Yes, `tampered` | The table layout no longer matches what AgentLatch creates |
 | Delete the store file | Yes, `deleted` with an anchor; `missing` without | The anchor proves rows existed |
@@ -164,11 +164,16 @@ Layers 2 and 3 *detect*; layer 4 *prevents*. SQLite triggers (migration 4) abort
 
 **A crash between saving and publishing** leaves the store a few rows ahead of the anchor. The next
 `import-logs` rebuilds those rows from the trace and payload files and keeps them only if every one
-matches; otherwise it refuses the store. A crash never locks the store, and forged rows are still caught.
+matches; otherwise it refuses the store. A crash never locks the store, and a forged row is refused unless
+the same attacker also forged matching trace and payload lines, which is why those logs need their own
+seal and anchor (`--ledger`).
 
 **The first anchor.** A new store creates its first point on its first `import-logs --anchor`. A store
-that already has seals but no anchor file is refused, because that is what a deleted anchor looks like;
-run `anchor --database` once to start anchoring it on purpose.
+that already has seals but no anchor file is refused, because that is what a deleted anchor looks like.
+Find out which it is: if an anchor existed, restore or investigate it first, because a new point is taken
+from the store as it stands. Only for a store that was never anchored, run `anchor --database` once to
+start anchoring it on purpose. After that, `anchor --database` refuses rows past the newest point that
+the logs have not vouched for (see the importer's check above) unless told `--accept-unchecked-rows`.
 
 **What the seal does not cover.** It cannot show that a row was altered *before* it was sealed, so an
 older database sealed on upgrade is vouched for only from that moment. It does not cover `events.csv`,

@@ -43,6 +43,7 @@ class AnchorPoint:
     schema_version: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """The JSON form of the point; the optional fields are written only when they are set."""
         data: dict[str, Any] = {
             "schema": ANCHOR_SCHEMA,
             "seq": self.seq,
@@ -61,6 +62,9 @@ class AnchorPoint:
 
     @classmethod
     def from_dict(cls, data: Any) -> AnchorPoint | None:
+        """A point built from parsed JSON, or ``None`` when the object is not a well-formed
+        point.
+        """
         if not isinstance(data, dict):
             return None
         seq = data.get("seq")
@@ -137,6 +141,9 @@ class FileAnchor:
         return points[-1] if points else None
 
     def publish(self, point: AnchorPoint) -> AnchorPoint:
+        """Append a point; refuse a lower ``seq``, and a point for another source than the file
+        holds.
+        """
         previous = self.latest()
         if previous is not None and previous.source != point.source:
             # Two chains number their records separately, so one file cannot hold both.

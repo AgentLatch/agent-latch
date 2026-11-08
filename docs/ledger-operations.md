@@ -242,7 +242,7 @@ shasum -a 256 runtime.db store-anchors.jsonl >> verify.txt
 | `deleted` | Rows or the table or the file are gone | Deliberate removal; a partial restore; a dropped table |
 | `rewritten` | The whole chain was rebuilt | Forgery with fresh seals; restoring an older genuine copy; the wrong anchor file |
 | `refused … no matching trace record` or `differs from what the trace and payload files rebuild` | Rows past the anchor are not what the logs say | A forged row after a crash; the logs were rotated or edited; the wrong trace |
-| `refused … anchor is missing or empty` | A sealed store with no anchor | The anchor was deleted, or this is the first anchor of an older store (then run `anchor --database` once) |
+| `refused … anchor is missing or empty` | A sealed store with no anchor | The anchor was deleted, or this store was never anchored (for example an older store you just upgraded). Restore or investigate the anchor first; only if it never existed, run `anchor --database` once |
 
 **An ordinary crash is not an incident.** If the importer died between saving and publishing, the store
 is a few rows ahead of the anchor. Restart it with the same `--trace`, `--payloads` and `--anchor`: it

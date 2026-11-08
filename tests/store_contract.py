@@ -52,6 +52,9 @@ def sample_events(count: int = 5, *, run_id: str = "run-contract") -> list[dict[
 def assert_store_is_append_only(
     make_store: Callable[[], Any], tamper: Callable[[Any, str], None]
 ) -> None:
+    """Prove a store keeps first writes, verifies after saves, and names edits, deletes and
+    swaps.
+    """
     events = sample_events()
 
     # 1. A key saved again keeps the first write, whatever the new content is.

@@ -8,6 +8,7 @@ No test uses the network; synthetic fixtures only.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import pwd
@@ -16,6 +17,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -33,6 +36,8 @@ from agent_latch.runtime import (
     cli,
     sqlite_store,
 )
+from agent_latch.runtime import importer as importer_module
+from agent_latch.runtime.importer import RuntimeLogImporter
 from agent_latch.runtime.ledger.anchor import AnchorError, AnchorPoint, FileAnchor
 from agent_latch.runtime.ledger.chain import GENESIS, Ledger
 from agent_latch.runtime.ledger.event_seal import (
@@ -98,6 +103,7 @@ def _import(
     payloads: Path | None = None,
     anchor: Path | None = None,
 ) -> int:
+    """Run ``import-logs`` through the CLI for one trace; returns its exit code."""
     argv = ["import-logs", "--dir", str(directory), "--trace", str(trace),
             "--database", str(database), "--once", "--quiet"]
     if payloads is not None:
@@ -108,6 +114,7 @@ def _import(
 
 
 def _verify(database: Path, anchor: Path | None = None) -> int:
+    """Run ``verify --database`` through the CLI; returns its exit code."""
     argv = ["verify", "--database", str(database)]
     if anchor is not None:
         argv += ["--anchor", str(anchor)]
@@ -118,6 +125,7 @@ class Sealed:
     """A store written by the real pipeline, with its logs and anchor."""
 
     def __init__(self, root: Path) -> None:
+        """Record a run and import it with an anchor, the way the real pipeline does."""
         self.root = root
         self.logs = root / "logs"
         self.trace, self.payloads = _record_run(self.logs)
@@ -127,10 +135,12 @@ class Sealed:
                        anchor=self.anchor) == 0
 
     def import_again(self, *, anchor: bool = True) -> int:
+        """Import the same logs again, with or without the anchor."""
         return _import(self.logs, self.trace, self.database, payloads=self.payloads,
                        anchor=self.anchor if anchor else None)
 
     def verify(self, *, anchor: bool = True) -> int:
+        """Verify the store, with or without its anchor; returns the exit code."""
         return _verify(self.database, self.anchor if anchor else None)
 
     def rows(self) -> int:
@@ -180,6 +190,7 @@ def _out(capsys: pytest.CaptureFixture[str]) -> str:
 
 
 def test_1_sealed_import_verifies_intact(sealed: Sealed, capsys: pytest.CaptureFixture[str]) -> None:
+    """A store written by the real pipeline verifies intact, and importing again adds nothing."""
     capsys.readouterr()
     assert sealed.verify() == 0
     out = _out(capsys)
@@ -201,10 +212,12 @@ def test_1_sealed_import_verifies_intact(sealed: Sealed, capsys: pytest.CaptureF
 
 
 def test_2_writer_keeps_the_first_write_and_triggers_stop_sql(tmp_path: Path) -> None:
+    """The first write stays, and the triggers abort plain UPDATE and DELETE."""
     def make_store() -> SQLiteEventStore:
         return SQLiteEventStore(Path(tempfile.mkdtemp(dir=tmp_path)) / "events.db")
 
     def tamper(store: SQLiteEventStore, how: str) -> None:
+        """Change the rows behind the store's back, as an agent with the file could."""
         conn = _connect_as_attacker(store.path)
         try:
             if how == "edit":
@@ -259,6 +272,7 @@ WRITE_ATTEMPTS = [
 
 
 def test_3_reader_has_no_way_to_write(sealed: Sealed) -> None:
+    """Every write statement is refused by the reader, and the store still verifies."""
     reader = SQLiteEventReader(sealed.database)
     reader.open()
     try:
@@ -287,6 +301,7 @@ def test_3_reader_has_no_way_to_write(sealed: Sealed) -> None:
 def test_4_direct_tampering_is_named_and_import_refuses(
     sealed: Sealed, how: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Edits, deletions and swaps are named by verify, and import-logs refuses the store."""
     conn = _connect_as_attacker(sealed.database)
     if how == "edit":
         conn.execute("UPDATE events SET name = 'evil' WHERE event_order = 2")
@@ -319,6 +334,7 @@ def test_4_direct_tampering_is_named_and_import_refuses(
 def test_5_drop_table_and_cut_rows_are_deleted(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A dropped table and cut rows are reported deleted against the anchor."""
     dropped = Sealed(tmp_path / "dropped")
     conn = _connect_as_attacker(dropped.database)
     conn.execute("DROP TABLE events")
@@ -340,6 +356,7 @@ def test_5_drop_table_and_cut_rows_are_deleted(
 def test_5_forged_row_after_the_anchor_is_caught_by_import(
     sealed: Sealed, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A validly sealed forged row past the anchor is refused by import-logs."""
     forged = sample_events(1, run_id="forged")[0]
     forged["order"] = 99
     writer = SQLiteEventStore(sealed.database)
@@ -361,6 +378,7 @@ def test_5_forged_row_after_the_anchor_is_caught_by_import(
 def test_5_rewriting_every_seal_is_rewritten(
     sealed: Sealed, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A full reseal looks fine alone but is reported rewritten against the anchor."""
     conn = _connect_as_attacker(sealed.database)
     conn.execute("UPDATE events SET name = 'cover-up' WHERE event_order = 2")
     _reseal_all(conn)  # the chain is now perfectly consistent
@@ -375,6 +393,7 @@ def test_5_rewriting_every_seal_is_rewritten(
 
 
 def test_5_deleting_the_file(sealed: Sealed, capsys: pytest.CaptureFixture[str]) -> None:
+    """A deleted store is deleted with an anchor, and merely missing without one."""
     sealed.database.unlink()
     assert sealed.verify() == 1  # the anchor proves rows existed
     assert "DELETED" in _out(capsys)
@@ -391,6 +410,9 @@ def test_5_deleting_the_file(sealed: Sealed, capsys: pytest.CaptureFixture[str])
 def test_6_version_2_database_is_upgraded_and_sealed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """An older database is upgraded and sealed with its rows unchanged, and later edits are
+    caught.
+    """
     database = tmp_path / "v2.db"
     conn = sqlite3.connect(database, isolation_level=None)
     for step in sqlite_store.MIGRATIONS[:2]:  # today's released schema
@@ -454,6 +476,7 @@ def _read_events(database: Path) -> Iterator[dict[str, Any]]:
 def test_7_agent_tool_through_the_proxy_cannot_change_the_store(
     sealed: Sealed, tmp_path: Path
 ) -> None:
+    """An MCP client sends raw write SQL through the proxy and every attempt is refused."""
     pytest.importorskip("fastmcp")
     from fastmcp import Client
     from fastmcp.server import create_proxy
@@ -473,6 +496,7 @@ def test_7_agent_tool_through_the_proxy_cannot_change_the_store(
     attacks = [*WRITE_ATTEMPTS, f"ATTACH DATABASE '{tmp_path / 'x.db'}' AS other"]
 
     async def drive() -> tuple[Any, list[bool]]:
+        """Make the reads, then every write attempt, through the proxied MCP session."""
         async with Client(proxy) as client:
             reading = await client.call_tool("query_audit_log", {"sql": "SELECT COUNT(*) AS n FROM events"})
             recent = await client.call_tool("recent_events", {"limit": 2})
@@ -540,6 +564,9 @@ def _second_user_command(python: str) -> list[str]:
 
 
 def test_8_second_os_user_is_denied() -> None:
+    """A second OS user is denied read, write, chmod, delete and anchor access by the operating
+    system.
+    """
     python = os.path.realpath(sys.executable)
     prefix = _second_user_command(python)
     folder = Path(tempfile.mkdtemp(prefix="agentlatch-os-"))
@@ -616,6 +643,7 @@ def _crashed_store(tmp_path: Path, *, saved: int = 4) -> tuple[Sealed, Path, Pat
 def test_9_store_ahead_of_its_anchor_is_rebuilt_from_the_logs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A store left ahead of its anchor by a crash is rebuilt from the logs and re-anchored."""
     store, _, anchor = _crashed_store(tmp_path)
     assert store.rows() == 4
     assert _verify(store.database, anchor) == 0
@@ -631,6 +659,7 @@ def test_9_store_ahead_of_its_anchor_is_rebuilt_from_the_logs(
 def test_9_a_changed_row_past_the_anchor_is_refused(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A resealed row past the anchor that differs from the logs is refused."""
     store, _, anchor = _crashed_store(tmp_path)
     conn = _connect_as_attacker(store.database)
     conn.execute("UPDATE events SET name = 'rewritten' WHERE event_order = 4")
@@ -646,6 +675,7 @@ def test_9_a_changed_row_past_the_anchor_is_refused(
 def test_9_an_extra_row_past_the_anchor_is_refused(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A row past the anchor with no matching trace record is refused."""
     store, _, anchor = _crashed_store(tmp_path)
     forged = sample_events(1, run_id="forged")[0]
     writer = SQLiteEventStore(store.database)
@@ -663,6 +693,7 @@ def test_9_a_forged_row_is_never_anchored_even_when_new_events_arrive(
 ) -> None:
     # The dying process saved 3 of 4 events. Someone then forged a row after the anchor, and the
     # restarted importer finds a genuinely new event (the fourth) to save in the same run.
+    """A forged row is never anchored, even when a genuine new event is saved in the same run."""
     store, _, anchor = _crashed_store(tmp_path, saved=3)
     forged = sample_events(1, run_id="forged")[0]
     writer = SQLiteEventStore(store.database)
@@ -682,6 +713,7 @@ def test_9_a_forged_row_is_never_anchored_even_when_new_events_arrive(
 def test_10_first_anchor_is_made_for_a_new_store_only(
     sealed: Sealed, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Only a new store creates its first anchor; a sealed store without one is refused."""
     assert FileAnchor(sealed.anchor).latest() is not None  # a new store made its first point
 
     sealed.anchor.unlink()  # the same as someone deleting the anchor
@@ -701,6 +733,7 @@ def test_10_first_anchor_is_made_for_a_new_store_only(
 def test_10_anchor_command_refuses_a_store_that_fails_its_check(
     sealed: Sealed, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """The anchor command never blesses a store that fails its check."""
     conn = _connect_as_attacker(sealed.database)
     conn.execute("UPDATE events SET name = 'evil' WHERE event_order = 3")
     conn.close()
@@ -716,6 +749,7 @@ def test_10_anchor_command_refuses_a_store_that_fails_its_check(
 def test_11_schema_changes_are_caught(
     sealed: Sealed, change: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """An added column, an edited view or a dropped trigger is reported as tampering."""
     conn = sqlite3.connect(sealed.database, isolation_level=None)
     if change == "add_column":
         conn.execute("ALTER TABLE events ADD COLUMN hidden TEXT")
@@ -738,6 +772,7 @@ def test_11_schema_changes_are_caught(
 def test_12_a_database_is_never_read_as_a_ledger(
     sealed: Sealed, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A SQLite file given to verify as a ledger is refused with a pointer to --database."""
     assert cli.main(["verify", str(sealed.database)]) == 2
     assert "SQLite database, not a ledger" in _out(capsys)
     assert cli.main(["verify", "--ledger", str(sealed.database)]) == 2
@@ -746,6 +781,7 @@ def test_12_a_database_is_never_read_as_a_ledger(
 
 
 def test_12_one_anchor_file_per_chain(sealed: Sealed, tmp_path: Path) -> None:
+    """A ledger and an event store cannot share one anchor file."""
     ledger_path = tmp_path / "trace.ledger.jsonl"
     with Ledger(ledger_path) as ledger:
         ledger.append('{"a":1}', method="tools/call", stage="request")
@@ -772,6 +808,7 @@ def test_12_one_anchor_file_per_chain(sealed: Sealed, tmp_path: Path) -> None:
 
 
 def test_seal_is_deterministic_and_covers_every_field() -> None:
+    """The same event seals the same way, and every field and the import time change the digest."""
     event = sample_events(1)[0]
     first = next_seal(None, event, "2026-01-01T00:00:00Z")
     assert first == next_seal(None, event, "2026-01-01T00:00:00Z")
@@ -787,6 +824,7 @@ def test_seal_is_deterministic_and_covers_every_field() -> None:
 
 
 def test_store_seals_use_their_own_domain_not_the_ledgers() -> None:
+    """A store seal uses its own domain tag, so it can never pass as a trace-ledger block."""
     from agent_latch.runtime.ledger.chain import DOMAIN as LEDGER_DOMAIN
     from agent_latch.runtime.ledger.event_seal import DOMAIN as STORE_DOMAIN
 
@@ -801,6 +839,9 @@ def test_store_seals_use_their_own_domain_not_the_ledgers() -> None:
 
 
 def test_walk_chain_names_each_kind_of_problem() -> None:
+    """The chain walk names a gap, an edit and an unsealed row, and gives a clean chain no
+    issues.
+    """
     events = sample_events(4)
     rows: list[StoredRow] = []
     head = None
@@ -820,6 +861,7 @@ def test_walk_chain_names_each_kind_of_problem() -> None:
 
 
 def test_anchor_points_without_the_new_fields_are_unchanged(tmp_path: Path) -> None:
+    """A trace-ledger point is byte-identical to before, and old readers still read new points."""
     old = AnchorPoint(seq=1, digest="d", records=1, timestamp="t", ledger="l")
     assert set(old.to_dict()) == {"schema", "seq", "digest", "records", "timestamp", "ledger"}
     assert AnchorPoint.from_dict(old.to_dict()) == old
@@ -836,6 +878,7 @@ def test_anchor_points_without_the_new_fields_are_unchanged(tmp_path: Path) -> N
 def test_audit_tool_command_serves_only_a_sealed_store(
     sealed: Sealed, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """audit-tool refuses a missing or unsealed store and offers exactly two tools."""
     pytest.importorskip("fastmcp")
     from agent_latch.runtime.audit_tool import build_audit_tool
 
@@ -854,4 +897,137 @@ def test_audit_tool_command_serves_only_a_sealed_store(
     server = build_audit_tool(sealed.database)
     tools = asyncio.run(server.list_tools())
     assert sorted(tool.name for tool in tools) == ["query_audit_log", "recent_events"]
+    assert sealed.rows() == 4 and sealed.verify() == 0
+
+
+# --- findings from the PR review, each pinned by a test --------------------------------------
+
+
+def test_file_prefixed_anchor_specs_name_the_file_the_commands_write(
+    sealed: Sealed, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A file:/path anchor spec is read from the same file the commands write, so a rewrite is
+    caught.
+    """
+    spec = f"file:{sealed.anchor}"
+    capsys.readouterr()
+    assert cli.main(["verify", "--database", str(sealed.database), "--anchor", spec]) == 0
+    assert "INTACT" in _out(capsys)
+
+    conn = _connect_as_attacker(sealed.database)
+    conn.execute("UPDATE events SET name = 'cover-up' WHERE event_order = 2")
+    _reseal_all(conn)
+    _cover_tracks(conn)
+    conn.close()
+    # Read as a bare path, the spec would name a file that does not exist and the rewrite would pass.
+    assert cli.main(["verify", "--database", str(sealed.database), "--anchor", spec]) == 1
+    assert "REWRITTEN" in _out(capsys)
+    before = sealed.anchor.read_text(encoding="utf-8")
+    assert cli.main(["anchor", "--database", str(sealed.database), "--to", spec, "--quiet"]) == 1
+    assert sealed.anchor.read_text(encoding="utf-8") == before  # a rewritten store is not blessed
+
+
+def test_a_store_with_no_rows_has_nothing_to_verify_or_anchor(tmp_path: Path) -> None:
+    """A store with no rows exits 2 from verify and anchor, not 0 or 1."""
+    empty = tmp_path / "empty.db"
+    store = SQLiteEventStore(empty)
+    store.open()
+    store.close()
+    target = tmp_path / "anchors.jsonl"
+    assert cli.main(["verify", "--database", str(empty)]) == 2  # not "verified": nothing to check
+    assert cli.main(["anchor", "--database", str(empty), "--to", str(target)]) == 2  # not "altered"
+    assert not target.exists()
+
+
+def test_a_lowered_schema_version_is_tampering_and_is_never_migrated(
+    sealed: Sealed, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A version lowered below the anchor's is tampering, and the importer refuses it before
+    migrating.
+    """
+    conn = sqlite3.connect(sealed.database)
+    conn.execute("PRAGMA user_version = 2")  # makes a sealed store look like an old one
+    conn.close()
+    before = hashlib.sha256(sealed.database.read_bytes()).hexdigest()
+    capsys.readouterr()
+
+    assert sealed.verify() == 1
+    out = _out(capsys)
+    assert "TAMPERED" in out and "lowered" in out
+    # The importer refuses before opening: opening an old file would seal whatever rows it holds.
+    assert sealed.import_again() == 1
+    assert "lowered" in _out(capsys)
+    assert hashlib.sha256(sealed.database.read_bytes()).hexdigest() == before
+    # With no anchor there is nothing to say the version was lowered: it stays "not sealed yet".
+    assert sealed.verify(anchor=False) == 2
+
+
+def test_anchor_command_will_not_bless_rows_it_has_not_checked(
+    sealed: Sealed, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The anchor command refuses rows past the newest point unless told to trust them."""
+    writer = SQLiteEventStore(sealed.database)
+    writer.open()
+    writer.save([sample_events(1, run_id="forged")[0]])  # a validly sealed row past the anchor
+    writer.close()
+    capsys.readouterr()
+    base = ["anchor", "--database", str(sealed.database), "--to", str(sealed.anchor), "--quiet"]
+    assert cli.main(base) == 1
+    assert "have not been checked against the logs" in _out(capsys)
+    assert FileAnchor(sealed.anchor).latest().seq == 4  # type: ignore[union-attr]
+    assert cli.main([*base, "--accept-unchecked-rows"]) == 0  # a deliberate, explicit choice
+    assert FileAnchor(sealed.anchor).latest().seq == 5  # type: ignore[union-attr]
+
+
+def test_a_publish_skipped_by_the_interval_is_retried_while_idle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A publish skipped by the interval is retried while the importer is idle, without a new
+    event.
+    """
+    monkeypatch.setattr(importer_module, "ANCHOR_INTERVAL_SECONDS", 0.4)
+    full, _ = _record_run(tmp_path / "full", payloads=False)
+    lines = full.read_text(encoding="utf-8").splitlines(keepends=True)
+    live = tmp_path / "live.jsonl"
+    live.write_text("".join(lines[:2]), encoding="utf-8")
+    anchor = FileAnchor(tmp_path / "anchors.jsonl")
+    importer = RuntimeLogImporter(
+        live, None, [], store=SQLiteEventStore(tmp_path / "events.db"), anchor=anchor,
+        follow=True, poll_interval=0.02, payload_grace=0.05,
+    )
+    thread = threading.Thread(target=importer.run)
+    thread.start()
+
+    def anchored_at() -> int:
+        """The sequence number of the newest anchor point (0 when there is none)."""
+        point = anchor.latest()
+        return point.seq if point else 0
+
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and anchored_at() < 2:
+            time.sleep(0.02)
+        assert anchored_at() == 2
+        with live.open("a", encoding="utf-8") as stream:
+            stream.write("".join(lines[2:]))  # saved inside the interval, so its publish is skipped
+        while time.monotonic() < deadline and anchored_at() < 4:
+            time.sleep(0.05)
+        assert anchored_at() == 4  # published while the importer is still running and idle
+    finally:
+        importer.stop()
+        thread.join(10)
+
+
+def test_attack_tool_local_mode_passes_against_a_sealed_store(sealed: Sealed) -> None:
+    """The attack script's local mode sees every write refused and the store unchanged."""
+    pytest.importorskip("fastmcp")
+    root = Path(__file__).resolve().parents[1]
+    script = root / "docs" / "audit-trail-dev" / "attack_tool.py"
+    done = subprocess.run(
+        [sys.executable, str(script), "--local", str(sealed.database)],
+        capture_output=True, text=True, timeout=120, check=False,
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+    )
+    assert done.returncode == 0, done.stdout + done.stderr[-600:]
+    assert "PASS: 0 of 17 write attempts succeeded" in done.stdout
     assert sealed.rows() == 4 and sealed.verify() == 0

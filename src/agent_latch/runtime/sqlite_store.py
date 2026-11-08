@@ -220,6 +220,25 @@ def row_to_event(row: tuple[Any, ...]) -> dict[str, Any]:
     }
 
 
+def stored_schema_version(path: Path) -> int | None:
+    """The schema version a file says it is at, read without migrating or writing it.
+
+    ``None`` when the file is missing or is not a SQLite database. The version is only a number an
+    attacker can lower, so it is never trusted alone: an anchor records the version it was
+    published at, and a file that reports less than that has been tampered with.
+    """
+    try:
+        conn = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        return int(conn.execute("PRAGMA user_version").fetchone()[0])
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
 def schema_fingerprint(conn: sqlite3.Connection) -> str:
     """SHA-256 of every table, index, view and trigger definition, as SQLite stores it."""
     rows = conn.execute(
@@ -240,6 +259,7 @@ def expected_schema_sha256() -> str:
 
 
 def _seal_from(values: tuple[Any, ...]) -> Seal | None:
+    """A ``Seal`` from the three stored values, or ``None`` when any is missing or mistyped."""
     seq, prev, digest = values
     if isinstance(seq, int) and not isinstance(seq, bool) and isinstance(prev, str) and isinstance(
         digest, str
@@ -351,6 +371,10 @@ class SQLiteEventStore(_Reading):
             ) from error
         return inserted
 
+    def stored_version(self) -> int | None:
+        """The schema version the file reports now, read before ``open`` can migrate it."""
+        return stored_schema_version(self.path)
+
     def as_stored(self, event: Mapping[str, Any]) -> dict[str, Any]:
         """The event as a later read returns it, so it can be compared with a stored row."""
         return row_to_event(event_to_row(event, ""))
@@ -369,6 +393,7 @@ class SQLiteEventStore(_Reading):
 def _read_only_authorizer(
     action: int, arg1: str | None, arg2: str | None, db: str | None, source: str | None
 ) -> int:
+    """SQLite authorizer: allow reads and refuse every other kind of statement."""
     return sqlite3.SQLITE_OK if action in _READ_ONLY_ACTIONS else sqlite3.SQLITE_DENY
 
 
@@ -391,6 +416,7 @@ class SQLiteEventReader(_Reading):
         self._lock = threading.Lock()
 
     def open(self) -> None:
+        """Open the file read-only; refuse a missing, unsealed, newer or foreign database."""
         if not self.path.is_file():
             raise ValueError(f"no event store at {self.path}")
         uri = f"{self.path.resolve().as_uri()}?mode=ro"
@@ -431,11 +457,13 @@ class SQLiteEventReader(_Reading):
             return [dict(zip(names, row, strict=True)) for row in cursor.fetchmany(limit)]
 
     def close(self) -> None:
+        """Close the connection."""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
 
     def _connection(self) -> sqlite3.Connection:
+        """The open connection; raises when ``open`` has not been called."""
         if self._conn is None:
             raise RuntimeError("SQLiteEventReader is not open")
         return self._conn

@@ -25,7 +25,9 @@ Everything here uses a throwaway demo store in `~/audit-demo`. Do not point it a
 **If Claude declines Part B, that is not a pass.** A model may refuse to try deleting audit records, and that
 is a reasonable thing for it to do. Its refusal says nothing about whether the store would have held. Do not
 rephrase the request to talk it round. Run the same statements with a client that has no judgment to apply:
-`.venv/bin/python docs/audit-trail-dev/attack_tool.py` (see [06-docker-test.md](06-docker-test.md#part-5--the-agent-tries-to-delete-its-traces-claude-desktop)).
+`cd /Users/adyan/agent-latch && .venv/bin/python docs/audit-trail-dev/attack_tool.py --local ~/audit-demo/audit.db`
+(run it from the repository, not from `~/audit-demo`; `--local` aims it at this native store, and with no
+flag it aims at the Docker version, see [06-docker-test.md](06-docker-test.md#part-5--the-agent-tries-to-delete-its-traces-claude-desktop)).
 Reading the history through the tool, which Claude will do, is still a useful half of the test.
 
 ---

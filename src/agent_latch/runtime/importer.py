@@ -46,6 +46,7 @@ from agent_latch.runtime.ledger.event_seal import (
     StoreRefused,
     StoreTampered,
     changed_message,
+    downgrade_issues,
     schema_issues,
     walk_chain,
 )
@@ -251,6 +252,9 @@ class RuntimeLogImporter:
         poll_interval: float = POLL_INTERVAL_SECONDS,
         payload_grace: float = PAYLOAD_GRACE_SECONDS,
     ) -> None:
+        """Set up the importer. ``store`` and ``anchor`` are optional, and an anchor needs a
+        store.
+        """
         if poll_interval <= 0:
             raise ValueError("poll_interval must be greater than zero")
         if anchor is not None and store is None:
@@ -305,6 +309,9 @@ class RuntimeLogImporter:
         self._stop.set()
 
     def run(self) -> None:
+        """Follow or process the logs, saving events and publishing anchors, and always close the
+        outputs.
+        """
         try:
             self._open_outputs()
             if not (
@@ -321,6 +328,7 @@ class RuntimeLogImporter:
                     break
                 if not self._pending and not self._unsaved:
                     self._require_tail_matched()  # every log line has been read by now
+                    self._publish(force=False)  # retry a publish the interval skipped
                 self._stop.wait(self.poll_interval)
             if self.follow:
                 self._ingest()
@@ -343,6 +351,7 @@ class RuntimeLogImporter:
             self._close()
 
     def _finish(self) -> None:
+        """Read what is left in the files, then do the last drain and the last store save."""
         self._trace.finish()
         if self._payloads is not None:
             self._payloads.finish()
@@ -356,7 +365,9 @@ class RuntimeLogImporter:
             log.warning("agent-latch-runtime: %d payload record(s) had no trace record", unmatched)
 
     def _open_outputs(self) -> None:
+        """Open the store first (refusing a changed one), then the CSV and JSONL outputs."""
         if self.store is not None:
+            self._refuse_lowered_version()  # before open: opening an old file migrates it
             self.store.open()  # first, so a bad database leaves no other file open
             self._audit_store()
         if self.events_csv is not None:
@@ -410,6 +421,24 @@ class RuntimeLogImporter:
         self._unsaved = []
         self._publish(force=False)
 
+    def _refuse_lowered_version(self) -> None:
+        """Refuse a store whose schema version was lowered below what its anchor recorded.
+
+        Opening an older file runs the migrations, and migration 3 would seal every row it finds,
+        including rows an attacker changed after lowering the version. So the check comes first.
+        """
+        store, anchor = self.store, self.anchor
+        stored_version = getattr(store, "stored_version", None)
+        if store is None or anchor is None or stored_version is None:
+            return
+        try:
+            point = anchor.latest()
+        except (AnchorError, OSError):
+            return  # _audit_store reports an unreadable anchor
+        issues = downgrade_issues(stored_version(), point)
+        if issues:
+            raise StoreTampered(changed_message(issues))
+
     def _audit_store(self) -> None:
         """Refuse a store that no longer matches its seals, schema or anchor. Writes nothing."""
         store = self.store
@@ -439,7 +468,8 @@ class RuntimeLogImporter:
             raise StoreRefused(
                 f"the anchor {self.anchor.path} is missing or empty, but the event store already"
                 " holds sealed rows, which looks the same as a deleted anchor. Nothing was added."
-                " If you mean to start anchoring this store, run"
+                " If an anchor existed, restore it or investigate before anything else. Only if"
+                " this store was never anchored, run"
                 " `agent-latch-runtime anchor --database FILE --to PATH` once"
             )
         if point is not None and chain.head is not None and chain.head.seq > point.seq:
@@ -471,6 +501,9 @@ class RuntimeLogImporter:
                 self._dirty = True  # the extra rows are now vouched for; anchor them
 
     def _require_tail_matched(self) -> None:
+        """Raise when rows past the anchor have no matching trace record after every log line was
+        read.
+        """
         if self._tail:
             raise StoreTampered(
                 changed_message([])

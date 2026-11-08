@@ -5,12 +5,14 @@ refusal proves nothing about the store. This client has no judgment to apply: it
 `docker run -i ... audit-tool` session Claude Desktop uses and sends the statements. Every write must
 be refused, and the row count must not change.
 
-Run it with a Python that has the runtime extra (the repo's .venv):
+Run it with a Python that has the runtime extra (the repo's .venv), from the repository root:
 
-    .venv/bin/python docs/audit-trail-dev/attack_tool.py
+    .venv/bin/python docs/audit-trail-dev/attack_tool.py                      # store in a Docker volume
+    .venv/bin/python docs/audit-trail-dev/attack_tool.py --local ~/audit-demo/audit.db   # a local file
 
-Settings: --docker (path to the docker command), --image, --volume. Exit code 0 when every write was
-refused and the count is unchanged, 1 otherwise.
+Docker settings: --docker (path to the docker command), --image, --volume. With --local the tool
+is started from this Python (``agent-latch-runtime audit-tool``) against that file instead, which
+needs no Docker. Exit code 0 when every write was refused and the count is unchanged, 1 otherwise.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
 
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
@@ -43,8 +46,9 @@ ATTACKS = [
 ]
 
 
-async def run(docker: str, image: str, volume: str) -> int:
-    transport = StdioTransport(
+def docker_transport(docker: str, image: str, volume: str) -> StdioTransport:
+    """The tool in its own container: no network, read-only filesystem, store mounted read-only."""
+    return StdioTransport(
         command=docker,
         args=[
             "run", "-i", "--rm", "--network", "none", "--read-only", "--cap-drop=ALL",
@@ -52,6 +56,18 @@ async def run(docker: str, image: str, volume: str) -> int:
             "audit-tool", "--database", "/data/audit.db",
         ],
     )
+
+
+def local_transport(database: Path) -> StdioTransport:
+    """The same tool, started from this Python against a store on this machine."""
+    return StdioTransport(
+        command=sys.executable,
+        args=["-m", "agent_latch.runtime.cli", "audit-tool", "--database", str(database)],
+    )
+
+
+async def run(transport: StdioTransport) -> int:
+    """Send every statement through the tool and report each result; 0 only if all were refused."""
     count_sql = "SELECT COUNT(*) AS n FROM events"
     async with Client(transport) as client:
         print("tools:", sorted(tool.name for tool in await client.list_tools()))
@@ -74,12 +90,17 @@ async def run(docker: str, image: str, volume: str) -> int:
 
 
 def main() -> int:
+    """Parse the command line, pick the Docker or local transport, and run the attacks."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--local", type=Path, metavar="FILE",
+                        help="a store on this machine, instead of a Docker volume")
     parser.add_argument("--docker", default="docker", help="path to the docker command")
     parser.add_argument("--image", default="agent-latch-runtime:local")
     parser.add_argument("--volume", default="agentlatch-data", help="volume that holds audit.db")
     args = parser.parse_args()
-    return asyncio.run(run(args.docker, args.image, args.volume))
+    if args.local is not None:
+        return asyncio.run(run(local_transport(args.local)))
+    return asyncio.run(run(docker_transport(args.docker, args.image, args.volume)))
 
 
 if __name__ == "__main__":
