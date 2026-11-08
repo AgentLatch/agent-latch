@@ -15,7 +15,7 @@ from typing import Any, TextIO
 
 from agent_latch.runtime.events import ToolCall, ToolInfo, ToolOutput, utc_now
 from agent_latch.runtime.ledger.chain import Ledger, LedgerError
-from agent_latch.runtime.redact import excerpt, payload_bytes, payload_sha256
+from agent_latch.runtime.redact import excerpt, payload_bytes, payload_sha256, safe_text
 
 TRACE_SCHEMA = "agentlatch.runtime.trace/1"
 DEFAULT_EXCERPT_CHARS = 200
@@ -111,6 +111,27 @@ class TraceLog:
                 }
                 for tool in tools
             ],
+        })
+
+    def initialized(
+        self,
+        *,
+        session_id: str,
+        request_id: str,
+        server: str,
+        protocol_version: Any,
+        client: Mapping[str, str],
+        server_info: Mapping[str, str],
+    ) -> dict[str, Any]:
+        return self.write({
+            "session_id": session_id,
+            "request_id": request_id,
+            "server": server,
+            "method": "initialize",
+            "stage": "response",
+            "protocol_version": protocol_version if isinstance(protocol_version, str) else None,
+            "client": dict(client),
+            "server_info": dict(server_info),
         })
 
     def call_request(self, call: ToolCall) -> dict[str, Any]:
@@ -212,9 +233,19 @@ def _call_fields(call: ToolCall) -> dict[str, Any]:
     }
 
 
+def _shown(value: Any, missing: str = "?") -> str:
+    return safe_text(value) if isinstance(value, str) and value else missing
+
+
 def summarize_record(record: Mapping[str, Any]) -> str:
     """One short human-readable line for a trace record (no argument values or output)."""
     method, stage = record.get("method", "?"), record.get("stage", "?")
+    if method == "initialize":
+        # A trace file read back may not have come from this proxy: escape again before printing.
+        info = record.get("server_info") or {}
+        name, version = _shown(info.get("name")), _shown(info.get("version"))
+        protocol = _shown(record.get("protocol_version"), "None")
+        return f"initialize -> {name} {version} (protocol {protocol})"
     if method == "tools/list":
         return f"tools/list -> {len(record.get('tools', []))} tool(s)"
     if method == "prompts/list":

@@ -63,7 +63,7 @@ def run_demo(directory: Path, *, scenario: str = "default", out: TextIO | None =
     """Record a demo session into ``directory`` and import it; raises on failure."""
     # Resolved at call time: binding sys.stderr as the default would keep whatever stream was
     # installed when this module was first imported (for example a test capture, later closed).
-    out = sys.stderr if out is None else out
+    out = out if out is not None else sys.stderr
     if scenario not in SCENARIOS:
         raise ValueError(f"unknown demo scenario {scenario!r}; expected one of {SCENARIOS}")
     directory.mkdir(parents=True, exist_ok=True)

@@ -247,3 +247,24 @@ def test_payload_file_masks_values(tmp_path: Path) -> None:
     assert FAKE_TOKEN not in json.dumps(response)
     if os.name == "posix":
         assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_safe_text_caps_length_and_escapes_control_characters() -> None:
+    from agent_latch.runtime.redact import MAX_IDENTITY_CHARS, safe_text
+
+    hostile = "evil\x1b[2J\x1b[31m" + "A" * 5000
+    out = safe_text(hostile)
+    assert len(out) <= MAX_IDENTITY_CHARS * 4  # at most 4 chars per escaped character
+    assert "\x1b" not in out and "\\x1b" in out
+    assert safe_text("1.0\x1b]0;pwned\x07") == "1.0\\x1b]0;pwned\\x07"
+    assert safe_text("a\u200bb") == "a\\u200bb"  # invisible characters stay visible as evidence
+    assert safe_text("fake-weather") == "fake-weather"
+
+
+def test_unescape_text_restores_escapes_and_leaves_the_rest() -> None:
+    from agent_latch.runtime.redact import safe_text, unescape_text
+
+    assert unescape_text(safe_text("githu\u200bb")) == "githu\u200bb"
+    assert unescape_text(safe_text("a\x1b[0m")) == "a\x1b[0m"
+    assert unescape_text("plain") == "plain"
+    assert unescape_text("bad \\u12 and \\xZZ") == "bad \\u12 and \\xZZ"

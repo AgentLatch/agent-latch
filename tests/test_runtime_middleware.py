@@ -19,10 +19,10 @@ from fastmcp.client.transports import StdioTransport
 from fastmcp.server import create_proxy
 
 from agent_latch.runtime.events import PayloadEvent
-from agent_latch.runtime.middleware import AgentLatchMiddleware
+from agent_latch.runtime.middleware import AgentLatchMiddleware, _implementation
 from agent_latch.runtime.payloads import PayloadFile, PayloadTap
 from agent_latch.runtime.redact import MASK
-from agent_latch.runtime.trace import TraceLog
+from agent_latch.runtime.trace import TraceLog, summarize_record
 
 FIXTURES = Path(__file__).resolve().parent / "runtime_fixtures"
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -214,6 +214,63 @@ def test_proxy_command_over_stdio(tmp_path: Path) -> None:
     assert FAKE_TOKEN not in payloads_path.read_text(encoding="utf-8")
 
 
+def test_handshake_is_recorded_and_alr03_identifies_the_server(tmp_path: Path) -> None:
+    """End to end: the middleware records the handshake, and both runtime gates run on it."""
+    from agent_latch.gates import alr03
+    from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
+
+    sys.path.insert(0, str(FIXTURES))
+    try:
+        from fake_server import server as backend
+    finally:
+        sys.path.remove(str(FIXTURES))
+
+    alr03.reset_state()
+    trace_path = tmp_path / "trace.jsonl"
+    payloads_path = tmp_path / "payloads.jsonl"
+    trace = TraceLog(trace_path, summary=None)
+    payload_file = PayloadFile(payloads_path)
+    tap = PayloadTap([payload_file])
+    proxy = create_proxy(backend, name="weather")
+    proxy.add_middleware(AgentLatchMiddleware(trace, server="weather", tap=tap))
+    asyncio.run(_exercise(Client(proxy)))
+    trace.close()
+    payload_file.close()
+
+    # The handshake is in the trace and the payloads. This proxy is built directly with
+    # create_proxy (default identity="proxy"), so it reports the proxy's own label; build_proxy
+    # (used by the CLI) forwards the upstream identity instead.
+    handshake = next(r for r in _records(trace_path) if r["method"] == "initialize")
+    assert handshake["server_info"]["name"] == "weather"
+    assert handshake["server_info"]["version"]
+    payload_handshake = next(
+        e for e in _records(payloads_path) if e["method"] == "initialize"
+    )
+    assert payload_handshake["payload"]["server_info"]["name"] == "weather"
+
+    # Importing runs every discovered gate, including ALR03, on the handshake event.
+    out_csv = tmp_path / "gate-results.csv"
+    RuntimeLogImporter(
+        trace_path, out_csv, discover_gates(), payloads_path=payloads_path, follow=False
+    ).run()
+    with out_csv.open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert {row["gate_id"] for row in rows} == {"ALR03", "ALR04", "ALR10"}
+
+    alr03_rows = [r for r in rows if r["gate_id"] == "ALR03"]
+    handshake_rows = [
+        json.loads(r["result_json"])["findings"]
+        for r in alr03_rows
+        if json.loads(r["result_json"])["findings"]
+    ]
+    flat = [finding for findings in handshake_rows for finding in findings]
+    identification = next(
+        f for f in flat if f["rule_id"] == alr03.RULE_IDS["server_identification"]
+    )
+    assert identification["outcome"] == "PASS"
+    assert identification["entity"]["server"] == "weather"
+
+
 def test_demo_command_records_and_imports_a_session(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -256,3 +313,20 @@ def test_demo_secret_leak_scenario_fires_alr10(
         text = (tmp_path / name).read_text(encoding="utf-8")
         assert FAKE_GITHUB_TOKEN not in text and "AKIA" + "FAKEFAKEFAKEFAKE" not in text
     assert FAKE_GITHUB_TOKEN not in err
+
+
+def test_hostile_handshake_strings_do_not_reach_trace_or_terminal(tmp_path: Path) -> None:
+    info = _implementation({
+        "name": "evil\x1b[2J\x1b[31m" + "A" * 5000,
+        "version": "1.0\x1b]0;pwned\x07",
+    })
+    log = TraceLog(tmp_path / "trace.jsonl", summary=None)
+    record = log.initialized(
+        session_id="s", request_id="1", server="x",
+        protocol_version="2025\x1b[0m" + "9" * 500, client={}, server_info=info,
+    )
+    line = summarize_record(record)
+    assert "\x1b" not in line and "\x07" not in line
+    assert len(line) < 400
+    raw = (tmp_path / "trace.jsonl").read_text()
+    assert len(raw) < 1000 and "\\x1b" in raw
