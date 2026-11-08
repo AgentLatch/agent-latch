@@ -12,7 +12,8 @@ person changing the code.
 | [02-implementation.md](02-implementation.md) | You are changing the code: what lives where, the invariants, how to extend it |
 | [03-testing.md](03-testing.md) | You are proving a change: the test plan, mutation checks, regression, CI |
 | [04-debugging-and-fixing.md](04-debugging-and-fixing.md) | Something fails: symptom to cause to fix, and what never to do |
-| [05-claude-desktop-test.md](05-claude-desktop-test.md) | You want to see an agent try to delete its traces, with Claude Desktop as the agent |
+| [05-claude-desktop-test.md](05-claude-desktop-test.md) | You want to see an agent try to delete its traces, with Claude Desktop as the agent, on your Mac's Python |
+| [06-docker-test.md](06-docker-test.md) | The same test the way it should be deployed: the store and anchor in Docker volumes, the agent holding only a read-only tool. Start here |
 
 ## The change in one paragraph
 
@@ -33,7 +34,8 @@ what actually stops a change; the seals detect one.
 | Optional anchor fields (`source`, `schema_sha256`, `schema_version`), one-chain-per-file rule | `src/agent_latch/runtime/ledger/anchor.py` |
 | Migrations 3 (seal) and 4 (triggers), `SQLiteEventStore`, `SQLiteEventReader` | `src/agent_latch/runtime/sqlite_store.py` |
 | `EventWriter` / `EventReader`, the pre-save check, crash recovery, publishing | `src/agent_latch/runtime/importer.py` |
-| `import-logs --anchor`, `anchor --database`, `verify --database` | `src/agent_latch/runtime/cli.py` |
+| `import-logs --anchor`, `anchor --database`, `verify --database`, `audit-tool` | `src/agent_latch/runtime/cli.py` |
+| The read-only MCP tool an agent gets (`audit-tool`) | `src/agent_latch/runtime/audit_tool.py` |
 | Tests | `tests/test_audit_store.py`, `tests/store_contract.py`, `tests/runtime_fixtures/audit_reader_server.py` |
 | CI | `.github/workflows/tests.yml` (second-user step, runtime job), `.github/workflows/images.yml` (sealed-store smoke) |
 

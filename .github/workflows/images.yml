@@ -16,6 +16,7 @@ on:
       - src/**
       - pyproject.toml
       - .github/workflows/images.yml
+      - docs/audit-trail-dev/docker-test.sh
   push:
     branches: [main]
     paths: *image-paths
@@ -84,6 +85,8 @@ jobs:
               --anchor demo.anchor --once --quiet
             agent-latch-runtime verify --database demo.db --anchor demo.anchor
           '
+      - name: Prove the sealed audit store in containers (volumes, another user, read-only tool)
+        run: IMAGE=agent-latch-runtime:test SKIP_BUILD=1 bash docs/audit-trail-dev/docker-test.sh
       - name: Check that the images hold no Node.js or compiler
         run: |
           for image in agent-latch:test agent-latch-runtime:test; do

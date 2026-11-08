@@ -831,3 +831,27 @@ def test_anchor_points_without_the_new_fields_are_unchanged(tmp_path: Path) -> N
     assert AnchorPoint.from_dict(legacy) == old
     assert AnchorPoint.from_dict({**new.to_dict(), "schema_version": True}) is None
     assert AnchorPoint.from_dict({**new.to_dict(), "source": 7}) is None
+
+
+def test_audit_tool_command_serves_only_a_sealed_store(
+    sealed: Sealed, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pytest.importorskip("fastmcp")
+    from agent_latch.runtime.audit_tool import build_audit_tool
+
+    # A missing store, and an older (unsealed) one, are configuration errors: exit 2, no server.
+    assert cli.main(["audit-tool", "--database", str(tmp_path / "nothing.db")]) == 2
+    assert "no event store" in _out(capsys)
+    older = tmp_path / "v1.db"
+    conn = sqlite3.connect(older, isolation_level=None)
+    sqlite_store.MIGRATIONS[0](conn)
+    conn.execute("PRAGMA user_version = 1")
+    conn.close()
+    assert cli.main(["audit-tool", "--database", str(older)]) == 2
+    assert "not sealed yet" in _out(capsys)
+
+    # A sealed store gets exactly two tools, and building the tool leaves the store untouched.
+    server = build_audit_tool(sealed.database)
+    tools = asyncio.run(server.list_tools())
+    assert sorted(tool.name for tool in tools) == ["query_audit_log", "recent_events"]
+    assert sealed.rows() == 4 and sealed.verify() == 0

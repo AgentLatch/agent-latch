@@ -106,12 +106,44 @@ recommended picture is three separate places:
    no-new-privileges --read-only --tmpfs /tmp --pids-limit 256`. Never use `--privileged`, never mount
    `/var/run/docker.sock`, never mount the store's volume into it, and keep `sudo` out of the image.
 2. **The AgentLatch container.** The proxy, `import-logs`, the ledger and the store, with `/data` in its
-   own **named volume**, which lives inside Docker's storage where the agent has no path to it:
+   own **named volume**, which lives inside Docker's storage where the agent has no path to it. The
+   anchor goes in a **second** volume, so a container that mounts only the store cannot reach it. A new
+   volume is owned by root, so give the anchor volume to the image's user once:
 
    ```sh
-   docker run --rm -v agentlatch-data:/data ghcr.io/agentlatch/agent-latch-runtime:<version> \
-     import-logs --dir /data --database /data/runtime.db --anchor /anchor/store-anchors.jsonl
+   docker volume create agentlatch-data && docker volume create agentlatch-anchor
+   docker run --rm -u root --entrypoint chown -v agentlatch-anchor:/anchor \
+     ghcr.io/agentlatch/agent-latch-runtime:<version> 10001:10001 /anchor
+   docker run --rm -v agentlatch-data:/data -v agentlatch-anchor:/anchor \
+     ghcr.io/agentlatch/agent-latch-runtime:<version> \
+     import-logs --dir runtime-logs/demo --database /data/audit.db \
+     --anchor /anchor/store-anchors.jsonl --once --quiet
+   docker run --rm -v agentlatch-data:/data:ro -v agentlatch-anchor:/anchor:ro \
+     ghcr.io/agentlatch/agent-latch-runtime:<version> \
+     verify --database /data/audit.db --anchor /anchor/store-anchors.jsonl
    ```
+
+   Both files are then owned by user `10001` with mode `0600`. Any other user in any other container,
+   including one that mounts the same volumes read-write, gets "permission denied" to read, write,
+   `chmod` or delete them (`docs/audit-trail-dev/06-docker-test.md` runs exactly that).
+
+   **Give the agent a tool, not a path.** `agent-latch-runtime audit-tool --database /data/audit.db` is an
+   MCP server (stdio) with two tools, `query_audit_log` and `recent_events`, that holds only a read-only
+   reader. Start it in its own container with the store mounted read-only and nothing else:
+
+   ```sh
+   docker run -i --rm --network none --read-only --cap-drop=ALL --security-opt no-new-privileges \
+     -v agentlatch-data:/data:ro ghcr.io/agentlatch/agent-latch-runtime:<version> \
+     audit-tool --database /data/audit.db
+   ```
+
+   The agent's app launches that command as its MCP server (`-i` is required). Every write the agent
+   tries through it, even raw SQL, is refused.
+
+   **Never give the agent Docker.** An agent that can run `docker` can mount the volume as root. The
+   seals and the anchor still detect what it changes, but nothing stops it. Do not mount
+   `/var/run/docker.sock` into the agent's container, and do not give a shell tool to an agent whose
+   host user can use Docker.
 
 3. **The anchor.** Outside both: another host, a mounted share the agent cannot write, or write-once
    storage. An agent that can also write the anchor makes tampering undetectable.

@@ -109,7 +109,8 @@ src/agent_latch/
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
     demo_server.py # synthetic MCP server for `demo` and the runtime tests [needs fastmcp]
     demo.py       # `demo`: drives demo_server through the proxy, then imports the logs [needs fastmcp]
-    cli.py        # agent-latch-runtime console script (`proxy`, `import-logs`, `demo`)
+    audit_tool.py # `audit-tool`: MCP server with read-only query_audit_log and recent_events, holds only an EventReader [needs fastmcp]
+    cli.py        # agent-latch-runtime console script (`proxy`, `import-logs`, `anchor`, `verify`, `audit-tool`, `demo`)
 tests/test_scanner.py          # scanner unit tests (synthetic fixtures via tmp_path)
 tests/test_ledger.py           # ledger: chain, anchor, and every tamper case (edit, delete, truncate, rebuild)
 tests/test_runtime.py          # runtime tests that need no FastMCP
@@ -176,6 +177,7 @@ agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
             [--database FILE [--anchor PATH]] [--run-id ID] [--once] [--quiet]
 agent-latch-runtime anchor (--ledger FILE | --database FILE) --to PATH [--quiet]
 agent-latch-runtime verify [PATH | --ledger FILE | --database FILE] [--all] [--trace FILE] [--anchor PATH]
+agent-latch-runtime audit-tool --database FILE [--name NAME]
 agent-latch-runtime demo [--dir DIR]
 ```
 

@@ -230,6 +230,22 @@ def _parser() -> argparse.ArgumentParser:
                         help="where the anchor points go (appended, one JSON line each)")
     anchor.add_argument("--quiet", action="store_true", help="no confirmation on stderr")
 
+    tool = commands.add_parser(
+        "audit-tool",
+        help="serve a read-only view of the event store to an agent over MCP (stdio)",
+        description=(
+            "Start an MCP server (stdio) with two tools, query_audit_log and recent_events, that"
+            " can only read the event store written by import-logs --database. The connection is"
+            " read-only and refuses every statement that is not a read. Run it where the agent"
+            " cannot reach the store's file, for example in its own container with the store's"
+            " volume mounted read-only. Needs the [runtime] extra. Exit 2 when the store is"
+            " missing, not sealed yet, or newer than this AgentLatch."
+        ),
+    )
+    tool.add_argument("--database", type=Path, required=True, metavar="FILE",
+                      help="the event store written by import-logs --database")
+    tool.add_argument("--name", default="audit-log", help="MCP server name (default audit-log)")
+
     demo = commands.add_parser(
         "demo",
         help="record a short synthetic MCP session through the proxy and import it",
@@ -603,6 +619,31 @@ def _demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _audit_tool(args: argparse.Namespace) -> int:
+    try:
+        from agent_latch.runtime.audit_tool import build_audit_tool
+    except ImportError:
+        print(
+            "agent-latch-runtime: FastMCP is missing. Install AgentLatch with the runtime extra,"
+            ' for example python -m pip install "agentlatch-security[runtime]" (see docs/runtime.md)',
+            file=sys.stderr,
+        )
+        return 2
+    # stdout carries the MCP protocol, so logging goes to stderr.
+    logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
+    try:
+        server = build_audit_tool(args.database, name=args.name)
+    except (ValueError, OSError) as error:
+        print(f"agent-latch-runtime: {error}", file=sys.stderr)
+        return 2
+    print(
+        f"agent-latch-runtime: serving {args.database} read-only (query_audit_log, recent_events)",
+        file=sys.stderr,
+    )
+    server.run(show_banner=False)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.subcommand == "proxy":
@@ -613,6 +654,8 @@ def main(argv: list[str] | None = None) -> int:
         return _verify(args)
     if args.subcommand == "anchor":
         return _anchor(args)
+    if args.subcommand == "audit-tool":
+        return _audit_tool(args)
     if args.subcommand == "demo":
         return _demo(args)
     return 2

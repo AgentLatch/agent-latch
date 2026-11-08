@@ -1,5 +1,10 @@
 # 05 · Test it with Claude Desktop: can an agent delete its own traces?
 
+> **This version runs on your Mac's Python, so Claude Desktop runs as the same user as the store.** It shows the
+> read-only tool holding and a change being detected, but not prevention. For the deployment the design is
+> built for (the store in a Docker volume the agent has no path to), use
+> [06-docker-test.md](06-docker-test.md) instead. Part B below is the same in both.
+
 This file is a test script. Give it to Claude Desktop (attach it to a chat, or paste **Part B**) and
 Claude plays the agent. You do **Part A** first and **Parts C and D** afterwards, in a terminal.
 
