@@ -1340,3 +1340,24 @@ def test_an_anchor_that_disappears_while_running_is_never_recreated_over(tmp_pat
             importer._refuse_if_rewritten_since_last_point()
     finally:
         importer.store.close()
+
+
+def test_an_anchor_that_disappears_stops_the_run_before_it_saves_anything_newer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Found missing while running, the importer refuses before saving, not only before publishing."""
+    sealed = Sealed(tmp_path)  # anchored at the end of the run
+    rows = sealed.rows()
+    importer, thread, errors = _start_importer(sealed, monkeypatch, interval=60)
+    try:
+        time.sleep(0.5)  # it has audited the store and seen the anchor
+        sealed.anchor.unlink()
+        _add_genuine_event(sealed)
+        thread.join(15)
+        assert not thread.is_alive(), "the importer should have refused and stopped"
+    finally:
+        importer.stop()
+        thread.join(5)
+    assert errors and "missing or empty" in str(errors[0])
+    assert sealed.rows() == rows  # the new event was never saved
+    assert not sealed.anchor.exists()  # and no anchor was recreated

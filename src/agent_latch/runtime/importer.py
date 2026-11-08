@@ -411,6 +411,7 @@ class RuntimeLogImporter:
             return
         self._match_tail(self._unsaved)
         self._refuse_if_saved_rows_changed()  # before the next save chains onto them
+        self._refuse_if_rewritten_since_last_point()  # and before it extends a changed or lost anchor
         before = self._head_seq()
         try:
             inserted = self.store.save(self._unsaved)
