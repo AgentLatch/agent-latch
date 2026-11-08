@@ -17,3 +17,6 @@ build/
 # Ignore this output folder only. A pattern of "runtime/" would also hide the source
 # package src/agent_latch/runtime/, and these logs must not land in that package.
 runtime-logs/
+
+# Local-only testing tooling (attack demo modes, ad-hoc flags). Never committed.
+local/
