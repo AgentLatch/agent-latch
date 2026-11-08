@@ -284,7 +284,7 @@ You only need to fill in the 4 locations, but here's what each part does:
 <details>
 <summary>Optional: let a command write the settings for you</summary>
 
-Instead of steps 2a–2c, you can run one of these **from the folder you open in VS Code**. First move into that folder, for example `cd $HOME\my-project` on Windows or `cd ~/my-project` on macOS and Linux. The command creates `.vscode/mcp.json` there with your 4 locations filled in, keeps any tools already in the file, and saves a backup of your old settings in a folder called `agentlatch-backups` in your home folder. The backup is kept outside your project so it can't be committed by accident. It may contain credentials, so keep it private. VS Code allows comments and trailing commas in `mcp.json`, which this command can't edit without losing them. If your file has either, the command stops and changes nothing; use steps 2a–2c instead. You can run it again safely.
+Instead of steps 2a–2c, you can run one of these **from the folder you open in VS Code**. First move into that folder, for example `cd $HOME\my-project` on Windows or `cd ~/my-project` on macOS and Linux. The command creates `.vscode/mcp.json` there with your 4 locations filled in, keeps any tools already in the file, and saves a backup of your old settings in your home folder, under `agentlatch-backups`, in a subfolder that belongs to this project only. The backup is kept outside your project so it can't be committed by accident. It may contain credentials, so keep it private. VS Code allows comments and trailing commas in `mcp.json`, which this command can't edit without losing them. If your file has either, the command stops and changes nothing; use steps 2a–2c instead. You can run it again safely.
 
 **Windows (PowerShell):**
 
@@ -305,7 +305,8 @@ if (-not $ok) {
 } else {
   New-Item -ItemType Directory -Force (Split-Path $file) | Out-Null
   if ($hasContent) {
-    $backups = Join-Path $HOME "agentlatch-backups"
+    $id = -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes((Get-Location).Path.ToLowerInvariant()))[0..5] | ForEach-Object { $_.ToString("x2") })
+    $backups = Join-Path $HOME "agentlatch-backups\$id"
     New-Item -ItemType Directory -Force $backups | Out-Null
     Copy-Item $file (Join-Path $backups ("mcp-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".json.bak"))
   }
@@ -325,7 +326,7 @@ if (-not $ok) {
 
 ```bash
 ~/agentlatch-runtime/bin/python - <<'EOF'
-import datetime, json, os, pathlib, shutil, sys
+import datetime, hashlib, json, os, pathlib, shutil, sys
 home = pathlib.Path.home()
 f = pathlib.Path.cwd() / ".vscode" / "mcp.json"
 f.parent.mkdir(parents=True, exist_ok=True)
@@ -337,7 +338,10 @@ if f.exists() and f.read_text().strip():
         # VS Code allows comments and trailing commas here; saving would drop them, so stop instead.
         sys.exit("Your mcp.json has something this command can't edit safely (such as comments or "
                  "trailing commas). Nothing was changed. Use steps 2a-2c instead.")
-    backups = home / "agentlatch-backups"
+    workspace = hashlib.sha256(os.path.realpath(pathlib.Path.cwd()).encode()).hexdigest()[:12]
+    root = home / "agentlatch-backups"
+    root.mkdir(mode=0o700, exist_ok=True)
+    backups = root / workspace
     backups.mkdir(mode=0o700, exist_ok=True)
     backup = backups / f"mcp-{datetime.datetime.now():%Y%m%d-%H%M%S}.json.bak"
     shutil.copy(f, backup)
@@ -410,10 +414,22 @@ For more detail, see [Connect an app](../runtime.md#connect-an-app). Only connec
 
 - **Pause it:** open `.vscode/mcp.json` and click **Stop** above `"agentlatch"`, or untick **agentlatch** under the tools icon in Copilot Chat.
 - **Remove it:** delete the `"agentlatch": { ... }` part from `mcp.json`, or delete the file if AgentLatch is the only thing in it.
-- **Go back to your old settings**, from the folder you opened in VS Code:
-  - Windows: `Get-ChildItem "$HOME\agentlatch-backups\mcp-*.json.bak" | Sort-Object Name | Select-Object -Last 1 | Copy-Item -Destination .vscode\mcp.json -Force`
-  - macOS and Linux: `cp "$(ls -1 ~/agentlatch-backups/mcp-*.json.bak | tail -1)" .vscode/mcp.json`
-  - These restore the newest backup. Backups are named with the date and time, in the `agentlatch-backups` folder in your home folder.
+- **Go back to your old settings**, from the folder you opened in VS Code. Each project keeps its own backups, so this only ever restores a backup made for the folder you are in, never another project's:
+  - Windows (PowerShell):
+
+    ```powershell
+    $id = -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes((Get-Location).Path.ToLowerInvariant()))[0..5] | ForEach-Object { $_.ToString("x2") })
+    Get-ChildItem "$HOME\agentlatch-backups\$id\mcp-*.json.bak" | Sort-Object Name | Select-Object -Last 1 | Copy-Item -Destination .vscode\mcp.json -Force
+    ```
+
+  - macOS and Linux (Terminal):
+
+    ```bash
+    id=$(~/agentlatch-runtime/bin/python -c "import hashlib, os; print(hashlib.sha256(os.path.realpath('.').encode()).hexdigest()[:12])")
+    cp "$(ls -1 ~/agentlatch-backups/$id/mcp-*.json.bak | tail -1)" .vscode/mcp.json
+    ```
+
+  - These restore the newest backup made for this folder. Backups are named with the date and time, in a subfolder of `agentlatch-backups` in your home folder. If a command says it can't find the path or the file, no backup was made for this folder, and your settings are unchanged.
 
 ## If something goes wrong
 
