@@ -497,11 +497,16 @@ def evaluate(event: dict[str, Any], *, policy: Mapping[str, Any] | None = None) 
     coverage = observed / declared if declared else 1.0
     if notes & UNKNOWN_EXTENT_NOTES:
         coverage = 0.0
-    ambiguous = bool(notes & (LIMIT_NOTES | {"payload_file_truncation"}))
 
     findings: list[dict[str, Any]] = []
     if "payload_file_truncation" in notes and not _remember(_coverage_done, (server, tool)):
         findings.append(_coverage_record(event, "output_truncated", tool=tool, server=server,
+                                         notes=notes, coverage=coverage))
+    # Traversal limits are known before deduplication, so they are reported even for repeats.
+    # Own dedup key: a truncation record must not hide a scanner-limit record, or the reverse.
+    if notes & UNKNOWN_EXTENT_NOTES and not _remember(
+            _coverage_done, (server, tool, "traversal_limit")):
+        findings.append(_coverage_record(event, "scanner_limit", tool=tool, server=server,
                                          notes=notes, coverage=coverage))
 
     key = (server, tool, digest("\x00".join(field.raw for field in texts)))
@@ -519,6 +524,13 @@ def evaluate(event: dict[str, Any], *, policy: Mapping[str, Any] | None = None) 
         scanned.add(digest(field.raw))
         for item in gather(field, siblings, notes):
             evidence[item.category].append(item)
+
+    # Gathering adds notes (span_limit, decode_limit, ...), so ambiguity is judged after the loop.
+    gather_limits = notes & (LIMIT_NOTES - UNKNOWN_EXTENT_NOTES)
+    if gather_limits and not _remember(_coverage_done, (server, tool, "gathering_limit")):
+        findings.append(_coverage_record(event, "scanner_limit", tool=tool, server=server,
+                                         notes=notes, coverage=coverage))
+    ambiguous = bool(notes & (LIMIT_NOTES | {"payload_file_truncation"}))
 
     outside = _outside_context(server, tool)
     for category in CATEGORIES:

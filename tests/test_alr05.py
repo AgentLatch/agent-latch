@@ -238,6 +238,30 @@ def test_truncated_output_gets_one_coverage_record_per_tool() -> None:
     assert again == []
 
 
+def test_scanner_limits_get_coverage_records_independent_of_truncation() -> None:
+    # Gathering limit: more clauses than the span limit.
+    many = ". ".join(f"Item {i} is listed" for i in range(1200))
+    first = alr05.evaluate(_call_event(many))["findings"]
+    limits = [f for f in first if f["decision_reason"] == "scanner_limit"]
+    assert len(limits) == 1
+    assert "span_limit" in limits[0]["coverage_notes"]
+
+    # Same tool, new output that is also cut by the payload file: both records still appear.
+    both = alr05.evaluate(_call_event(many + "…[4200 more chars]", order=8))["findings"]
+    assert {f["decision_reason"] for f in both if f["rule_id"] == "ALR05-R90"} == {
+        "output_truncated"}
+
+    # Traversal limit: reported even when identical output is evaluated again.
+    deep: Any = "x"
+    for _ in range(40):
+        deep = [deep]
+    event = _call_event("")
+    event["payload"]["content"] = None
+    event["payload"]["structured"] = deep
+    reasons = [f["decision_reason"] for f in alr05.evaluate(event)["findings"]]
+    assert reasons.count("scanner_limit") == 1
+
+
 def test_empty_output_is_silent() -> None:
     event = _call_event("")
     event["payload"] = None
