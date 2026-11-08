@@ -118,8 +118,10 @@ tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests 
 tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
 tests/test_alr03.py            # ALR03 endpoint-trust gate: identification and identity change
 tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
+tests/test_alr10.py            # ALR10: masking metadata, severity, policy, leak-proofing (SQLite, SARIF) and the inline labeled corpus
+tests/test_alr10_heldout.py    # ALR10 validation on runtime_fixtures/alr10_heldout.json: request and response rates, known misses
 tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
-tests/runtime_fixtures/        # demo-server wrapper, plus the ALR04 event dataset and expected outcomes
+tests/runtime_fixtures/        # demo-server wrapper, plus the ALR04 event dataset, the ALR10 validation set and expected outcomes
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
@@ -173,13 +175,13 @@ agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
             [--http HOST:PORT] (--upstream-url URL | -- SERVER COMMAND...)
 agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
             [--events-csv FILE] [--output-csv FILE] [--normalized-out FILE]
-            [--database FILE] [--run-id ID] [--once] [--quiet]
+            [--database FILE] [--policy FILE] [--run-id ID] [--once] [--quiet]
 agent-latch-runtime anchor --ledger FILE --to PATH [--quiet]
 agent-latch-runtime verify [PATH | --ledger FILE] [--all] [--trace FILE] [--anchor PATH]
 agent-latch-runtime demo [--dir DIR] [--scenario default|secret-leak]
 ```
 
-`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR04 and ALR10 are installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. The gates report findings only; the runtime report does not clear a tool. ALR10 reads only masked payloads: its evidence is the masked-location metadata (`payloads.masked_record`), so it never sees or writes a raw secret. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command; `--scenario secret-leak` sends and receives fake credentials so the ALR10 checks fire.
+`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR03, ALR04 and ALR10 are installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. The gates report findings only; the runtime report does not clear a tool. ALR10 reads only masked payloads: its evidence is the masked-location metadata (`payloads.masked_record`), so it never sees or writes a raw secret. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command; `--scenario secret-leak` sends and receives fake credentials so the ALR10 checks fire. `--policy FILE` (YAML or JSON, trusted operator configuration, never from the monitored project) is passed to every gate whose `evaluate` accepts `policy`: the ALR10 allowlist `allowed_secret_tools` and the ALR03 suppressions. `importer.load_policy` reads it with `yaml.safe_load`; a bad file exits `2`. Stored payload metadata is untrusted: ALR10 reports any masking kind outside `alr10.APPROVED_KINDS` as `unknown`.
 
 `--database FILE` is the operator's choice of a local store. It saves each normalized event in a SQLite file (`SQLiteEventStore`) and is off when omitted. The importer talks to that file only through the `EventStore` contract in `importer.py` (`open`, `save`, `close`). SQLite is the first implementation, using the standard-library `sqlite3` module, so it adds no dependency and makes no network request. A later destination (a warehouse or an opt-in trace exporter) implements the same contract and is selected the same way: by a flag on `import-logs`, not by a default. The database can hold payload data, so a new file is created with mode `0600` where the platform supports it. Keep it local. Do not add a vendor client as a required dependency.
 
@@ -226,7 +228,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 
 ### Runtime gates
 
-Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per gate, `GATE_ID` = the gate ID, `evaluate(event)`), discovered by the importer and run on every normalized event. They report findings and never block. Today two ship: `alr03.py` (endpoint trust from the recorded handshake: server identification `ALR03-001`, identity change `ALR03-002`, name impersonation `ALR03-003` — non-regex string similarity) and `alr04.py` (tool schema injection). Register a runtime gate's detectors in its gate's `detectors` group in `catalog.GATES` (IDs `ALRnn-0nn`), add its coverage/summary IDs to `catalog.DIAGNOSTICS`, and regenerate `docs/GATES.md`.
+Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per gate, `GATE_ID` = the gate ID, `evaluate(event)`), discovered by the importer and run on every normalized event. They report findings and never block. Today three ship: `alr10.py` (secret-like values crossing the tool boundary, from masked payloads only), `alr03.py` (endpoint trust from the recorded handshake: server identification `ALR03-001`, identity change `ALR03-002`, name impersonation `ALR03-003` — non-regex string similarity) and `alr04.py` (tool schema injection). Register a runtime gate's detectors in its gate's `detectors` group in `catalog.GATES` (IDs `ALRnn-0nn`), add its coverage/summary IDs to `catalog.DIAGNOSTICS`, and regenerate `docs/GATES.md`.
 
 ### Adding or changing a rule
 

@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from rich_argparse import RawDescriptionRichHelpFormatter
 
 from agent_latch import __version__
-from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
+from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates, load_policy
 from agent_latch.runtime.ledger import (
     Ledger,
     LedgerError,
@@ -149,6 +149,12 @@ def _parser() -> argparse.ArgumentParser:
         "--database", type=Path, metavar="FILE",
         help="also store the normalized events in this local SQLite file; it may hold payload data."
         " Off unless set. Nothing is uploaded",
+    )
+    importer.add_argument(
+        "--policy", type=Path, metavar="FILE",
+        help="operator policy (YAML or JSON) handed to the gates, for example"
+        " allowed_secret_tools for ALR10. Trusted configuration: never a file from the monitored"
+        " project",
     )
     importer.add_argument("--run-id", help="run id for the events (default: hash of first trace line)")
     importer.add_argument(
@@ -329,7 +335,7 @@ def _import_logs(args: argparse.Namespace) -> int:
     payloads = args.payloads or (None if args.trace else directory / "payloads.jsonl")
     events_csv = args.events_csv or directory / "events.csv"
     try:
-        gates = discover_gates()
+        gates = discover_gates(load_policy(args.policy) if args.policy else None)
         store = SQLiteEventStore(args.database) if args.database else None
         importer = RuntimeLogImporter(
             trace,

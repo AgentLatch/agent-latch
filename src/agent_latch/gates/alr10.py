@@ -12,8 +12,8 @@ Older records without that metadata still work: the gate falls back to finding `
 markers, and to re-running the token-shape patterns over the stored strings (anything they match
 is reported by kind only, never quoted).
 
-Severity: ``high`` for a token-shaped secret in any argument or for any secret sent to a remote
-(HTTP upstream) server; ``medium`` for a secret under a key name sent to a local server; a tool
+Severity: ``high`` for a token-shaped secret in an argument or in tool output, or for any secret
+sent to a remote (HTTP upstream) server (requests only; a response is not escalated by transport); ``medium`` for a secret under a key name sent to a local server; a tool
 whose purpose is authentication (named ``login``/``auth``, or with a password parameter in its
 schema) is ``INCONCLUSIVE`` at ``low`` severity - still reported, never dropped. The operator
 allowlist ``policy.allowed_secret_tools: [{server, tool}]`` turns an expected case into ``PASS``
@@ -46,6 +46,9 @@ RULE_COVERAGE = "ALR10-R90"
 TOKEN_KINDS = frozenset(
     {"token", "token:openai", "token:github", "token:slack", "token:aws", "jwt", "pem", "bearer"}
 )
+# Kinds the masking can produce. Stored metadata is untrusted input, so any other kind is
+# reported as ``unknown`` instead of being copied into evidence.
+APPROVED_KINDS = TOKEN_KINDS | {"key_name", "assignment"}
 MAX_EVIDENCE_REPORTED = 16
 MAX_STRINGS = 4096
 
@@ -89,7 +92,10 @@ def _masked_locations(payload: Mapping[str, Any]) -> list[dict[str, str]]:
         return []
     return [
         # Older records may hold a token-shaped key in the path; never carry it into evidence.
-        {"path": mask_secrets(entry["path"]), "kind": entry["kind"]}
+        {
+            "path": mask_secrets(entry["path"]),
+            "kind": entry["kind"] if entry["kind"] in APPROVED_KINDS else "unknown",
+        }
         for entry in entries
         if isinstance(entry, Mapping)
         and isinstance(entry.get("path"), str)
@@ -242,7 +248,8 @@ def evaluate(event: dict[str, Any], *, policy: Mapping[str, Any] | None = None) 
                     " credential can be legitimate; review it.",
             evidence=evidence,
         )]}
-    severity = "high" if _token_shaped(evidence) or remote else "medium"
+    # Remote escalation is about sending a secret to a remote server, so it applies to requests.
+    severity = "high" if _token_shaped(evidence) or (sent and remote) else "medium"
     return {"findings": [_record(
         rule_id=rule_id, family=family, event=event, tool=tool, server=server,
         outcome="FAIL", severity=severity, is_finding=True,

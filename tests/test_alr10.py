@@ -324,7 +324,116 @@ def test_no_secret_value_appears_in_any_gate_output_file_or_report(
     captured = capsys.readouterr()
     assert "ALR10-R01" in captured.out and "ALR10-R02" in captured.out
 
+    sarif_path = tmp_path / "runtime.sarif"
+    assert cli_main([str(tmp_path), "--runtime-result", str(results_csv), "--format", "sarif",
+                     "--output", str(sarif_path), "--fail-on", "none"]) == 0
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    rule_ids = {r["ruleId"] for r in sarif["runs"][0]["results"]}
+    assert {"ALR10-R01", "ALR10-R02"} <= {i.removeprefix("AGENTLATCH-") for i in rule_ids}
+    # The runtime report has no JSON form: it is refused rather than written without the check.
+    assert cli_main([str(tmp_path), "--runtime-result", str(results_csv), "--format", "json"]) == 2
+
     canary = CANARY.encode("utf-8")
-    for path in (trace_path, payloads_path, events_csv, results_csv, normalized, database):
+    for path in (trace_path, payloads_path, events_csv, results_csv, normalized, database,
+                 sarif_path):
         assert canary not in path.read_bytes(), f"the planted token leaked into {path.name}"
     assert CANARY not in captured.out and CANARY not in captured.err
+
+
+# --- operator policy through the importer and CLI --------------------------------------------
+
+
+def _write_session(tmp_path: Path) -> tuple[Path, Path]:
+    trace_path, payloads_path = tmp_path / "trace.jsonl", tmp_path / "payloads.jsonl"
+    trace = TraceLog(trace_path, summary=None)
+    payload_file = PayloadFile(payloads_path)
+    tap = PayloadTap([payload_file])
+    tools = [ToolInfo("search_issues", "demo", "Search issues.", {"type": "object"})]
+    trace.tools_listed(session_id="s", request_id="1", server="demo", tools=tools)
+    tap.tools_listed(session_id="s", request_id="1", client_id=None, server="demo", tools=tools)
+    call = ToolCall("s", "2", None, "search_issues", "demo", {"token": CANARY}, "t")
+    trace.call_request(call)
+    tap.call_request(call)
+    output = ToolOutput(("ok",), None, False)
+    trace.call_response(call, output, 1.0)
+    tap.call_response(call, output, 1.0)
+    trace.close()
+    payload_file.close()
+    return trace_path, payloads_path
+
+
+def _alr10_findings(results_csv: Path) -> list[dict[str, Any]]:
+    with results_csv.open(encoding="utf-8", newline="") as stream:
+        return [
+            finding
+            for row in csv.DictReader(stream)
+            for finding in json.loads(row["result_json"])["findings"]
+            if finding.get("gate_id") == "ALR10"
+        ]
+
+
+def test_import_logs_policy_flag_applies_the_allowlist(tmp_path: Path) -> None:
+    from agent_latch.runtime import cli as runtime_cli
+
+    reset_state()
+    _write_session(tmp_path)
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "allowed_secret_tools:\n  - {server: demo, tool: search_issues}\n", encoding="utf-8"
+    )
+    base = ["import-logs", "--dir", str(tmp_path), "--once", "--quiet"]
+
+    assert runtime_cli.main(base) == 0
+    without = _alr10_findings(tmp_path / "gate-results.csv")
+    assert [(f["outcome"], f["is_finding"]) for f in without] == [("FAIL", True)]
+
+    (tmp_path / "gate-results.csv").unlink()
+    (tmp_path / "events.csv").unlink()
+    (tmp_path / "normalized.jsonl").unlink()
+    assert runtime_cli.main([*base, "--policy", str(policy)]) == 0
+    allowed = _alr10_findings(tmp_path / "gate-results.csv")
+    assert [(f["outcome"], f["is_finding"]) for f in allowed] == [("PASS", False)]
+    assert allowed[0]["note"] == "allowed by policy.allowed_secret_tools"
+
+
+def test_import_logs_rejects_an_unusable_policy_file(tmp_path: Path, capsys) -> None:
+    from agent_latch.runtime import cli as runtime_cli
+
+    _write_session(tmp_path)
+    bad = tmp_path / "policy.yaml"
+    bad.write_text("- just\n- a list\n", encoding="utf-8")
+    base = ["import-logs", "--dir", str(tmp_path), "--once", "--quiet"]
+    assert runtime_cli.main([*base, "--policy", str(bad)]) == 2
+    assert "must hold a mapping" in capsys.readouterr().err
+    assert runtime_cli.main([*base, "--policy", str(tmp_path / "missing.yaml")]) == 2
+
+
+# --- stored metadata is untrusted ---------------------------------------------------------
+
+
+def test_unapproved_metadata_kind_is_not_copied_into_evidence() -> None:
+    hostile = "token:github\x1b[2J<script>" + CANARY
+    body = {
+        "tool": "t", "arguments": {"api_key": MASK}, "tool_definition": None,
+        "masked": [{"path": "$/arguments/api_key", "kind": hostile}],
+    }
+    found = _findings(_event("request", body))
+    assert found[0]["evidence"] == [
+        {"signal": "unknown", "field": "$/arguments/api_key", "source": "masking"}
+    ]
+    assert hostile not in json.dumps(found) and CANARY not in json.dumps(found)
+    assert found[0]["severity"] == "medium"  # an unknown kind never counts as token-shaped
+
+
+# --- severity: remote escalation is about secrets sent, not secrets returned ---------------
+
+
+def test_remote_server_escalates_requests_but_not_responses_by_transport() -> None:
+    request = _findings(_request({"api_key": "plainvalue"}, transport="http"))
+    assert request[0]["severity"] == "high"
+    key_name = _findings(_response(structured={"api_key": "plainvalue"}, transport="http"))
+    assert [(f["rule_id"], f["severity"]) for f in key_name] == [("ALR10-R02", "medium")]
+    local = _findings(_response(structured={"api_key": "plainvalue"}))
+    assert local[0]["severity"] == "medium"
+    token = _findings(_response(texts=("key " + CANARY,), transport="http"))
+    assert token[0]["severity"] == "high"  # a token-shaped secret is high from any server

@@ -1,6 +1,6 @@
 # Runtime proxy for MCP (preview)
 
-`agent-latch-runtime proxy` sits between an AI app and one MCP server and records the traffic: the handshake, the tool list, every tool call and result, and prompt templates. **Preview, monitor only:** it passes every message through unchanged and never blocks anything. `import-logs` then runs the installed gates — ALR03 (endpoint trust) and ALR04 (tool schema injection) — which report findings. The report lists findings only. Opt-in blocking is planned.
+`agent-latch-runtime proxy` sits between an AI app and one MCP server and records the traffic: the handshake, the tool list, every tool call and result, and prompt templates. **Preview, monitor only:** it passes every message through unchanged and never blocks anything. `import-logs` then runs the installed gates — ALR03 (endpoint trust), ALR04 (tool schema injection) and ALR10 (secret-like values crossing the tool boundary) — which report findings. The report lists findings only. Opt-in blocking is planned.
 
 ```
 AI app (MCP client) ──▶ agent-latch-runtime proxy ──▶ real MCP server
@@ -146,7 +146,7 @@ The trace never stores argument values or full outputs. The excerpt is at most `
 
 ## Intercepted payloads (opt-in)
 
-The trace says *that* a tool was called. Checking *what* was asked for (the command, path, URL or query, and what came back) needs the payload. The proxy turns each `tools/list`, `tools/call` and `prompts/get` message into a payload record with its full payload: requests before they are forwarded to the server, results before they go back to the app. Today the records are only written to a file. Runtime checks that read them are planned.
+The trace says *that* a tool was called. Checking *what* was asked for (the command, path, URL or query, and what came back) needs the payload. The proxy turns each `tools/list`, `tools/call` and `prompts/get` message into a payload record with its full payload: requests before they are forwarded to the server, results before they go back to the app. The records are written to a file. `import-logs` runs the ALR10 gate over them (secrets sent to a tool or returned by one), so without `--payloads` that gate can only report that it had nothing to check (`ALR10-R90`).
 
 `--payloads FILE` writes each record as one JSON line (`"schema": "agentlatch.runtime.payload/1"`), in a file created with mode `0600`. **This file holds argument values and tool output**, so it is off by default:
 
@@ -168,7 +168,7 @@ Before a record is written, string values under secret-like keys (`api_key`, `pa
 agent-latch-runtime demo
 ```
 
-This runs a bundled synthetic MCP server behind the proxy, lists its tools, calls three tools (one returns a fake credential, one fails), gets a prompt, then imports the logs and prints one line per event. Everything stays on your machine. The files land in `runtime-logs/demo/` and are replaced on each run: `trace.jsonl`, `payloads.jsonl`, `events.csv`, `normalized.jsonl` and `proxy.log` (the proxy's own messages).
+This runs a bundled synthetic MCP server behind the proxy, lists its tools, calls three tools (one returns a fake credential, one fails), gets a prompt, then imports the logs and prints one line per event. Everything stays on your machine. The files land in `runtime-logs/demo/` and are replaced on each run: `trace.jsonl`, `payloads.jsonl`, `events.csv`, `gate-results.csv` (one row per gate result), `normalized.jsonl` and `proxy.log` (the proxy's own messages).
 
 ```sh
 agent-latch-runtime demo --scenario secret-leak
@@ -182,7 +182,7 @@ The `secret-leak` scenario shows the ALR10 checks instead: the client calls `sea
 
 1. **Normalizes** it: the trace record and its payload record are joined into one event (below).
 2. **Shows** it: one line on stderr, one row in `events.csv`, and the full event (arguments, payload and response) in `normalized.jsonl`.
-3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR04 and ALR10 ship with the package, so this file is created. It records findings and does not block or change the call.
+3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR03, ALR04 and ALR10 ship with the package, so this file is created. It records findings and does not block or change the call.
 
 With no file options it reads and writes in `runtime-logs/`:
 
@@ -201,6 +201,18 @@ For a full live run with a real CrewAI agent and this repo's MCP gateway, follow
 **events.csv.** One row per event: `run_id`, `order`, `timestamp`, `session_id`, `request_id`, `server`, `method`, `stage`, `name`, `outcome` (`ok`, `error result`, `error (Type)`, or empty for requests), `duration_ms`, `output_bytes`, `has_payload` and the trace's redacted `excerpt`. Argument values are never in it. Cells that a spreadsheet would run as a formula (starting with `=`, `+`, `-` or `@`) get a leading `'`.
 
 ### Store events in SQLite
+
+`--policy FILE` hands operator policy (YAML or JSON) to the gates that read it. Today that is the ALR10 allowlist and the ALR03 suppressions. The file is trusted configuration: keep it outside the project being monitored. A file that cannot be read, or that is not a mapping, makes `import-logs` exit `2`.
+
+```yaml
+# policy.yaml
+allowed_secret_tools:
+  - {server: github, tool: search_issues}
+```
+
+```sh
+agent-latch-runtime import-logs --policy ./policy.yaml
+```
 
 `--database FILE` also saves every normalized event in a local SQLite database, using Python's built-in `sqlite3` (nothing extra to install). The CSV and normalized JSONL outputs are unchanged. Without `--database`, nothing else changes, and nothing is uploaded.
 
@@ -252,7 +264,7 @@ A trace record waits for its payload record (matched on session, request, server
 
 **ALR04 (preview).** It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. The rules can miss reworded instructions, and they do not look at tool results or what the agent does next. ALR04 never blocks a call.
 
-**ALR10 (preview).** It watches secrets crossing the tool boundary on `tools/call` payload records. `ALR10-R01` reports a secret-like value sent to a tool in the request arguments; `ALR10-R02` reports one coming back in the tool's output (text content, structured content or an error message); `ALR10-R90` is a coverage record when a tool call has no payload record (the proxy ran without `--payloads`), because the gate then cannot check it. The gate works on **masked** payloads by design: the proxy replaces secrets with `[REDACTED]` before writing, so the gate never sees a raw secret and nothing it writes can leak one. Its evidence is the masking itself, the `masked` path-and-kind list described above; older records fall back to the `[REDACTED]` markers. Severity is `high` for a token-shaped secret (`sk-`, `ghp_`, `AKIA…`, a JWT, a PEM key, a bearer header) in any argument or for any secret sent to a remote (HTTP upstream) server, and `medium` for a secret under a key name sent to a local server. A tool that looks like an authentication tool (named `login`/`auth`, or with a password parameter in its schema) is reported as `INCONCLUSIVE` at `low` severity, never dropped, because sending it a credential can be legitimate. An operator allowlist, `policy.allowed_secret_tools: [{server, tool}]` (trusted configuration only), turns an expected pair into `PASS` with a note. Findings carry OWASP category ASI03. Blind spots: secrets the masking patterns do not recognize (the same limit as the proxy's masking), secrets split across fields, and encoded secrets. ALR10 never blocks a call and does not clear a tool.
+**ALR10 (preview).** It watches secrets crossing the tool boundary on `tools/call` payload records. `ALR10-R01` reports a secret-like value sent to a tool in the request arguments; `ALR10-R02` reports one coming back in the tool's output (text content, structured content or an error message); `ALR10-R90` is a coverage record when a tool call has no payload record (the proxy ran without `--payloads`), because the gate then cannot check it. The gate works on **masked** payloads by design: the proxy replaces secrets with `[REDACTED]` before writing, so the gate never sees a raw secret and nothing it writes can leak one. Its evidence is the masking itself, the `masked` path-and-kind list described above; older records fall back to the `[REDACTED]` markers. Severity is `high` for a token-shaped secret (`sk-`, `ghp_`, `AKIA…`, a JWT, a PEM key, a bearer header) in an argument or in tool output, and `high` for any secret sent to a remote (HTTP upstream) server; that remote escalation applies to requests only, so a key-name secret returned by a remote server is `medium`, like one returned by a local server. A secret under a key name sent to a local server is `medium`. A tool that looks like an authentication tool (named `login`/`auth`, or with a password parameter in its schema) is reported as `INCONCLUSIVE` at `low` severity, never dropped, because sending it a credential can be legitimate. An operator allowlist, `allowed_secret_tools: [{server, tool}]` in a policy file you pass with `import-logs --policy FILE` (YAML or JSON; trusted configuration only, never a file from the monitored project), turns an expected pair into `PASS` with a note. Without `--policy` nothing is allowed. Metadata read from the payload file is treated as untrusted: a masking kind that is not one of the known kinds is reported as `unknown`, never copied into a finding. Findings carry OWASP category ASI03. Blind spots: secrets the masking patterns do not recognize (the same limit as the proxy's masking), secrets split across fields, and encoded secrets. On a small separate validation set (`tests/runtime_fixtures/alr10_heldout.json`, written after the patterns and not used to tune them; 48 synthetic cases) it flagged 7 of 12 secrets in requests and 8 of 10 in tool output, with no false positives in either direction. The misses were credentials inside URLs, GitLab, Stripe-style and Google API keys, npm tokens, and environment-style names with a prefix such as `AWS_SECRET_ACCESS_KEY` or `DB_PASSWORD`. These numbers come from a small hand-written set, so treat them as a regression check and not as a measure of real traffic. ALR10 never blocks a call and does not clear a tool.
 
 **gate-results.csv.** Columns are `run_id`, `order`, `gate_id`, `result_json`, and `result_json` always has the same shape: `{"gate_id":"...","status":"ok","findings":[],"error":null}`. If a gate raises, its row has `"status":"error"` and only the exception type in `error`; later gates still run.
 
