@@ -39,6 +39,11 @@ def build_proxy(
     else:
         target = upstream_url
     # mode="auto" lets the upstream negotiate its own protocol version, as the gateway does.
-    proxy = create_proxy(target, name=name, mode="auto")
-    proxy.add_middleware(AgentLatchMiddleware(trace, server=name, tap=tap))
+    # identity="upstream" forwards the real server's name/version to the client (and so to the
+    # recorded handshake), instead of the proxy hiding it behind its own identity.
+    proxy = create_proxy(target, name=name, mode="auto", identity="upstream")
+    # First in the list = outermost. create_proxy already added its ProxyMetadataMiddleware, which
+    # applies the upstream identity to the handshake result on the way out. AgentLatch must wrap
+    # it, so the recorded handshake is the final result the client receives.
+    proxy.middleware.insert(0, AgentLatchMiddleware(trace, server=name, tap=tap))
     return proxy

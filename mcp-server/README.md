@@ -24,6 +24,7 @@ Everything runs on your machine. Today the gateway only forwards tool calls; it'
 | Watch an agent's MCP traffic through the AgentLatch runtime proxy (CrewAI, 20 test scenarios, Claude Desktop on Windows with WSL) | [SETUP.md Part 4](SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch) |
 | Add a tool, tool server or environment variable to this repo | [CLAUDE.md](CLAUDE.md): standards and a checklist |
 | Run a full open-source agent (CrewAI, ECC, BabyAGI, Swarm, AutoGPT) against it | [RUNNING_AGENTS.md](RUNNING_AGENTS.md), including [`bridge.py`](bridge.py) for agents that take plain Python tools |
+| Use the gateway's tools from your own JavaScript or TypeScript code, or hand them to Claude | [JS connector](js/README.md): step by step, starting from installing Node.js |
 | Test prompt injection against a live agent | [Injection lab](examples/injection_lab/README.md) (ASI01) |
 | Use a point-and-click view | [Dashboard](#dashboard-ui) below |
 
