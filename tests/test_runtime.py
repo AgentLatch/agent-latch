@@ -162,6 +162,27 @@ def test_proxy_needs_exactly_one_upstream(capsys: pytest.CaptureFixture[str]) ->
     assert "--upstream-url" in capsys.readouterr().err
 
 
+def test_proxy_ledger_flag_seals_trace_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    def build_proxy(*, trace, **_kwargs):
+        trace.tools_listed(session_id="s", request_id="1", server="x", tools=[])
+        return SimpleNamespace(run=lambda **_run_kwargs: None)
+
+    # A stand-in for the FastMCP-backed module, so this runs without the [runtime] extra.
+    monkeypatch.setitem(
+        sys.modules, "agent_latch.runtime.proxy", SimpleNamespace(build_proxy=build_proxy)
+    )
+    trace, ledger = tmp_path / "t.jsonl", tmp_path / "t.ledger.jsonl"
+    arguments = ["proxy", "--quiet", "--trace", str(trace), "--ledger", str(ledger)]
+    assert main([*arguments, "--", "python", "server.py"]) == 0
+    assert len(ledger.read_text(encoding="utf-8").splitlines()) == 1
+    assert main(["verify", str(ledger)]) == 0
+
+
 def test_mask_value_masks_secret_keys_and_cuts_long_strings() -> None:
     value = {
         "api_key": "plainvalue",

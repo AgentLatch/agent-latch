@@ -34,10 +34,15 @@ class TraceLog:
         summary: TextIO | None = sys.stderr,
         excerpt_chars: int = DEFAULT_EXCERPT_CHARS,
         transport: str | None = None,
+        ledger: Ledger | None = None,
+        warn: TextIO | None = sys.stderr,
     ) -> None:
         self.path = path
         self.summary = summary
         self.excerpt_chars = max(0, excerpt_chars)
+        self.ledger = ledger
+        self.warn = warn
+        self.ledger_failures = 0
         # How the proxy reaches the upstream server ("stdio" or "http"); None when unknown.
         self.transport = transport
         self._file: TextIO | None = None
@@ -57,6 +62,7 @@ class TraceLog:
         line = {"schema": TRACE_SCHEMA, "timestamp": utc_now(), **record}
         if self.transport is not None:
             line.setdefault("transport", self.transport)
+        encoded = json.dumps(line, ensure_ascii=False, default=str)
         if self._file is not None:
             self._file.write(encoded + "\n")
             self._file.flush()

@@ -283,6 +283,8 @@ def _proxy(args: argparse.Namespace) -> int:
             summary=None if args.quiet else sys.stderr,
             excerpt_chars=args.excerpt_chars,
             transport="http" if args.upstream_url else "stdio",
+            ledger=ledger,
+            warn=None if args.quiet else sys.stderr,
         )
     except OSError as error:
         if ledger is not None:

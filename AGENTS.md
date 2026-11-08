@@ -172,6 +172,8 @@ agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
 agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
             [--events-csv FILE] [--output-csv FILE] [--normalized-out FILE]
             [--database FILE] [--run-id ID] [--once] [--quiet]
+agent-latch-runtime anchor --ledger FILE --to PATH [--quiet]
+agent-latch-runtime verify [PATH | --ledger FILE] [--all] [--trace FILE] [--anchor PATH]
 agent-latch-runtime demo [--dir DIR] [--scenario default|secret-leak]
 ```
 

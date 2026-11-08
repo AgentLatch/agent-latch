@@ -109,6 +109,7 @@ _SECRET_ARGUMENTS: list[dict[str, Any]] = [
     {"text": 'api_key="s3cr3tv4lu3"'},
     {"header": "Authorization: Bearer " + "abcd1234efgh5678"},
     {"config": "password = " + "sup3rs3cret99"},
+    {"header": "Authorization: Basic " + "dXNlcjpwYXNz"},
 ]
 _BENIGN_ARGUMENTS: list[dict[str, Any]] = [
     {"id": "123e4567-e89b-12d3-a456-426614174000"},
@@ -128,7 +129,20 @@ _BENIGN_ARGUMENTS: list[dict[str, Any]] = [
     {"timestamp": "2026-11-05T19:25:01Z"},
     {"customer": "cus_9aXkTpQ27misc"},
     {"description": "a perfectly ordinary argument " * 8},
+    {"topic": "basic authentication tutorial"},
 ]
+
+
+def test_basic_authentication_prose_is_benign_in_both_directions() -> None:
+    assert _findings(_request({"topic": "basic authentication tutorial"})) == []
+    assert _findings(_response(("A basic authentication tutorial.",))) == []
+    assert _findings(_request({"topic": "Learn basic authentication."})) == []
+
+
+def test_basic_credential_is_still_found_in_both_directions() -> None:
+    credential = "Authorization: Basic " + "dXNlcjpwYXNz"
+    assert [f["rule_id"] for f in _findings(_request({"header": credential}))] == ["ALR10-R01"]
+    assert [f["rule_id"] for f in _findings(_response((credential,)))] == ["ALR10-R02"]
 
 
 def test_labeled_corpus_recall_and_false_positive_rates() -> None:
