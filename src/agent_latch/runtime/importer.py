@@ -489,6 +489,9 @@ class RuntimeLogImporter:
                 if row.seal is not None and row.seal.seq > point.seq:
                     key = (str(row.event["run_id"]), int(row.event["order"]))
                     self._tail[key] = row.event
+                    # Not covered by any anchor point yet, so re-check it before anything newer
+                    # chains onto it or a point is published over it.
+                    self._saved_seals[row.seal.seq] = row.seal.digest
 
     def _match_tail(self, events: list[dict[str, Any]]) -> None:
         """Check events against the rows found past the anchor; a difference means tampering."""

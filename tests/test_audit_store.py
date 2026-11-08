@@ -44,6 +44,7 @@ from agent_latch.runtime.ledger.event_seal import (
     SOURCE,
     Seal,
     StoredRow,
+    StoreTampered,
     event_sha256,
     next_seal,
     seal_digest,
@@ -1243,3 +1244,27 @@ def test_a_forged_unanchored_row_is_never_published_even_without_a_new_event(
         thread.join(5)
     assert errors and "changed before it was anchored" in str(errors[0])
     assert FileAnchor(sealed.anchor).latest().seq == 4  # type: ignore[union-attr]
+
+
+def test_a_tail_row_found_at_startup_is_rechecked_before_anything_is_published(
+    tmp_path: Path,
+) -> None:
+    """Rows left past the anchor by a crash are covered by no point, so a later reseal is caught."""
+    store, full_trace, anchor = _crashed_store(tmp_path)  # anchored at #2, rows #3 and #4 unanchored
+    importer = RuntimeLogImporter(
+        full_trace, None, [], store=SQLiteEventStore(store.database), anchor=FileAnchor(anchor)
+    )
+    assert importer.store is not None
+    importer.store.open()
+    try:
+        importer._audit_store()  # startup: the two tail rows are genuine and match the logs
+        assert set(importer._saved_seals) == {3, 4}
+        conn = _connect_as_attacker(store.database)
+        conn.execute("UPDATE events SET name = 'cover-up' WHERE seal_seq = 4")
+        _reseal_all(conn)
+        _cover_tracks(conn)
+        conn.close()
+        with pytest.raises(StoreTampered, match="changed before it was anchored"):
+            importer._refuse_if_saved_rows_changed()
+    finally:
+        importer.store.close()
