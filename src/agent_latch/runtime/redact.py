@@ -167,6 +167,15 @@ def _pointer_segment(key: Any) -> str:
     return str(key).replace("~", "~0").replace("/", "~1")
 
 
+def safe_segment(key: Any) -> str:
+    """A path segment for ``key`` with any secret-like text in the key itself masked.
+
+    A mapping key can carry a token (``{"ghp_...": 1}``). Paths are stored as location evidence,
+    so the key is masked before it is used in one.
+    """
+    return _pointer_segment(mask_secrets(str(key)))
+
+
 def mask_value(
     value: Any,
     max_chars: int,
@@ -195,9 +204,13 @@ def mask_value(
     if isinstance(value, Mapping):
         out: dict[str, Any] = {}
         for key, item in value.items():
-            name = str(key)
+            raw_name = str(key)
+            # A token-shaped key is masked in the output too, not only in the location path.
+            name = mask_secrets(raw_name)
+            if name in out:
+                name = f"{name}#{len(out)}"
             child = f"{path}/{_pointer_segment(name)}"
-            if isinstance(item, str) and item and _SECRET_KEY.search(name):
+            if isinstance(item, str) and item and _SECRET_KEY.search(raw_name):
                 out[name] = MASK
                 if locations is not None:
                     locations.append({"path": child, "kind": value_kind(item) or "key_name"})

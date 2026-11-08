@@ -31,7 +31,7 @@ import unicodedata
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-from agent_latch.runtime.redact import MASK, value_kind
+from agent_latch.runtime.redact import MASK, mask_secrets, safe_segment, value_kind
 
 GATE_ID = "ALR10"
 # This check is about credentials crossing an identity boundary: ASI03, a subset of the gate's
@@ -76,7 +76,7 @@ def _strings(value: Any, path: str) -> Iterator[tuple[str, str]]:
             yield node_path, node
         elif isinstance(node, Mapping):
             for key, item in node.items():
-                segment = str(key).replace("~", "~0").replace("/", "~1")
+                segment = safe_segment(key)
                 stack.append((item, f"{node_path}/{segment}"))
         elif isinstance(node, list | tuple):
             for index, item in enumerate(node):
@@ -88,7 +88,8 @@ def _masked_locations(payload: Mapping[str, Any]) -> list[dict[str, str]]:
     if not isinstance(entries, list):
         return []
     return [
-        {"path": entry["path"], "kind": entry["kind"]}
+        # Older records may hold a token-shaped key in the path; never carry it into evidence.
+        {"path": mask_secrets(entry["path"]), "kind": entry["kind"]}
         for entry in entries
         if isinstance(entry, Mapping)
         and isinstance(entry.get("path"), str)

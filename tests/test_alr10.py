@@ -220,6 +220,26 @@ def test_unmasked_token_in_a_foreign_record_is_reported_by_kind_only() -> None:
     assert "ABCDEFGHIJKLMNOP1234" not in json.dumps(found)
 
 
+_KEY_TOKEN = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2"
+
+
+def test_token_shaped_mapping_key_never_reaches_payload_file_or_evidence() -> None:
+    args = {_KEY_TOKEN: {"password": "hunter2hunter2"}, "ok": 1}
+    masked = _masked_body({"tool": "t", "arguments": args, "tool_definition": None})
+    assert _KEY_TOKEN not in json.dumps(masked)
+    assert any(spot["path"].startswith("$/arguments/") for spot in masked["masked"])
+    found = _findings(_event("request", masked))
+    assert found and _KEY_TOKEN not in json.dumps(found)
+
+
+def test_token_shaped_key_in_old_records_is_masked_in_fallback_evidence() -> None:
+    legacy = {"tool": "t", "arguments": {_KEY_TOKEN: MASK}, "tool_definition": None}
+    with_paths = {**legacy, "masked": [{"path": f"$/arguments/{_KEY_TOKEN}", "kind": "key_name"}]}
+    for body in (legacy, with_paths):
+        found = _findings(_event("request", body))
+        assert found and _KEY_TOKEN not in json.dumps(found)
+
+
 def test_auth_purpose_tools_are_inconclusive_low_but_still_reported() -> None:
     by_name = _findings(_request({"password": "hunter2hunter2"}, tool="user_login"))
     assert [(f["outcome"], f["severity"], f["is_finding"]) for f in by_name] == [
