@@ -1322,3 +1322,21 @@ def test_an_anchor_that_is_not_valid_utf8_is_refused_with_exit_1(
     capsys.readouterr()
     assert sealed.import_again() == 1
     assert "cannot be read" in _out(capsys)
+
+
+def test_an_anchor_that_disappears_while_running_is_never_recreated_over(tmp_path: Path) -> None:
+    """A deleted anchor file would otherwise be recreated holding only the newest head."""
+    sealed = Sealed(tmp_path)
+    importer = RuntimeLogImporter(
+        sealed.trace, None, [], store=SQLiteEventStore(sealed.database),
+        anchor=FileAnchor(sealed.anchor),
+    )
+    assert importer.store is not None
+    importer.store.open()
+    try:
+        importer._audit_store()  # sees the published point
+        sealed.anchor.unlink()
+        with pytest.raises(StoreRefused, match="missing or empty"):
+            importer._refuse_if_rewritten_since_last_point()
+    finally:
+        importer.store.close()

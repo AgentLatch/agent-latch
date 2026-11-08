@@ -309,6 +309,9 @@ class RuntimeLogImporter:
         # saved but not yet anchored is covered by no anchor point, so the importer itself
         # remembers it and checks it again before it saves or publishes anything newer.
         self._saved_seals: dict[int, str] = {}
+        # True once this run has seen or published an anchor point: from then on a missing or
+        # empty anchor file is a deleted anchor, never a store that has not been anchored yet.
+        self._anchor_seen = False
 
     def stop(self) -> None:
         """Ask a following importer to finish its current pass and return."""
@@ -470,6 +473,7 @@ class RuntimeLogImporter:
                     " anchor file for the event store"
                 )
         point = points[-1] if points else None
+        self._anchor_seen = self._anchor_seen or point is not None
         chain = walk_chain(store.sealed_rows(), track_seqs=[each.seq for each in points])
         issues = [*chain.issues, *schema_issues(store, point)]
         issues += anchor_history_issues(points, chain)  # every point ever published, not just the last
@@ -549,6 +553,7 @@ class RuntimeLogImporter:
         self._saved_seals.clear()  # every row saved so far is now covered by an anchor point
         self._dirty = False
         self._last_publish = time.monotonic()
+        self._anchor_seen = True
 
     def _head_seq(self) -> int:
         """The newest seal number in the store, or 0 (a store that does not seal has none)."""
@@ -602,6 +607,12 @@ class RuntimeLogImporter:
             latest = self.anchor.latest()
         except (AnchorError, OSError) as error:
             raise StoreRefused(f"the anchor {self.anchor.path} cannot be read: {error}") from error
+        if latest is None and self._anchor_seen:
+            raise StoreRefused(
+                f"the anchor {self.anchor.path} was there earlier in this run but is now missing"
+                " or empty; nothing newer was published. Restore it or investigate before anything"
+                " else"
+            )
         if latest is None or latest.source != SOURCE:
             return
         if digest_at(latest.seq) != latest.digest:
