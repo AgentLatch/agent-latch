@@ -123,9 +123,11 @@ recommended picture is three separate places:
      verify --database /data/audit.db --anchor /anchor/store-anchors.jsonl
    ```
 
-   Both files are then owned by user `10001` with mode `0600`. Any other user in any other container,
-   including one that mounts the same volumes read-write, gets "permission denied" to read, write,
-   `chmod` or delete them (`docs/audit-trail-dev/06-docker-test.md` runs exactly that).
+   Both files are then owned by user `10001` with mode `0600`. The test in
+   `docs/audit-trail-dev/06-docker-test.md` checks that user `10002` is denied read, write, `chmod` and
+   delete access, even with both volumes mounted read-write. To rely on these permissions, do not give
+   another container user `10001` or privileges that bypass file permissions: a root container with
+   enough capabilities can change the files.
 
    **Give the agent a tool, not a path.** `agent-latch-runtime audit-tool --database /data/audit.db` is an
    MCP server (stdio) with two tools, `query_audit_log` and `recent_events`, that holds only a read-only
@@ -141,7 +143,9 @@ recommended picture is three separate places:
    tries through it, even raw SQL, is refused.
 
    **Never give the agent Docker.** An agent that can run `docker` can mount the volume as root. The
-   seals and the anchor still detect what it changes, but nothing stops it. Do not mount
+   seals and the anchor detect what it changes only while the anchor is out of its reach: if it can
+   also rewrite the anchor, nothing detects it, and nothing stops it changing the store. Keep the
+   anchor off that machine or in write-once storage. Do not mount
    `/var/run/docker.sock` into the agent's container, and do not give a shell tool to an agent whose
    host user can use Docker.
 

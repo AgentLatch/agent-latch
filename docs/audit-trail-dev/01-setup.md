@@ -58,6 +58,7 @@ c.execute(\"UPDATE events SET name = 'evil' WHERE event_order = 2\")
 c.commit()"
 agent-latch-runtime verify --database tamper.db --anchor demo.anchor    # TAMPERED, #2, exit 1
 agent-latch-runtime import-logs --dir logs --database tamper.db --anchor demo.anchor --once --quiet   # refused, exit 1
+cd -                                                                    # back to the repository
 ```
 
 ## The second-user test (test 8)

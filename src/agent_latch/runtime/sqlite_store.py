@@ -24,6 +24,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +57,13 @@ _HEAD = (
 _SQLITE_READ, _SQLITE_SELECT, _SQLITE_FUNCTION, _SQLITE_RECURSIVE = 20, 21, 31, 33
 _READ_ONLY_ACTIONS = frozenset({_SQLITE_READ, _SQLITE_SELECT, _SQLITE_FUNCTION, _SQLITE_RECURSIVE})
 QUERY_ROW_LIMIT = 200
+# One statement may run this long, and no string or blob it builds may exceed this size, so a
+# runaway query (an endless recursive CTE, a huge ``randomblob``) cannot hang or exhaust the tool.
+# Stored rows are far smaller than the size cap: every payload string is cut to a few thousand
+# characters before it is saved.
+QUERY_TIMEOUT_SECONDS = 10.0
+QUERY_LENGTH_LIMIT = 16 * 1024 * 1024
+_PROGRESS_STEPS = 10_000  # SQLite virtual-machine steps between two deadline checks
 
 
 def _create_events(conn: sqlite3.Connection) -> None:
@@ -428,9 +436,16 @@ class SQLiteEventReader(_Reading):
     writer (``import-logs``) upgrades and seals one.
     """
 
-    def __init__(self, path: Path, *, timeout: float = BUSY_TIMEOUT_SECONDS) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        timeout: float = BUSY_TIMEOUT_SECONDS,
+        query_timeout: float = QUERY_TIMEOUT_SECONDS,
+    ) -> None:
         self.path = Path(path)
         self.timeout = timeout
+        self.query_timeout = query_timeout
         self._conn: sqlite3.Connection | None = None
         # An MCP server runs a sync tool on a worker thread, not the thread that opened the
         # reader, so the connection may cross threads; the lock keeps queries one at a time.
@@ -459,6 +474,7 @@ class SQLiteEventReader(_Reading):
                     " to upgrade and seal it"
                 )
             conn.execute("PRAGMA query_only = ON")
+            conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, QUERY_LENGTH_LIMIT)
             conn.set_authorizer(_read_only_authorizer)
         except sqlite3.DatabaseError as error:
             conn.close()
@@ -471,11 +487,22 @@ class SQLiteEventReader(_Reading):
         self._conn = conn
 
     def query(self, sql: str, *, limit: int = QUERY_ROW_LIMIT) -> list[dict[str, Any]]:
-        """Run one read-only SQL statement and return at most ``limit`` rows as dicts."""
+        """Run one read-only SQL statement and return at most ``limit`` rows as dicts.
+
+        The statement is stopped when it runs longer than ``query_timeout`` seconds (SQLite then
+        raises ``OperationalError: interrupted``), and the deadline is removed again afterwards,
+        whether the statement finished or failed.
+        """
         with self._lock:
-            cursor = self._connection().execute(sql)
-            names = [column[0] for column in cursor.description or ()]
-            return [dict(zip(names, row, strict=True)) for row in cursor.fetchmany(limit)]
+            conn = self._connection()
+            deadline = time.monotonic() + self.query_timeout
+            conn.set_progress_handler(lambda: time.monotonic() > deadline, _PROGRESS_STEPS)
+            try:
+                cursor = conn.execute(sql)
+                names = [column[0] for column in cursor.description or ()]
+                return [dict(zip(names, row, strict=True)) for row in cursor.fetchmany(limit)]
+            finally:
+                conn.set_progress_handler(None, 0)
 
     def close(self) -> None:
         """Close the connection."""

@@ -11,7 +11,6 @@ import asyncio
 import hashlib
 import json
 import os
-import pwd
 import shutil
 import sqlite3
 import subprocess
@@ -598,6 +597,8 @@ def test_8_second_os_user_is_denied() -> None:
                                   "env": {"PATH": "/usr/bin:/bin"}, "timeout": 60}
         if not prefix:  # running as root: drop to `nobody`, no sudo needed
             try:
+                import pwd  # POSIX only: imported here so the module still loads elsewhere
+
                 nobody = pwd.getpwnam("nobody")
             except KeyError:
                 pytest.skip("no `nobody` user to drop to")
@@ -1361,3 +1362,32 @@ def test_an_anchor_that_disappears_stops_the_run_before_it_saves_anything_newer(
     assert errors and "missing or empty" in str(errors[0])
     assert sealed.rows() == rows  # the new event was never saved
     assert not sealed.anchor.exists()  # and no anchor was recreated
+
+
+def test_a_runaway_query_is_stopped_and_the_reader_keeps_working(sealed: Sealed) -> None:
+    """An endless recursive query is interrupted at the deadline; later queries still work."""
+    reader = SQLiteEventReader(sealed.database, query_timeout=0.3)
+    reader.open()
+    try:
+        started = time.monotonic()
+        with pytest.raises(sqlite3.OperationalError, match="interrupted"):
+            reader.query(
+                "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c)"
+                " SELECT count(*) FROM c"
+            )
+        assert time.monotonic() - started < 5
+        assert reader.query("SELECT COUNT(*) AS n FROM events")[0]["n"] == sealed.rows()
+    finally:
+        reader.close()
+
+
+def test_a_query_cannot_build_a_huge_value(sealed: Sealed) -> None:
+    """A single value larger than the size cap is refused instead of being allocated."""
+    reader = SQLiteEventReader(sealed.database)
+    reader.open()
+    try:
+        with pytest.raises(sqlite3.Error):
+            reader.query("SELECT length(randomblob(900000000))")
+        assert reader.query("SELECT length(randomblob(1000)) AS n")[0]["n"] == 1000
+    finally:
+        reader.close()
