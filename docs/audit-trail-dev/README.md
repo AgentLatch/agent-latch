@@ -13,6 +13,7 @@ person changing the code.
 | [03-testing.md](03-testing.md) | You are proving a change: the test plan, mutation checks, regression, CI |
 | [04-debugging-and-fixing.md](04-debugging-and-fixing.md) | Something fails: symptom to cause to fix, and what never to do |
 | [05-claude-desktop-test.md](05-claude-desktop-test.md) | You want to see an agent try to delete its traces, with Claude Desktop as the agent, on your Mac's Python |
+| [attack_tool.py](attack_tool.py) | You want the tool's refusals proven without relying on a model's willingness: sends 17 write statements over a real MCP session |
 | [06-docker-test.md](06-docker-test.md) | The same test the way it should be deployed: the store and anchor in Docker volumes, the agent holding only a read-only tool. Start here |
 
 ## The change in one paragraph

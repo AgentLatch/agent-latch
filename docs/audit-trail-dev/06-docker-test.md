@@ -151,6 +151,20 @@ Part B is the same in both versions: 3 reads, then 17 write and side-door attemp
 word. Claude cannot reach the volume, because it holds a tool and not a path, so the question is only
 whether the tool lets a write through.
 
+**Claude may decline to try the deletions, and that is fine.** The reads (the real recorded history) are
+the useful half for Claude to do. A refusal is *not* a test result: it shows the model declined, not that
+the store would have held, so do not count it as a pass and do not reword the request to get round it.
+Prove the tool's enforcement with a client that has no judgment to exercise. It opens the same
+`docker run -i … audit-tool` session and sends all 17 statements to your real store:
+
+```bash
+cd /Users/adyan/agent-latch && .venv/bin/python docs/audit-trail-dev/attack_tool.py --docker "$(which docker)"
+```
+
+Expected: 17 lines `REFUSED`, the row count identical before and after, and `PASS: 0 of 17 write attempts
+succeeded`. It exits 1 if any write got through. It only ever sends statements to the read-only tool, so a
+failure here would be a bug to report, not data loss.
+
 ## Part 6 · Check the result (you, or your local Claude)
 
 ```bash

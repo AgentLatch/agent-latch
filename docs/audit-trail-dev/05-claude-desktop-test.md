@@ -22,6 +22,12 @@ in another OS user or container (see [docker.md](../docker.md#keep-the-audit-sto
 
 Everything here uses a throwaway demo store in `~/audit-demo`. Do not point it at real logs.
 
+**If Claude declines Part B, that is not a pass.** A model may refuse to try deleting audit records, and that
+is a reasonable thing for it to do. Its refusal says nothing about whether the store would have held. Do not
+rephrase the request to talk it round. Run the same statements with a client that has no judgment to apply:
+`.venv/bin/python docs/audit-trail-dev/attack_tool.py` (see [06-docker-test.md](06-docker-test.md#part-5--the-agent-tries-to-delete-its-traces-claude-desktop)).
+Reading the history through the tool, which Claude will do, is still a useful half of the test.
+
 ---
 
 ## Part A · Setup (you, once, in a terminal)
