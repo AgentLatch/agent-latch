@@ -21,6 +21,7 @@ from fastmcp.tools.base import Tool, ToolResult
 
 from agent_latch.runtime.events import ToolCall, ToolInfo, ToolOutput, utc_now
 from agent_latch.runtime.payloads import PayloadTap
+from agent_latch.runtime.redact import safe_text
 from agent_latch.runtime.trace import TraceLog
 
 log = logging.getLogger("agent_latch.runtime")
@@ -88,6 +89,9 @@ class AgentLatchMiddleware(Middleware):
     ) -> None:
         session_id, request_id = _ids(context)
         ids = {"session_id": session_id, "request_id": request_id, "server": self.server}
+        # Server-controlled: capped and escaped once here, so the trace, the payload tap and the
+        # terminal summary all get the same safe value.
+        protocol_version = safe_text(protocol_version) if isinstance(protocol_version, str) else None
         _record(lambda: self.trace.initialized(
             **ids, protocol_version=protocol_version, client=client, server_info=server_info,
         ))
@@ -207,9 +211,10 @@ class AgentLatchMiddleware(Middleware):
 
 
 def _implementation(info: Any) -> dict[str, str]:
-    """Name/version of an MCP Implementation (client/server info); never secret.
+    """Name/title/version of an MCP Implementation (client/server info).
 
-    Accepts either a model object (``client_info``/``server_info``) or a plain ``meta`` dict.
+    These strings come from the other side of the connection, which may be hostile, so each one is
+    capped and its control/format characters are escaped (``redact.safe_text``). Accepts either a model object (``client_info``/``server_info``) or a plain ``meta`` dict.
     """
     if info is None:
         return {}
@@ -218,7 +223,7 @@ def _implementation(info: Any) -> dict[str, str]:
     for field in ("name", "title", "version"):
         value = getter(field)
         if isinstance(value, str) and value:
-            out[field] = value
+            out[field] = safe_text(value)
     return out
 
 

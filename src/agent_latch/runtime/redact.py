@@ -10,10 +10,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
 MASK = "[REDACTED]"
+
+# Cap for server-controlled identity strings (handshake name/title/version, protocol version).
+# Same as ``gates.alr03.MAX_NAME_CHARS``.
+MAX_IDENTITY_CHARS = 120
 
 # Mapping keys whose string values are masked whole, whatever the value looks like.
 _SECRET_KEY = re.compile(
@@ -38,6 +43,19 @@ _BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
 _PEM = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.DOTALL
 )
+
+
+def safe_text(value: str, limit: int = MAX_IDENTITY_CHARS) -> str:
+    """Cap ``value`` and show control/format characters as escapes (``\\x1b``, ``\\u200b``).
+
+    For short, server-controlled strings that reach the trace and the terminal. Escaping instead
+    of dropping keeps invisible-character tricks visible as evidence, while terminal escape
+    sequences can no longer act on the operator's terminal.
+    """
+    return "".join(
+        ch.encode("unicode_escape").decode("ascii") if unicodedata.category(ch)[0] == "C" else ch
+        for ch in value[:limit]
+    )
 
 
 def canonical_json(value: Any) -> str:

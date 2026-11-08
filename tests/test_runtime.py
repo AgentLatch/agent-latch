@@ -226,3 +226,35 @@ def test_payload_file_masks_values(tmp_path: Path) -> None:
     assert FAKE_TOKEN not in json.dumps(response)
     if os.name == "posix":
         assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_safe_text_caps_length_and_escapes_control_characters() -> None:
+    from agent_latch.runtime.redact import MAX_IDENTITY_CHARS, safe_text
+
+    hostile = "evil\x1b[2J\x1b[31m" + "A" * 5000
+    out = safe_text(hostile)
+    assert len(out) <= MAX_IDENTITY_CHARS * 4  # at most 4 chars per escaped character
+    assert "\x1b" not in out and "\\x1b" in out
+    assert safe_text("1.0\x1b]0;pwned\x07") == "1.0\\x1b]0;pwned\\x07"
+    assert safe_text("a\u200bb") == "a\\u200bb"  # invisible characters stay visible as evidence
+    assert safe_text("fake-weather") == "fake-weather"
+
+
+def test_hostile_handshake_strings_do_not_reach_trace_or_terminal(tmp_path: Path) -> None:
+    from agent_latch.runtime.middleware import _implementation
+    from agent_latch.runtime.trace import summarize_record
+
+    info = _implementation({
+        "name": "evil\x1b[2J\x1b[31m" + "A" * 5000,
+        "version": "1.0\x1b]0;pwned\x07",
+    })
+    log = TraceLog(tmp_path / "trace.jsonl", summary=None)
+    record = log.initialized(
+        session_id="s", request_id="1", server="x",
+        protocol_version="2025\x1b[0m" + "9" * 500, client={}, server_info=info,
+    )
+    line = summarize_record(record)
+    assert "\x1b" not in line and "\x07" not in line
+    assert len(line) < 400
+    raw = (tmp_path / "trace.jsonl").read_text()
+    assert len(raw) < 1000 and "\\x1b" in raw
