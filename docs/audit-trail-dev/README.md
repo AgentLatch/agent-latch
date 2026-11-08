@@ -12,6 +12,7 @@ person changing the code.
 | [02-implementation.md](02-implementation.md) | You are changing the code: what lives where, the invariants, how to extend it |
 | [03-testing.md](03-testing.md) | You are proving a change: the test plan, mutation checks, regression, CI |
 | [04-debugging-and-fixing.md](04-debugging-and-fixing.md) | Something fails: symptom to cause to fix, and what never to do |
+| [05-claude-desktop-test.md](05-claude-desktop-test.md) | You want to see an agent try to delete its traces, with Claude Desktop as the agent |
 
 ## The change in one paragraph
 
