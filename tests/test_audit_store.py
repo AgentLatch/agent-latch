@@ -1128,3 +1128,34 @@ def test_importer_will_not_publish_over_a_chain_rewritten_while_it_runs(tmp_path
         thread.join(5)
     assert errors and "changed after it was sealed" in str(errors[0])
     assert FileAnchor(sealed.anchor).latest().seq == 4  # type: ignore[union-attr]
+
+
+def test_an_unreadable_anchor_is_refused_before_an_old_store_is_opened(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With an anchor that cannot be read, an old store must not be migrated and sealed first."""
+    database = tmp_path / "v2.db"
+    conn = sqlite3.connect(database, isolation_level=None)
+    for step in sqlite_store.MIGRATIONS[:2]:  # the released schema, whose rows are not sealed
+        step(conn)
+    conn.execute("PRAGMA user_version = 2")
+    for event in sample_events(3):
+        conn.execute(
+            f"INSERT INTO events ({', '.join(COLUMNS)}) VALUES ({', '.join('?' for _ in COLUMNS)})",
+            event_to_row(event, "2026-01-01T00:00:00.000Z"),
+        )
+    conn.close()
+    anchor = tmp_path / "anchors.jsonl"
+    anchor.write_text("this is not an anchor point\n", encoding="utf-8")  # cannot be parsed
+    logs = tmp_path / "logs"
+    trace, _ = _record_run(logs, payloads=False)
+    before = hashlib.sha256(database.read_bytes()).hexdigest()
+    capsys.readouterr()
+
+    assert _import(logs, trace, database, anchor=anchor) == 1
+    assert "cannot be read" in _out(capsys)
+    # Migration 3 would have sealed every row it found; the file must be exactly as it was.
+    assert hashlib.sha256(database.read_bytes()).hexdigest() == before
+    conn = sqlite3.connect(database)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    conn.close()

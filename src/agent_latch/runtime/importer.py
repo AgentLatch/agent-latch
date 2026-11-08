@@ -423,19 +423,22 @@ class RuntimeLogImporter:
         self._publish(force=False)
 
     def _refuse_lowered_version(self) -> None:
-        """Refuse a store whose schema version was lowered below what its anchor recorded.
+        """Refuse before the store is opened when its anchor is unreadable or its version was lowered.
 
         Opening an older file runs the migrations, and migration 3 would seal every row it finds,
-        including rows an attacker changed after lowering the version. So the check comes first.
+        including rows an attacker changed after lowering the version. So these checks come first,
+        and an anchor that cannot be read stops the import before the file is touched at all.
         """
         store, anchor = self.store, self.anchor
-        stored_version = getattr(store, "stored_version", None)
-        if store is None or anchor is None or stored_version is None:
+        if store is None or anchor is None:
             return
         try:
             point = anchor.latest()
-        except (AnchorError, OSError):
-            return  # _audit_store reports an unreadable anchor
+        except (AnchorError, OSError) as error:
+            raise StoreRefused(f"the anchor {anchor.path} cannot be read: {error}") from error
+        stored_version = getattr(store, "stored_version", None)
+        if stored_version is None:
+            return
         issues = downgrade_issues(stored_version(), point)
         if issues:
             raise StoreTampered(changed_message(issues))

@@ -253,7 +253,7 @@ one, so a chain rewritten while it runs is refused instead of anchored. Exit cod
 | Exit | Meaning |
 |---|---|
 | `0` | Done |
-| `1` | The store was refused and nothing was added: it no longer matches its seals, layout or anchor; rows past the anchor do not match the trace; or a sealed store has no anchor. This is the same meaning `1` has for `verify` |
+| `1` | The store was refused and nothing was added: it no longer matches its seals, layout or anchor; rows past the anchor do not match the trace; a sealed store has no anchor; or the anchor cannot be read (refused before the store is opened, so nothing is migrated or sealed). This is the same meaning `1` has for `verify` |
 | `2` | A configuration or storage error (unchanged), including an anchor file that holds a trace ledger's points |
 
 ### `agent-latch --runtime-result CSV --ledger FILE [--anchor PATH] [--ledger-rows N] [--format sarif]`
