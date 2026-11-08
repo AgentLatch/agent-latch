@@ -44,6 +44,7 @@ from agent_latch.runtime.ledger.event_seal import (
     SOURCE,
     Seal,
     StoredRow,
+    StoreRefused,
     StoreTampered,
     event_sha256,
     next_seal,
@@ -1266,5 +1267,47 @@ def test_a_tail_row_found_at_startup_is_rechecked_before_anything_is_published(
         conn.close()
         with pytest.raises(StoreTampered, match="changed before it was anchored"):
             importer._refuse_if_saved_rows_changed()
+    finally:
+        importer.store.close()
+
+
+def test_ctrl_c_with_a_changed_unanchored_row_is_not_a_clean_exit(tmp_path: Path) -> None:
+    """The last check on the way out raises instead of being logged, so the CLI exits 1."""
+    store, full_trace, anchor = _crashed_store(tmp_path)
+    importer = RuntimeLogImporter(
+        full_trace, None, [], store=SQLiteEventStore(store.database), anchor=FileAnchor(anchor)
+    )
+    assert importer.store is not None
+    importer.store.open()
+    try:
+        importer._audit_store()
+        importer._tail.clear()  # the logs have been read and matched those rows
+        importer._dirty = True  # and a publish is due
+        conn = _connect_as_attacker(store.database)
+        conn.execute("UPDATE events SET name = 'cover-up' WHERE seal_seq = 4")
+        _reseal_all(conn)
+        _cover_tracks(conn)
+        conn.close()
+        with pytest.raises(StoreTampered):
+            importer._publish_after_interrupt()
+    finally:
+        importer.store.close()
+
+
+def test_an_anchor_that_becomes_unreadable_while_running_is_refused_with_exit_1(
+    tmp_path: Path,
+) -> None:
+    """The same refusal as at start: a StoreRefused, which the CLI reports as exit 1."""
+    sealed = Sealed(tmp_path)
+    importer = RuntimeLogImporter(
+        sealed.trace, None, [], store=SQLiteEventStore(sealed.database),
+        anchor=FileAnchor(sealed.anchor),
+    )
+    assert importer.store is not None
+    importer.store.open()
+    try:
+        sealed.anchor.write_text("this is not an anchor point\n", encoding="utf-8")
+        with pytest.raises(StoreRefused, match="cannot be read"):
+            importer._refuse_if_rewritten_since_last_point()
     finally:
         importer.store.close()

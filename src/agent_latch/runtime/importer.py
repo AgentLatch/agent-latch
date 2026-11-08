@@ -43,6 +43,7 @@ from agent_latch.runtime.ledger.canonical import dumps
 from agent_latch.runtime.ledger.event_seal import (
     SOURCE,
     SealedSource,
+    StoreIntegrityError,
     StoreRefused,
     StoreTampered,
     anchor_history_issues,
@@ -597,7 +598,10 @@ class RuntimeLogImporter:
         digest_at = getattr(self.store, "seal_digest_at", None)
         if self.anchor is None or digest_at is None:
             return
-        latest = self.anchor.latest()
+        try:
+            latest = self.anchor.latest()
+        except (AnchorError, OSError) as error:
+            raise StoreRefused(f"the anchor {self.anchor.path} cannot be read: {error}") from error
         if latest is None or latest.source != SOURCE:
             return
         if digest_at(latest.seq) != latest.digest:
@@ -619,6 +623,8 @@ class RuntimeLogImporter:
         try:
             self._save_events(final=False)
             self._publish(force=True)
+        except StoreIntegrityError:
+            raise  # a changed store is never a clean exit: the CLI reports it with exit 1
         except (OSError, RuntimeError) as error:
             log.warning("agent-latch-runtime: could not publish the anchor on exit: %s", error)
 
