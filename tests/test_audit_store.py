@@ -1311,3 +1311,14 @@ def test_an_anchor_that_becomes_unreadable_while_running_is_refused_with_exit_1(
             importer._refuse_if_rewritten_since_last_point()
     finally:
         importer.store.close()
+
+
+def test_an_anchor_that_is_not_valid_utf8_is_refused_with_exit_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A binary anchor file is a refused store (exit 1), not a crash that exits 2."""
+    sealed = Sealed(tmp_path)
+    sealed.anchor.write_bytes(b"\xff\xfe\x00not text")
+    capsys.readouterr()
+    assert sealed.import_again() == 1
+    assert "cannot be read" in _out(capsys)

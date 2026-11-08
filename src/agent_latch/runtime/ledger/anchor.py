@@ -122,18 +122,21 @@ class FileAnchor:
         if not self.path.is_file():
             return []
         points: list[AnchorPoint] = []
-        with self.path.open(encoding="utf-8") as stream:
-            for number, line in enumerate(stream, 1):
-                text = line.strip()
-                if not text:
-                    continue
-                try:
-                    point = AnchorPoint.from_dict(json.loads(text))
-                except json.JSONDecodeError as error:
-                    raise AnchorError(f"{self.path}: line {number} is not valid JSON") from error
-                if point is None:
-                    raise AnchorError(f"{self.path}: line {number} is not an anchor point")
-                points.append(point)
+        try:
+            with self.path.open(encoding="utf-8") as stream:
+                for number, line in enumerate(stream, 1):
+                    text = line.strip()
+                    if not text:
+                        continue
+                    try:
+                        point = AnchorPoint.from_dict(json.loads(text))
+                    except json.JSONDecodeError as error:
+                        raise AnchorError(f"{self.path}: line {number} is not valid JSON") from error
+                    if point is None:
+                        raise AnchorError(f"{self.path}: line {number} is not an anchor point")
+                    points.append(point)
+        except UnicodeDecodeError as error:
+            raise AnchorError(f"{self.path}: is not valid UTF-8 text: {error.reason}") from error
         return points
 
     def latest(self) -> AnchorPoint | None:
