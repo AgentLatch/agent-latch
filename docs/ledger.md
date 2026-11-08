@@ -165,8 +165,10 @@ Layers 2 and 3 *detect*; layer 4 *prevents*. SQLite triggers (migration 4) abort
 **A crash between saving and publishing** leaves the store a few rows ahead of the anchor. The next
 `import-logs` rebuilds those rows from the trace and payload files and keeps them only if every one
 matches; otherwise it refuses the store. A crash never locks the store, and a forged row is refused unless
-the same attacker also forged matching trace and payload lines, which is why those logs need their own
-seal and anchor (`--ledger`).
+the same attacker also forged matching trace and payload lines. `--ledger` seals the trace only; the
+payloads file is not sealed, and `import-logs` does not check the trace ledger or compare payload content
+with the trace hashes. Keep both files out of the agent's reach while recovery runs, protect the payloads
+file separately, and verify the trace against a trusted anchor before relying on recovered rows.
 
 **The first anchor.** A new store creates its first point on its first `import-logs --anchor`. A store
 that already has seals but no anchor file is refused, because that is what a deleted anchor looks like.
