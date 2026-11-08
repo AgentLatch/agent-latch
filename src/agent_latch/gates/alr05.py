@@ -90,7 +90,7 @@ CATEGORIES = (
 )
 RULE_IDS = {name: f"ALR05-R{i:02d}" for i, name in enumerate(CATEGORIES, 1)}
 RULE_COVERAGE = "ALR05-R90"
-# category -> (fail_at, review_at), tuned on output data (scripts/eval_alr05.py). Output text is
+# category -> (fail_at, review_at), tuned on output data (tests/test_alr05_eval.py). Output text is
 # longer and noisier than tool definitions, so these are set separately from ALR04's.
 RULE_THRESHOLDS = {
     "instruction_like_output": (.90, .65),

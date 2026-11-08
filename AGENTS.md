@@ -123,7 +123,6 @@ tests/test_runtime_results.py  # runtime findings report, including a later gate
 tests/runtime_fixtures/        # demo-server wrapper, the ALR04 event dataset, and the ALR05 labeled output cases
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
-scripts/eval_alr05.py          # ALR05 eval harness over the labeled output cases (tuning vs held-out split)
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
 action.yml                     # composite GitHub Action (isolated venv, SARIF path rewrite, summary)
 .pre-commit-hooks.yaml         # pre-commit hook definition (`agent-latch scan --fail-on high`)

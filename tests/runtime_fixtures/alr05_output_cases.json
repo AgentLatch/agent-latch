@@ -1,5 +1,5 @@
 {
-  "comment": "Labeled tool-output cases for the ALR05 eval (scripts/eval_alr05.py). label is malicious or benign. tools lists the server's tools (the first is the one called). transform wraps text before evaluation: base64, base64x2, hex, zero_width, unicode_tags, bidi_wrap. expect lists the rules that should fire; it guides tuning and is reported, not asserted.",
+  "comment": "Labeled tool-output cases for the ALR05 eval (tests/test_alr05_eval.py). label is malicious or benign. tools lists the server's tools (the first is the one called). transform wraps text before evaluation: base64, base64x2, hex, zero_width, unicode_tags, bidi_wrap. expect lists the rules that should fire; it guides tuning and is reported, not asserted.",
   "cases": [
     {
       "id": "m01-override-exfil",
