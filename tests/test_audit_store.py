@@ -1391,3 +1391,20 @@ def test_a_query_cannot_build_a_huge_value(sealed: Sealed) -> None:
         assert reader.query("SELECT length(randomblob(1000)) AS n")[0]["n"] == 1000
     finally:
         reader.close()
+
+
+def test_a_query_whose_rows_add_up_to_too_much_is_refused(sealed: Sealed) -> None:
+    """Each value is small enough on its own, but together they pass the result size cap."""
+    reader = SQLiteEventReader(sealed.database, max_result_bytes=20_000)
+    reader.open()
+    try:
+        many = (
+            "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM n WHERE x < 5)"
+            " SELECT hex(randomblob(5000)) AS v FROM n"
+        )
+        with pytest.raises(ValueError, match="larger than 20000 bytes"):
+            reader.query(many)
+        assert len(reader.query(many, limit=1)) == 1  # one such row is fine
+        assert reader.query("SELECT COUNT(*) AS n FROM events")[0]["n"] == sealed.rows()
+    finally:
+        reader.close()

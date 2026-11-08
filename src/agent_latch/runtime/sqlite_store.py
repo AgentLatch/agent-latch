@@ -20,9 +20,11 @@ cannot change the store even when it runs raw SQL.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import sqlite3
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -63,6 +65,9 @@ QUERY_ROW_LIMIT = 200
 # characters before it is saved.
 QUERY_TIMEOUT_SECONDS = 10.0
 QUERY_LENGTH_LIMIT = 16 * 1024 * 1024
+# The rows one query returns may not add up to more than this in memory (200 rows of the largest
+# single value would otherwise be 3 GB). A normal page of events is far below it.
+QUERY_RESULT_BYTES_LIMIT = 32 * 1024 * 1024
 _PROGRESS_STEPS = 10_000  # SQLite virtual-machine steps between two deadline checks
 
 
@@ -442,10 +447,12 @@ class SQLiteEventReader(_Reading):
         *,
         timeout: float = BUSY_TIMEOUT_SECONDS,
         query_timeout: float = QUERY_TIMEOUT_SECONDS,
+        max_result_bytes: int = QUERY_RESULT_BYTES_LIMIT,
     ) -> None:
         self.path = Path(path)
         self.timeout = timeout
         self.query_timeout = query_timeout
+        self.max_result_bytes = max_result_bytes
         self._conn: sqlite3.Connection | None = None
         # An MCP server runs a sync tool on a worker thread, not the thread that opened the
         # reader, so the connection may cross threads; the lock keeps queries one at a time.
@@ -491,7 +498,8 @@ class SQLiteEventReader(_Reading):
 
         The statement is stopped when it runs longer than ``query_timeout`` seconds (SQLite then
         raises ``OperationalError: interrupted``), and the deadline is removed again afterwards,
-        whether the statement finished or failed.
+        whether the statement finished or failed. The rows are read one at a time and the query is
+        refused with ``ValueError`` once they add up to more than ``max_result_bytes`` of memory.
         """
         with self._lock:
             conn = self._connection()
@@ -500,7 +508,17 @@ class SQLiteEventReader(_Reading):
             try:
                 cursor = conn.execute(sql)
                 names = [column[0] for column in cursor.description or ()]
-                return [dict(zip(names, row, strict=True)) for row in cursor.fetchmany(limit)]
+                rows: list[dict[str, Any]] = []
+                total = 0
+                for row in itertools.islice(cursor, limit):
+                    total += sum(sys.getsizeof(value) for value in row)
+                    if total > self.max_result_bytes:
+                        raise ValueError(
+                            f"the result is larger than {self.max_result_bytes} bytes: select"
+                            " fewer rows or shorter columns"
+                        )
+                    rows.append(dict(zip(names, row, strict=True)))
+                return rows
             finally:
                 conn.set_progress_handler(None, 0)
 

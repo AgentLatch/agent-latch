@@ -149,6 +149,11 @@ recommended picture is three separate places:
    `/var/run/docker.sock` into the agent's container, and do not give a shell tool to an agent whose
    host user can use Docker.
 
+   **A protected anchor does not vouch for rows it has not covered yet.** The importer rebuilds rows
+   past the newest anchor point from the trace and payload files and keeps them if they match, so an
+   agent that can change the store *and* those files can get a forged row accepted. Keep the trace
+   and payload files out of the agent's reach too, not only the store.
+
 3. **The anchor.** Outside both: another host, a mounted share the agent cannot write, or write-once
    storage. An agent that can also write the anchor makes tampering undetectable.
 
