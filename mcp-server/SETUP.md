@@ -99,8 +99,11 @@ The example tools `time` and `fetch` are downloaded and run by a program called 
 
 - **Windows:** `winget install astral-sh.uv`, then close and reopen the terminal, go back to `mcp-server`, and activate `.venv` again.
 - **macOS:** `brew install uv`
+- **Linux:** `curl -LsSf https://astral.sh/uv/install.sh | sh` (uv's official installer), then close and reopen the terminal, go back to `mcp-server`, and activate `.venv` again. If you'd rather not pipe a script into your shell, `pipx install uv` does the same job.
 
 ✅ `uvx --version` prints a version number.
+
+On Linux, if it says `uvx: command not found`, the installer put `uvx` in `~/.local/bin`, which isn't on your `PATH` yet. Add it for this terminal with `export PATH="$HOME/.local/bin:$PATH"`, and put the same line in `~/.bashrc` (or `~/.zshrc`) so it stays. Without `uvx`, the gateway skips the `time` and `fetch` servers, so step 6 won't list their tools.
 
 **6. Check that the server works.**
 

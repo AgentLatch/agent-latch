@@ -29,6 +29,7 @@ export function clientConfigPaths(client, { cwd = process.cwd(), env = process.e
 // Cursor writes ${env:NAME}; servers.json and others write ${NAME}. Accept both.
 const ENV_REF = /\$\{(?:env:)?([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
+/** Replace ${VAR} and ${env:VAR} in every string of a config value with env[VAR], or "" when unset. */
 function fillEnv(value, env) {
   if (typeof value === "string") return value.replace(ENV_REF, (_, name) => env[name] ?? "");
   if (Array.isArray(value)) return value.map((item) => fillEnv(item, env));

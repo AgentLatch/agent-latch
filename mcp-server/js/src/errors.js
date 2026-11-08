@@ -6,6 +6,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 
+/** The base class of every error the connector throws. The name is the subclass's name. */
 export class GatewayError extends Error {
   constructor(message, options) {
     super(message, options);
@@ -21,6 +22,7 @@ export class GatewayAuthError extends GatewayError {}
 
 /** Connecting or a tool call took longer than timeoutMs. */
 export class GatewayTimeoutError extends GatewayError {
+  /** timeoutMs is the limit that was exceeded; other options (such as cause) go to Error. */
   constructor(message, { timeoutMs, ...options } = {}) {
     super(message, options);
     this.timeoutMs = timeoutMs;
@@ -29,6 +31,7 @@ export class GatewayTimeoutError extends GatewayError {
 
 /** The tool ran but reported an error (the MCP result had isError: true). */
 export class GatewayToolError extends GatewayError {
+  /** tool is the tool's name and content its result blocks; other options (such as cause) go to Error. */
   constructor(message, { tool, content, ...options } = {}) {
     super(message, options);
     this.tool = tool;
@@ -63,7 +66,8 @@ export function toGatewayError(err, { what, where, timeoutMs }) {
   if (err instanceof UnauthorizedError || status === 401 || status === 403) {
     return new GatewayAuthError(
       `The gateway at ${where} rejected the token. ` +
-        "Pass the same value as MCP_GATEWAY_TOKEN in mcp-server/.env as `token`, or set MCP_GATEWAY_TOKEN.",
+        "Pass the same value as MCP_GATEWAY_TOKEN in mcp-server/.env as `token`. " +
+        "For a gateway on this machine you can set the MCP_GATEWAY_TOKEN environment variable instead.",
       { cause: err },
     );
   }

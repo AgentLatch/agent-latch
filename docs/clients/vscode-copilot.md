@@ -1,6 +1,6 @@
 # Connect AgentLatch to GitHub Copilot in VS Code
 
-This guide connects AgentLatch to GitHub Copilot in VS Code on Windows, macOS or Linux. Afterwards, every time Copilot uses a tool, AgentLatch writes a record of it to a log file on your computer, with any secrets hidden. AgentLatch only watches: it never changes or blocks what Copilot does.
+This guide connects AgentLatch to GitHub Copilot in VS Code on Windows, macOS or Linux. Afterwards, every time Copilot uses a tool from the server you add here, AgentLatch writes a record of it to a log file on your computer and masks values that look like secrets. Masking is pattern-based and can miss unusual formats, so keep the log private. AgentLatch only watches: it never changes or blocks what Copilot does. It records only calls that go through AgentLatch. Other tool servers you have set up, and tools built into VS Code, don't pass through it, so their calls aren't in the log.
 
 It takes about 10 minutes. You don't need to know how to code; you'll copy and paste a few commands.
 
@@ -150,7 +150,7 @@ All 4 are in your user folder. To open it:
 | # | File | What it is | Where it is in your user folder |
 |---|---|---|---|
 | 1 | `agent-latch-runtime.exe` (Windows) or `agent-latch-runtime` (macOS, Linux) | AgentLatch itself. VS Code starts this | `agentlatch-runtime` → `Scripts` (Windows) or `bin` (macOS, Linux) |
-| 2 | `agentlatch-trace.jsonl` | The log. AgentLatch writes every tool call here | Directly in your user folder (appears after the first tool call) |
+| 2 | `agentlatch-trace.jsonl` | The log. AgentLatch writes each call that goes through it here. Keep it private: secret masking is pattern-based | Directly in your user folder (appears after the first tool call) |
 | 3 | `python.exe` (Windows) or `python` (macOS, Linux) | The Python that runs the test server | Same folder as file 1 |
 | 4 | `fake_server.py` | The test server with 4 practice tools | `agentlatch-test` |
 
@@ -177,7 +177,10 @@ Open the Command Palette (`Ctrl+Shift+P`, or `Cmd+Shift+P` on macOS), run **MCP:
 
 </details>
 
-If the folder is shared with other people through Git, keep `mcp.json` out of it, because it contains your personal file locations. In PowerShell or Terminal, from that folder, run `git check-ignore .vscode/mcp.json`. If it prints nothing, add the line `.vscode/mcp.json` to the file `.git/info/exclude` in that folder.
+If the folder is shared with other people through Git, keep your personal file locations out of it. In PowerShell or Terminal, from that folder, run `git ls-files .vscode/mcp.json`. (If it says this isn't a Git repository, you can skip this.)
+
+- **It prints the path:** the file is already tracked. Ignoring it won't stop Git from tracking it, so your personal paths could be committed. Leave this shared file alone and use the user configuration instead (open **Want AgentLatch in every folder instead?** above), then do step 2c in that file.
+- **It prints nothing:** the file isn't tracked yet. Run `git check-ignore .vscode/mcp.json`. If that also prints nothing, add the line `.vscode/mcp.json` to the file `.git/info/exclude` in that folder.
 
 ### 2c. Paste the settings and fill in your locations
 
@@ -281,39 +284,64 @@ You only need to fill in the 4 locations, but here's what each part does:
 <details>
 <summary>Optional: let a command write the settings for you</summary>
 
-Instead of steps 2a–2c, you can run one of these **from the folder you open in VS Code**. First move into that folder, for example `cd $HOME\my-project` on Windows or `cd ~/my-project` on macOS and Linux. The command creates `.vscode/mcp.json` there with your 4 locations filled in, keeps any tools already in the file, and saves a backup of your old settings as `mcp.json.bak`. You can run it again safely.
+Instead of steps 2a–2c, you can run one of these **from the folder you open in VS Code**. First move into that folder, for example `cd $HOME\my-project` on Windows or `cd ~/my-project` on macOS and Linux. The command creates `.vscode/mcp.json` there with your 4 locations filled in, keeps any tools already in the file, and saves a backup of your old settings in a folder called `agentlatch-backups` in your home folder. The backup is kept outside your project so it can't be committed by accident. It may contain credentials, so keep it private. VS Code allows comments and trailing commas in `mcp.json`, which this command can't edit without losing them. If your file has either, the command stops and changes nothing; use steps 2a–2c instead. You can run it again safely.
 
 **Windows (PowerShell):**
 
 ```powershell
 $file = Join-Path (Get-Location) ".vscode\mcp.json"
 $runtime = "$HOME\agentlatch-runtime\Scripts"
-New-Item -ItemType Directory -Force (Split-Path $file) | Out-Null
 $raw = if (Test-Path $file) { Get-Content $file -Raw } else { "" }
-if ($raw -and $raw.Trim()) { Copy-Item $file "$file.bak" -Force; $config = $raw | ConvertFrom-Json } else { $config = [pscustomobject]@{} }
-if (-not $config.servers) { $config | Add-Member -NotePropertyName servers -NotePropertyValue ([pscustomobject]@{}) -Force }
-$config.servers | Add-Member -Force -NotePropertyName agentlatch -NotePropertyValue ([ordered]@{
-  type    = "stdio"
-  command = "$runtime\agent-latch-runtime.exe"
-  args    = @("proxy", "--name", "copilot-weather", "--trace", "$HOME\agentlatch-trace.jsonl", "--",
-              "$runtime\python.exe", "$HOME\agentlatch-test\fake_server.py")
-})
-[IO.File]::WriteAllText($file, ($config | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
-Write-Host "Done. Settings saved to $file"
+$hasContent = [bool]($raw -and $raw.Trim())
+$config = [pscustomobject]@{}
+$ok = $true
+if ($hasContent) {
+  # Saving would drop comments and trailing commas, so stop instead.
+  if ($raw -match '(?m)(^|\s)//|/\*|,\s*[}\]]') { $ok = $false }
+  else { try { $config = $raw | ConvertFrom-Json -ErrorAction Stop } catch { $ok = $false } }
+}
+if (-not $ok) {
+  Write-Host "Your mcp.json has something this command can't edit safely (such as comments or trailing commas). Nothing was changed. Use steps 2a-2c instead."
+} else {
+  New-Item -ItemType Directory -Force (Split-Path $file) | Out-Null
+  if ($hasContent) {
+    $backups = Join-Path $HOME "agentlatch-backups"
+    New-Item -ItemType Directory -Force $backups | Out-Null
+    Copy-Item $file (Join-Path $backups ("mcp-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".json.bak"))
+  }
+  if (-not $config.servers) { $config | Add-Member -NotePropertyName servers -NotePropertyValue ([pscustomobject]@{}) -Force }
+  $config.servers | Add-Member -Force -NotePropertyName agentlatch -NotePropertyValue ([ordered]@{
+    type    = "stdio"
+    command = "$runtime\agent-latch-runtime.exe"
+    args    = @("proxy", "--name", "copilot-weather", "--trace", "$HOME\agentlatch-trace.jsonl", "--",
+                "$runtime\python.exe", "$HOME\agentlatch-test\fake_server.py")
+  })
+  [IO.File]::WriteAllText($file, ($config | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+  Write-Host "Done. Settings saved to $file"
+}
 ```
 
 **macOS and Linux (Terminal):**
 
 ```bash
 ~/agentlatch-runtime/bin/python - <<'EOF'
-import json, pathlib, shutil
+import datetime, json, os, pathlib, shutil, sys
 home = pathlib.Path.home()
 f = pathlib.Path.cwd() / ".vscode" / "mcp.json"
 f.parent.mkdir(parents=True, exist_ok=True)
 config = {}
 if f.exists() and f.read_text().strip():
-    shutil.copy(f, f.with_suffix(".json.bak"))
-    config = json.loads(f.read_text())
+    try:
+        config = json.loads(f.read_text())
+    except json.JSONDecodeError:
+        # VS Code allows comments and trailing commas here; saving would drop them, so stop instead.
+        sys.exit("Your mcp.json has something this command can't edit safely (such as comments or "
+                 "trailing commas). Nothing was changed. Use steps 2a-2c instead.")
+    backups = home / "agentlatch-backups"
+    backups.mkdir(mode=0o700, exist_ok=True)
+    backup = backups / f"mcp-{datetime.datetime.now():%Y%m%d-%H%M%S}.json.bak"
+    shutil.copy(f, backup)
+    os.chmod(backup, 0o600)
 runtime = home / "agentlatch-runtime" / "bin"
 config.setdefault("servers", {})["agentlatch"] = {
     "type": "stdio",
@@ -362,7 +390,7 @@ Unlike some apps, VS Code doesn't start a new server by itself. Start it once:
 | Type this in Copilot Chat | What you should see in the log |
 |---|---|
 | Use the agentlatch get_weather tool for London | New lines containing `copilot-weather`. The tool call was recorded |
-| Use the agentlatch leaky_lookup tool for user alice | `token=[REDACTED]`. Copilot shows a fake secret key, but the log hides it |
+| Use the agentlatch leaky_lookup tool for user alice | `token=[REDACTED]`. Copilot shows a fake secret key, but the log masks it. Masking is pattern-based, so unusual secret formats can slip through |
 | Use the agentlatch broken_tool tool with reason test | `"is_error": true`. Failed tool calls are recorded too |
 | Use the agentlatch echo_injection tool for Paris | A hidden instruction in the tool's reply. Copilot should ignore it |
 
@@ -383,8 +411,9 @@ For more detail, see [Connect an app](../runtime.md#connect-an-app). Only connec
 - **Pause it:** open `.vscode/mcp.json` and click **Stop** above `"agentlatch"`, or untick **agentlatch** under the tools icon in Copilot Chat.
 - **Remove it:** delete the `"agentlatch": { ... }` part from `mcp.json`, or delete the file if AgentLatch is the only thing in it.
 - **Go back to your old settings**, from the folder you opened in VS Code:
-  - Windows: `Copy-Item .vscode\mcp.json.bak .vscode\mcp.json -Force`
-  - macOS and Linux: `cp .vscode/mcp.json.bak .vscode/mcp.json`
+  - Windows: `Get-ChildItem "$HOME\agentlatch-backups\mcp-*.json.bak" | Sort-Object Name | Select-Object -Last 1 | Copy-Item -Destination .vscode\mcp.json -Force`
+  - macOS and Linux: `cp "$(ls -1 ~/agentlatch-backups/mcp-*.json.bak | tail -1)" .vscode/mcp.json`
+  - These restore the newest backup. Backups are named with the date and time, in the `agentlatch-backups` folder in your home folder.
 
 ## If something goes wrong
 

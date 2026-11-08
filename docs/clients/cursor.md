@@ -1,6 +1,6 @@
 # Connect AgentLatch to Cursor
 
-This guide connects AgentLatch to the Cursor app on Windows, macOS or Linux. Afterwards, every time Cursor's AI uses a tool, AgentLatch writes a record of it to a log file on your computer, with any secrets hidden. AgentLatch only watches: it never changes or blocks what Cursor does.
+This guide connects AgentLatch to the Cursor app on Windows, macOS or Linux. Afterwards, every time Cursor's AI uses a tool from the server you add here, AgentLatch writes a record of it to a log file on your computer and masks values that look like secrets. Masking is pattern-based and can miss unusual formats, so keep the log private. AgentLatch only watches: it never changes or blocks what Cursor does. It records only calls that go through AgentLatch. Other tool servers you have set up, and tools built into Cursor, don't pass through it, so their calls aren't in the log.
 
 It takes about 10 minutes. You don't need to know how to code; you'll copy and paste a few commands.
 
@@ -144,7 +144,7 @@ All 4 are in your user folder. To open it:
 | # | File | What it is | Where it is in your user folder |
 |---|---|---|---|
 | 1 | `agent-latch-runtime.exe` (Windows) or `agent-latch-runtime` (macOS, Linux) | AgentLatch itself. Cursor starts this | `agentlatch-runtime` → `Scripts` (Windows) or `bin` (macOS, Linux) |
-| 2 | `agentlatch-trace.jsonl` | The log. AgentLatch writes every tool call here | Directly in your user folder (appears after the first tool call) |
+| 2 | `agentlatch-trace.jsonl` | The log. AgentLatch writes each call that goes through it here. Keep it private: secret masking is pattern-based | Directly in your user folder (appears after the first tool call) |
 | 3 | `python.exe` (Windows) or `python` (macOS, Linux) | The Python that runs the test server | Same folder as file 1 |
 | 4 | `fake_server.py` | The test server with 4 practice tools | `agentlatch-test` |
 
@@ -339,7 +339,7 @@ EOF
 | Type this in Cursor | What you should see in the log |
 |---|---|
 | Use the agentlatch get_weather tool for London | New lines containing `cursor-weather`. The tool call was recorded |
-| Use the agentlatch leaky_lookup tool for user alice | `token=[REDACTED]`. Cursor shows a fake secret key, but the log hides it |
+| Use the agentlatch leaky_lookup tool for user alice | `token=[REDACTED]`. Cursor shows a fake secret key, but the log masks it. Masking is pattern-based, so unusual secret formats can slip through |
 | Use the agentlatch broken_tool tool with reason test | `"is_error": true`. Failed tool calls are recorded too |
 | Use the agentlatch echo_injection tool for Paris | A hidden instruction in the tool's reply. Cursor should ignore it |
 

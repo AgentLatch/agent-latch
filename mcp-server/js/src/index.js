@@ -39,6 +39,17 @@ export const DEFAULT_TIMEOUT_MS = 30_000;
 
 const CLIENT_INFO = { name: "agentlatch-js-connector", version: "0.1.0" };
 
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+
+/** True when url points at this machine, where the gateway runs. An invalid url counts as no. */
+function isLoopbackUrl(url) {
+  try {
+    return LOOPBACK_HOSTS.has(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** The gateway's own virtual environment, else whatever python is on PATH. */
 function defaultPython() {
   const venv =
@@ -62,6 +73,7 @@ function unwrap(result) {
   return content;
 }
 
+/** The text blocks of an MCP tool result, joined with newlines. */
 function textOf(result) {
   return (result.content ?? [])
     .filter((block) => block.type === "text")
@@ -79,6 +91,7 @@ export class GatewayTools {
   #where;
   #timeoutMs;
 
+  /** Use GatewayTools.connect() or fromClientConfig() instead of calling this directly. */
   constructor(client, tools, { where, timeoutMs }) {
     this.#client = client;
     this.#tools = new Map(tools.map((tool) => [tool.name, tool]));
@@ -91,16 +104,20 @@ export class GatewayTools {
    *
    * url:       the gateway's HTTP address, for example http://127.0.0.1:8765/mcp.
    *            Omit it to start the gateway over stdio from the mcp-server folder.
-   * token:     value of MCP_GATEWAY_TOKEN when the HTTP gateway requires one
-   *            (defaults to the MCP_GATEWAY_TOKEN environment variable).
+   * token:     value of MCP_GATEWAY_TOKEN when the HTTP gateway requires one. When you leave it
+   *            out, the MCP_GATEWAY_TOKEN environment variable is used, but only for a url on this
+   *            machine (localhost, 127.0.0.1 or ::1), so the token is never sent to another host.
+   * headers:   extra HTTP headers. An Authorization header you set here is kept, and no token is added.
    * python:    python used for the stdio gateway (defaults to mcp-server/.venv).
    * command, args, env, cwd: start some other stdio command instead of server.py.
    * timeoutMs: limit for connecting and for each tool call (default 30 s).
    * stderr:    where the stdio gateway's log goes: "inherit" (default), "ignore" or "pipe".
+   *            "pipe" needs onStderr, because an unread pipe fills up and can stall the gateway.
+   * onStderr:  function called with each chunk (a Buffer) of the gateway's log, for stderr: "pipe".
    */
   static async connect({
     url,
-    token = process.env.MCP_GATEWAY_TOKEN,
+    token,
     headers,
     python,
     command,
@@ -109,15 +126,24 @@ export class GatewayTools {
     cwd,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     stderr = "inherit",
+    onStderr,
   } = {}) {
     let transport;
     let where;
     if (url) {
       const requestHeaders = { ...headers };
-      if (token) requestHeaders.Authorization = `Bearer ${token}`;
+      const hasAuthorization = Object.keys(requestHeaders).some((key) => key.toLowerCase() === "authorization");
+      const bearer = token ?? (isLoopbackUrl(url) ? process.env.MCP_GATEWAY_TOKEN : undefined);
+      if (bearer && !hasAuthorization) requestHeaders.Authorization = `Bearer ${bearer}`;
       transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: requestHeaders } });
       where = url;
     } else {
+      if (stderr === "pipe" && typeof onStderr !== "function") {
+        throw new GatewayError(
+          'stderr: "pipe" needs an onStderr(chunk) function to read the gateway\'s log. ' +
+            'Nothing reads an unconsumed pipe, so it fills up and can stall the gateway. Use "inherit" or "ignore", or pass onStderr.',
+        );
+      }
       const program = command ?? python ?? defaultPython();
       // On Windows a missing executable only shows up as a closed connection, so check paths first.
       if (/[\\/]/.test(program) && !existsSync(program)) {
@@ -135,6 +161,8 @@ export class GatewayTools {
         cwd: cwd ?? (command ? undefined : GATEWAY_DIR),
         stderr,
       });
+      // The SDK hands back its stderr stream before it starts the child, so a reader is attached in time.
+      if (stderr === "pipe") transport.stderr.on("data", onStderr);
       where = program;
     }
 
@@ -155,17 +183,22 @@ export class GatewayTools {
    *
    * client: "claude" or "cursor".
    * configPath, serverName: override where to look and which entry to use.
+   * cwd: the folder whose .cursor/mcp.json is read, and the folder the gateway starts in
+   *      (it overrides the entry's own cwd).
+   * env: extra environment variables. They fill ${VAR} references in the entry and are added to
+   *      the gateway's environment, overriding the entry's own values.
    * Other options are passed to connect().
    */
   static async fromClientConfig(client, { configPath, serverName, ...options } = {}) {
-    const { entry } = readClientConfig(client, { configPath, serverName });
+    const { cwd, env } = options;
+    const { entry } = readClientConfig(client, { configPath, serverName, cwd, env: { ...process.env, ...env } });
     if (entry.url) return GatewayTools.connect({ ...options, url: entry.url, headers: entry.headers });
     return GatewayTools.connect({
       ...options,
       command: entry.command,
       args: entry.args ?? [],
-      env: entry.env,
-      cwd: entry.cwd,
+      env: { ...entry.env, ...env },
+      cwd: cwd ?? entry.cwd,
     });
   }
 
@@ -262,10 +295,12 @@ export class GatewayTools {
     await this.#client.close();
   }
 
+  /** Lets `await using gateway = await GatewayTools.connect()` close the connection automatically. */
   async [Symbol.asyncDispose]() {
     await this.close();
   }
 
+  /** The tool with this name, or a GatewayToolError that lists the tools that do exist. */
   #tool(name) {
     const tool = this.#tools.get(name);
     if (!tool) {

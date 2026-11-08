@@ -9,9 +9,12 @@ export type JsonSchema = { type: "object"; properties?: Record<string, unknown>;
 export interface ConnectOptions {
   /** The gateway's HTTP address, for example http://127.0.0.1:8765/mcp. Omit to start it over stdio. */
   url?: string;
-  /** MCP_GATEWAY_TOKEN for an HTTP gateway. Defaults to the MCP_GATEWAY_TOKEN environment variable. */
+  /**
+   * MCP_GATEWAY_TOKEN for an HTTP gateway. When omitted, the MCP_GATEWAY_TOKEN environment variable
+   * is used, but only for a url on this machine (localhost, 127.0.0.1 or ::1).
+   */
   token?: string;
-  /** Extra HTTP headers. */
+  /** Extra HTTP headers. An Authorization header set here is kept, and no token is added. */
   headers?: Record<string, string>;
   /** Python used for the stdio gateway. Defaults to mcp-server/.venv. */
   python?: string;
@@ -22,8 +25,10 @@ export interface ConnectOptions {
   cwd?: string;
   /** Limit for connecting and for each tool call, in milliseconds. Default 30000. */
   timeoutMs?: number;
-  /** Where the stdio gateway's log goes. Default "inherit". */
+  /** Where the stdio gateway's log goes. Default "inherit". "pipe" requires onStderr. */
   stderr?: "inherit" | "ignore" | "pipe";
+  /** Called with each chunk of the gateway's log when stderr is "pipe". Without it, "pipe" is rejected. */
+  onStderr?: (chunk: Buffer) => void;
 }
 
 export interface ClientConfigOptions extends ConnectOptions {
@@ -31,6 +36,8 @@ export interface ClientConfigOptions extends ConnectOptions {
   configPath?: string;
   /** Entry to use from mcpServers. Default "agentlatch-gateway". */
   serverName?: string;
+  // env and cwd also apply here: cwd is where .cursor/mcp.json is read and where the gateway starts,
+  // and env fills ${VAR} references and overrides the entry's own environment variables.
 }
 
 export interface ToolFunction {

@@ -187,22 +187,24 @@ await tools.close();                         // always disconnect when you're do
 |---|---|
 | `GatewayTools.connect()` | Starts the gateway for you, using `mcp-server/.venv`'s Python. The simplest option. |
 | `GatewayTools.connect({ url: "http://127.0.0.1:8765/mcp" })` | A gateway you already started with `python server.py --http` |
-| `GatewayTools.connect({ url, token: "..." })` | The same, when the gateway needs a password (`MCP_GATEWAY_TOKEN`). If you leave out `token`, the `MCP_GATEWAY_TOKEN` environment variable is used. |
+| `GatewayTools.connect({ url, token: "..." })` | The same, when the gateway needs a password (`MCP_GATEWAY_TOKEN`). If you leave out `token`, the `MCP_GATEWAY_TOKEN` environment variable is used, but only when the `url` is on this machine (`localhost`, `127.0.0.1` or `::1`). The token is never sent to another host. |
 | `GatewayTools.fromClientConfig("cursor")` | The `agentlatch-gateway` entry in Cursor's `.cursor/mcp.json` (your project's first, then the one in your home folder) |
 | `GatewayTools.fromClientConfig("claude")` | The `agentlatch-gateway` entry in Claude Desktop's `claude_desktop_config.json` |
 
-`fromClientConfig` also takes `serverName` (if your entry isn't called `agentlatch-gateway`) and `configPath` (to read a different file).
+`fromClientConfig` also takes `serverName` (if your entry isn't called `agentlatch-gateway`) and `configPath` (to read a different file). Pass `cwd` to read a project's `.cursor/mcp.json` from another folder (the gateway also starts there), and `env` to fill `${VAR}` references in the entry and add or override its environment variables.
 
 ### All connect options
 
 | Option | Default | Meaning |
 |---|---|---|
 | `url` | none: start the gateway for you | The gateway's web address |
-| `token` | `MCP_GATEWAY_TOKEN` | The gateway's password, sent as `Authorization: Bearer …` |
+| `token` | `MCP_GATEWAY_TOKEN`, for a `url` on this machine only | The gateway's password, sent as `Authorization: Bearer …`. A token you pass is sent to any `url`. |
+| `headers` | none | Extra HTTP headers. An `Authorization` header you set here is kept, and no token is added. |
 | `python` | `mcp-server/.venv`'s Python | Which Python starts the gateway |
 | `command`, `args`, `env`, `cwd` | `server.py` | Start a different program instead |
 | `timeoutMs` | `30000` (30 seconds) | How long to wait when connecting and for each tool. `call()` also takes `{ timeoutMs }`. |
-| `stderr` | `"inherit"` | Where the gateway's log messages go: `"inherit"` (your terminal), `"ignore"` or `"pipe"` |
+| `stderr` | `"inherit"` | Where the gateway's log messages go: `"inherit"` (your terminal), `"ignore"` or `"pipe"`. `"pipe"` needs `onStderr`. |
+| `onStderr` | none | A function called with each chunk of the gateway's log when `stderr` is `"pipe"`. Without it, `"pipe"` is refused, because an unread pipe fills up and can stall the gateway. |
 
 When the connector starts the gateway, it passes only basic settings like `PATH`. The gateway reads its own passwords from `mcp-server/.env`, so your program's API keys never reach it.
 
