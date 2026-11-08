@@ -40,6 +40,8 @@ agent-latch-runtime proxy --help
 
 The `runtime` extra adds FastMCP; the scanner alone doesn't need it. From a clone of the repository, `python -m pip install -e ".[runtime]"` works too.
 
+Or use the container image `ghcr.io/agentlatch/agent-latch-runtime`; an app starts it with `docker run -i`. It holds no Node.js, so `npx` servers need a separate container or your own derived image. See [Container images](docker.md#runtime-image).
+
 - **Keep MCP servers out of this environment.** Run them the usual way (`uvx`, `npx`, their own virtual environment). Installing a server into AgentLatch's environment can break it: FastMCP may need a newer MCP library than the server was written for.
 - **Windows: keep the environment path short**, such as `$HOME\agentlatch-runtime`. FastMCP installs `pywin32`, whose deeply nested files can exceed Windows' 260-character path limit under a long folder (`WinError 206`). Alternatively, turn on long path support in Windows.
 

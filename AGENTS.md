@@ -13,7 +13,7 @@ Guidance for AI coding agents (and humans) working in this repository.
 
 It reports findings as a terminal table / plain text, JSON, or SARIF, and runs as a CLI, a pre-commit hook, or a composite GitHub Action. Findings map to the OWASP Top 10 for Agentic Applications (informational only).
 
-Status: **early proof of concept (v0.5.0)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
+Status: **early proof of concept (v0.5.1)**. Never overstate coverage. A clean scan is not a security guarantee, and docs and messages must say so.
 
 ## Design principle: the scanned project is untrusted
 
@@ -123,11 +123,16 @@ examples/vulnerable-agent/     # deliberately insecure demo project + expected S
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
 action.yml                     # composite GitHub Action (isolated venv, SARIF path rewrite, summary)
+Dockerfile                     # two images: --target scanner (agent-latch), --target runtime (agent-latch-runtime)
+.dockerignore                  # allow-list build context: pyproject.toml, README.md, LICENSE, src/, docker/ only
+docker/requirements-*.txt      # hash-pinned image dependency locks; regenerate with scripts/update-docker-locks.sh
 .pre-commit-hooks.yaml         # pre-commit hook definition (`agent-latch scan --fail-on high`)
 .agent-latch-ignore            # suppressions for the repo's own self-scan
 .github/workflows/tests.yml    # CI: tests + ruff (py3.11–3.14), runtime tests, action smoke test, self-scan
 .github/workflows/code-quality.yml # CI: ruff check across the repo, npm audit --audit-level=high for web/
-.github/workflows/publish.yml  # PyPI release via Trusted Publishing (on GitHub release; manual run → TestPyPI)
+.github/workflows/publish.yml  # PyPI release via Trusted Publishing (on GitHub release; manual run → TestPyPI; PRs get a dry run that never publishes)
+.github/workflows/images.yml   # build + smoke-test both images on PRs; push to GHCR on release (provenance, SBOM)
+.github/dependabot.yml         # weekly updates: base image digest, action SHAs, image dependency locks
 MANIFEST.in                    # sdist extras (test fixtures the shipped tests read)
 llms.txt                       # LLM-oriented project summary
 ```
@@ -235,6 +240,7 @@ Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per g
 
 ## Conventions
 
+- Container images: keep them free of Node.js, compilers and the source tree, running as user `10001`, with the base image pinned by digest and dependencies installed from the hash-pinned locks with `--only-binary=:all:`. A server that needs another runtime goes in its own container or a user-built derived image (`docs/docker.md`).
 - Keep runtime dependencies minimal: `rich`, `rich-argparse`, `PyYAML`. `pip-audit` is an optional `[audit]` extra, and pinned `fastmcp` is the optional `[runtime]` extra (`import agent_latch.runtime` must not import it). Do not add new runtime dependencies without strong justification.
 - Use `from __future__ import annotations`, type hints, and `pathlib.Path` throughout. Use frozen dataclasses for value types.
 - Rules are static heuristics. Parse with `ast` and never import or execute scanned code. Load YAML only with `yaml.SafeLoader` (see `manifest._LineLoader`).
@@ -277,6 +283,7 @@ Before building a check, look at how established open-source tools handle it. Bo
 - Add `docs/release-notes/vX.Y.Z.md`, and update version references in `README.md`, `docs/ci.md`, and `llms.txt` (for example `AgentLatch/agent-latch@vX.Y.Z` and `agentlatch-security==X.Y.Z`).
 - The package is published to PyPI as `agentlatch-security` (PyPI rejects `agent-latch` as too similar to an unrelated `agentlatch` project). The commands stay `agent-latch` and `agent-latch-runtime`, and the import stays `agent_latch`. It is published by `.github/workflows/publish.yml` using Trusted Publishing (no API token). Run it manually first to publish to TestPyPI and check `pipx install` from there. Publishing a GitHub release tagged `vX.Y.Z` then uploads to PyPI; the workflow fails if the tag does not match both version files.
 - PyPI versions cannot be replaced or reused, even after deletion, so fix problems with a new patch release.
+- The same GitHub release also publishes both container images to GHCR (`.github/workflows/images.yml`, tags `X.Y.Z`, `X.Y`, `latest`). When `pyproject.toml` dependencies change, run `scripts/update-docker-locks.sh` and commit `docker/requirements-*.txt` in the same change, or the images keep the old dependencies.
 
 ## Documentation map
 
@@ -286,6 +293,9 @@ Before building a check, look at how established open-source tools handle it. Bo
 - `docs/ci.md`: pre-commit, GitHub Action inputs and outputs, other CI
 - `docs/RULES.md`: per-rule detection, OWASP mapping, blind spots
 - `docs/GATES.md`: gates, their detectors and framework references (generated from `catalog.py`)
+- `docs/docker.md`: container images (scanner and runtime): running them, connecting an app over `docker run -i`, limits (no Node.js, loopback-only HTTP), verifying, publishing
+- `docs/docker-setup.md`: step-by-step setup of the images: installing Docker, building or pulling them, a first scan, connecting Claude Desktop, updating and removing, troubleshooting
+- `docker/README.md`: the image dependency locks, the Dockerfile stages, updating the locks and the Python version, checking a change locally
 - `docs/runtime.md`: runtime proxy for MCP (preview, monitor only): install, connecting an app, supported clients, what is recorded, limits
 - `docs/ledger.md`: the tamper-evident audit ledger — the chain, anchors, the six verdicts, what it catches and cannot
 - `docs/ledger-setup.md`: ten-minute setup, where to put the anchor, wiring the report and CI, troubleshooting
