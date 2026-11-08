@@ -13,7 +13,7 @@ from agent_latch.gates.alr04 import reset_state
 from agent_latch.runtime.events import ToolCall, ToolInfo, ToolOutput
 from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
 from agent_latch.runtime.payloads import PayloadFile, PayloadTap, masked_record
-from agent_latch.runtime.redact import MASK
+from agent_latch.runtime.redact import MASK, mask_secrets
 from agent_latch.runtime.sqlite_store import SQLiteEventStore
 from agent_latch.runtime.trace import TraceLog
 
@@ -143,6 +143,13 @@ def test_basic_credential_is_still_found_in_both_directions() -> None:
     credential = "Authorization: Basic " + "dXNlcjpwYXNz"
     assert [f["rule_id"] for f in _findings(_request({"header": credential}))] == ["ALR10-R01"]
     assert [f["rule_id"] for f in _findings(_response((credential,)))] == ["ALR10-R02"]
+
+
+def test_all_lowercase_basic_credential_is_still_found_in_both_directions() -> None:
+    credential = "Authorization: Basic " + "abcdefghijkl"
+    assert [f["rule_id"] for f in _findings(_request({"header": credential}))] == ["ALR10-R01"]
+    assert [f["rule_id"] for f in _findings(_response((credential,)))] == ["ALR10-R02"]
+    assert mask_secrets("basic tutorial") == "basic [REDACTED]"
 
 
 def test_labeled_corpus_recall_and_false_positive_rates() -> None:
