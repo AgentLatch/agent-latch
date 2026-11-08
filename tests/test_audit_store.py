@@ -1037,3 +1037,94 @@ def test_attack_tool_local_mode_passes_against_a_sealed_store(sealed: Sealed) ->
     assert done.returncode == 0, done.stdout + done.stderr[-600:]
     assert "PASS: 0 of 17 write attempts succeeded" in done.stdout
     assert sealed.rows() == 4 and sealed.verify() == 0
+
+
+def _add_genuine_event(sealed: Sealed) -> None:
+    """Append one more record to the sealed run's trace, as the proxy would for a new tool call."""
+    trace = TraceLog(sealed.trace, summary=None)
+    trace.call_request(ToolCall("s", "9", "claude", "run_command", "demo", {"command": "pwd"}, "t"))
+    trace.close()
+
+
+def test_anchor_command_on_a_lowered_schema_version_is_tampering(
+    sealed: Sealed, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """anchor --database treats a lowered schema version as tampering (exit 1), not as an old
+    file.
+    """
+    conn = sqlite3.connect(sealed.database)
+    conn.execute("PRAGMA user_version = 2")
+    conn.close()
+    before = sealed.anchor.read_text(encoding="utf-8")
+    capsys.readouterr()
+    argv = ["anchor", "--database", str(sealed.database), "--to", str(sealed.anchor), "--quiet"]
+    assert cli.main(argv) == 1  # an integrity failure, not "not sealed yet" (2)
+    out = _out(capsys)
+    assert "TAMPERED" in out and "lowered" in out
+    assert sealed.anchor.read_text(encoding="utf-8") == before
+
+
+def test_every_anchor_point_must_still_hold_not_only_the_newest(
+    sealed: Sealed, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A rewrite published over still conflicts with older anchor points, for verify and the
+    importer.
+    """
+    _add_genuine_event(sealed)
+    assert sealed.import_again() == 0  # a second, genuine point: #5
+    assert [point.seq for point in FileAnchor(sealed.anchor).points()] == [4, 5]
+
+    # Rewrite and reseal the whole chain, then publish a point over the forgery, which is what an
+    # importer that trusted the store would have done. The newest point now matches the forgery.
+    conn = _connect_as_attacker(sealed.database)
+    conn.execute("UPDATE events SET name = 'cover-up' WHERE event_order = 2")
+    _reseal_all(conn)
+    _cover_tracks(conn)
+    forged_head = conn.execute("SELECT seal_digest FROM events WHERE seal_seq = 5").fetchone()[0]
+    conn.close()
+    FileAnchor(sealed.anchor).publish(AnchorPoint(
+        seq=5, digest=forged_head, records=5, timestamp="2026-01-01T00:00:00Z", ledger="events.db",
+        source=SOURCE,
+    ))
+    capsys.readouterr()
+    assert sealed.verify() == 1  # the older points no longer match, so the rewrite shows
+    assert "REWRITTEN" in _out(capsys)
+    # The importer holds the store to every point at start too, and refuses it.
+    assert sealed.import_again() == 1
+    assert "changed after it was sealed" in _out(capsys)
+
+
+def test_importer_will_not_publish_over_a_chain_rewritten_while_it_runs(tmp_path: Path) -> None:
+    """A chain rewritten while the importer runs is refused, and the forgery is never anchored."""
+    sealed = Sealed(tmp_path)  # anchored at #4
+    importer = RuntimeLogImporter(
+        sealed.trace, None, [], payloads_path=sealed.payloads,
+        store=SQLiteEventStore(sealed.database), anchor=FileAnchor(sealed.anchor),
+        follow=True, poll_interval=0.02, payload_grace=0.05,
+    )
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        """Run the importer and keep whatever stopped it, so the test can inspect it."""
+        try:
+            importer.run()
+        except BaseException as error:  # noqa: BLE001 - the test inspects what stopped it
+            errors.append(error)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    try:
+        time.sleep(0.5)  # the importer has audited the genuine store and is idle
+        conn = _connect_as_attacker(sealed.database)
+        conn.execute("UPDATE events SET name = 'cover-up' WHERE event_order = 2")
+        _reseal_all(conn)  # a consistent chain, rewritten after the importer started
+        _cover_tracks(conn)
+        conn.close()
+        _add_genuine_event(sealed)  # the next genuine event chains onto the forgery
+        thread.join(15)
+        assert not thread.is_alive(), "the importer should have refused and stopped"
+    finally:
+        importer.stop()
+        thread.join(5)
+    assert errors and "changed after it was sealed" in str(errors[0])
+    assert FileAnchor(sealed.anchor).latest().seq == 4  # type: ignore[union-attr]

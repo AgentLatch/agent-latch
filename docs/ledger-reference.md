@@ -230,7 +230,9 @@ were never compared with the logs and anchoring them here would make a forged ro
 ### `agent-latch-runtime verify --database FILE [--anchor PATH]`
 
 Read-only. Opens the store with the read-only reader, recomputes every seal, checks the table layout,
-and compares the head with the newest point in `--anchor`. Not combined with `PATH`, `--ledger`,
+and compares the store with **every** point in `--anchor`, not only the newest: the anchor file is
+append-only history the agent cannot edit, so a chain that was rewritten and then published over still
+conflicts with the older points (`rewritten`). Not combined with `PATH`, `--ledger`,
 `--all` or `--trace`. `verify PATH` on a SQLite file is refused with exit `2` and a pointer to
 `--database`, so a database is never read as a ledger.
 
@@ -244,7 +246,9 @@ and compares the head with the newest point in `--anchor`. Not combined with `PA
 
 `--anchor` needs `--database`. Before adding anything, the importer recomputes the seals, checks the
 table layout and compares the store with the newest anchor point. With `--anchor`, new seals are then
-published at most every few seconds and once when it stops. Exit codes:
+published at most every few seconds and once when it stops. The importer holds the store to every
+earlier point at start, and re-checks the last point against the store just before it publishes a new
+one, so a chain rewritten while it runs is refused instead of anchored. Exit codes:
 
 | Exit | Meaning |
 |---|---|

@@ -16,7 +16,7 @@ Checking never writes to the store, never repairs it, and never uses the network
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -116,16 +116,21 @@ class Chain:
     head: Seal | None
     rows: int  # every row, sealed or not
     sealed: int  # rows that carry a readable seal
-    tracked_digest: str | None  # the digest stored at ``track_seq``, when that row exists
+    digests: dict[int, str]  # the stored digest at each requested seq that exists
 
 
-def walk_chain(rows: Iterable[StoredRow], *, track_seq: int | None = None) -> Chain:
-    """Recompute every seal in order. Collects problems instead of stopping at the first."""
+def walk_chain(rows: Iterable[StoredRow], *, track_seqs: Iterable[int] = ()) -> Chain:
+    """Recompute every seal in order. Collects problems instead of stopping at the first.
+
+    ``track_seqs`` are the numbers whose stored digests are wanted (the anchored ones), so the
+    caller can compare them without holding every digest in memory.
+    """
     issues: list[Issue] = []
     prev = GENESIS
     expected = 1
     head: Seal | None = None
-    tracked: str | None = None
+    wanted = set(track_seqs)
+    found: dict[int, str] = {}
     total = sealed = 0
     for row in rows:
         total += 1
@@ -157,11 +162,27 @@ def walk_chain(rows: Iterable[StoredRow], *, track_seq: int | None = None) -> Ch
         prev = seal.digest
         expected = seal.seq + 1
         head = seal
-        if track_seq is not None and seal.seq == track_seq:
-            tracked = seal.digest
+        if seal.seq in wanted:
+            found[seal.seq] = seal.digest
     return Chain(
-        issues=tuple(issues), head=head, rows=total, sealed=sealed, tracked_digest=tracked
+        issues=tuple(issues), head=head, rows=total, sealed=sealed, digests=found
     )
+
+
+def anchor_history_issues(points: Sequence[AnchorPoint], chain: Chain) -> list[Issue]:
+    """Every point ever published must still hold, not only the newest.
+
+    The anchor file is append-only history the agent cannot edit. If a chain was rewritten and
+    resealed and a later point was then published over the rewrite, the newest point alone would
+    match the forgery, but every older point at or after the first changed row would not.
+    """
+    head_seq = chain.head.seq if chain.head else 0
+    issues: list[Issue] = []
+    for point in points:
+        issues += anchor_point_issues(
+            point.seq, point.digest, head_seq=head_seq, digest_at_seq=chain.digests.get(point.seq)
+        )
+    return issues
 
 
 def schema_issues(source: SealedSource, point: AnchorPoint | None = None) -> list[Issue]:
@@ -236,23 +257,25 @@ def downgrade_verdict(name: str, point: AnchorPoint, issues: list[Issue]) -> Ver
 def verify_store(
     source: SealedSource, *, name: str, anchor_path: Path | None = None
 ) -> Verification:
-    """Verify a store: every seal, its schema, and (optionally) the newest published anchor."""
+    """Verify a store: every seal, its schema, and (optionally) every published anchor point."""
     point: AnchorPoint | None = None
+    points: list[AnchorPoint] = []
     anchor_issues: list[Issue] = []
     if anchor_path is not None:
         try:
-            point = FileAnchor(Path(anchor_path)).latest()
+            points = FileAnchor(Path(anchor_path)).points()
         except (AnchorError, OSError) as error:
             anchor_issues.append(Issue("malformed", 0, f"the anchor file cannot be read: {error}"))
+        point = points[-1] if points else None
         if point is None:
             anchor_issues.append(Issue("unanchored", 0, f"no anchor point at {anchor_path}"))
-        elif point.source != SOURCE:
+        elif any(each.source != SOURCE for each in points):
             anchor_issues.append(
                 Issue("malformed", 0, "the anchor point belongs to a trace ledger, not a store")
             )
-            point = None
+            point, points = None, []
 
-    chain = walk_chain(source.sealed_rows(), track_seq=point.seq if point else None)
+    chain = walk_chain(source.sealed_rows(), track_seqs=[each.seq for each in points])
     layout = schema_issues(source, point)
 
     if chain.rows == 0:
@@ -271,9 +294,7 @@ def verify_store(
     issues = [*chain.issues, *layout]
     head_seq = chain.head.seq if chain.head else 0
     if point is not None:
-        issues += anchor_point_issues(
-            point.seq, point.digest, head_seq=head_seq, digest_at_seq=chain.tracked_digest
-        )
+        issues += anchor_history_issues(points, chain)
         if head_seq > point.seq:
             issues.append(
                 Issue(
@@ -331,6 +352,7 @@ __all__ = [
     "StoreRefused",
     "StoreTampered",
     "StoredRow",
+    "anchor_history_issues",
     "changed_message",
     "downgrade_issues",
     "downgrade_verdict",

@@ -45,12 +45,13 @@ from agent_latch.runtime.ledger.event_seal import (
     SealedSource,
     StoreRefused,
     StoreTampered,
+    anchor_history_issues,
     changed_message,
     downgrade_issues,
     schema_issues,
     walk_chain,
 )
-from agent_latch.runtime.ledger.verify import anchor_point_issues
+from agent_latch.runtime.ledger.verify import Issue
 from agent_latch.runtime.normalizer import (
     PAYLOAD_METHODS,
     EventKey,
@@ -444,24 +445,23 @@ class RuntimeLogImporter:
         store = self.store
         if store is None or not isinstance(store, SealedSource):
             return  # a store that does not seal its rows has nothing to check
-        point = None
+        points: list[Any] = []
         if self.anchor is not None:
             try:
-                point = self.anchor.latest()
+                every = getattr(self.anchor, "points", None)
+                latest = self.anchor.latest()
+                points = list(every()) if every is not None else ([latest] if latest else [])
             except (AnchorError, OSError) as error:
                 raise StoreRefused(f"the anchor {self.anchor.path} cannot be read: {error}") from error
-            if point is not None and point.source != SOURCE:
+            if any(each.source != SOURCE for each in points):
                 raise StoreRefused(
                     f"the anchor {self.anchor.path} belongs to a trace ledger; use a separate"
                     " anchor file for the event store"
                 )
-        chain = walk_chain(store.sealed_rows(), track_seq=point.seq if point else None)
+        point = points[-1] if points else None
+        chain = walk_chain(store.sealed_rows(), track_seqs=[each.seq for each in points])
         issues = [*chain.issues, *schema_issues(store, point)]
-        head_seq = chain.head.seq if chain.head else 0
-        if point is not None:
-            issues += anchor_point_issues(
-                point.seq, point.digest, head_seq=head_seq, digest_at_seq=chain.tracked_digest
-            )
+        issues += anchor_history_issues(points, chain)  # every point ever published, not just the last
         if issues:
             raise StoreTampered(changed_message(issues))
         if self.anchor is not None and chain.head is not None and point is None:
@@ -520,6 +520,7 @@ class RuntimeLogImporter:
         head = store.head()  # type: ignore[attr-defined]
         if head is None:
             return
+        self._refuse_if_rewritten_since_last_point()
         point = point_for(
             store.path or Path("events"),
             seq=head.seq,
@@ -532,6 +533,35 @@ class RuntimeLogImporter:
         self.anchor.publish(point)
         self._dirty = False
         self._last_publish = time.monotonic()
+
+    def _refuse_if_rewritten_since_last_point(self) -> None:
+        """Never publish a head that sits on a chain which no longer matches the newest point.
+
+        The store is audited when the importer starts. If an anchored row is rewritten and resealed
+        while it runs, the next genuine event would chain onto the forgery, and publishing that
+        head would make the forgery the newest anchor. So the point published last is checked
+        against the store again, just before a new one is written. (A rewrite after this check is
+        still caught later, because ``verify`` holds the store to every point, not only the last.)
+        """
+        digest_at = getattr(self.store, "seal_digest_at", None)
+        if self.anchor is None or digest_at is None:
+            return
+        latest = self.anchor.latest()
+        if latest is None or latest.source != SOURCE:
+            return
+        if digest_at(latest.seq) != latest.digest:
+            raise StoreTampered(
+                changed_message(
+                    [
+                        Issue(
+                            "rewritten",
+                            latest.seq,
+                            f"record #{latest.seq} no longer matches the anchor point published"
+                            f" at {latest.timestamp}; nothing newer was published",
+                        )
+                    ]
+                )
+            )
 
     def _publish_after_interrupt(self) -> None:
         """Ctrl+C while following: save what is waiting and publish, so a restart starts clean."""

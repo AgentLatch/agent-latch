@@ -286,6 +286,16 @@ class _Reading:
         row = self._connection().execute(_HEAD).fetchone()
         return None if row is None else _seal_from(tuple(row))
 
+    def seal_digest_at(self, seq: int) -> str | None:
+        """The stored digest of seal number ``seq``, or None when there is no such row."""
+        try:
+            row = self._connection().execute(
+                "SELECT seal_digest FROM events WHERE seal_seq = ?", (seq,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return None if row is None or not isinstance(row[0], str) else row[0]
+
     def sealed_rows(self) -> Iterator[StoredRow]:
         """Every row with its seal, in seal order. An unreadable row is yielded as such."""
         try:

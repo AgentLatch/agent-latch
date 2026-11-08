@@ -92,6 +92,15 @@ chains number their records separately and cannot share a file. Keep that check;
 
 ### Adding a migration
 
+**Audit before you migrate.** Opening an older file runs the migrations, which change the file (a new
+column, a trigger, `user_version`). A store that is already sealed must have its seals, layout and anchor
+checked *before* a migration runs, so a refused store is left byte-for-byte as it was and can be kept as
+evidence. Today no released version needs this: version 3 was never shipped and version 4 is current, so
+opening a current store changes nothing. The first migration added after version 4 must add that
+pre-open check (read the sealed rows through a read-only connection at the file's own version, and compute
+the expected layout for that version, not the current one), with a test that a tampered store is
+refused with its bytes unchanged.
+
 Append a function to `MIGRATIONS`; never edit a shipped one. If it touches `events`, remember the
 triggers: an `UPDATE` or `DELETE` inside a migration after version 4 will abort. Drop and recreate the
 trigger inside the same migration, or avoid `UPDATE`. Then update the schema expectations in

@@ -550,6 +550,19 @@ def _anchor_database(args: argparse.Namespace) -> int:
     were never checked.
     """
     database: Path = args.database
+    destination = make_anchor(args.to)
+    try:
+        earlier = destination.latest()
+    except (AnchorError, OSError) as error:
+        print(f"agent-latch-runtime: cannot anchor: {error}", file=sys.stderr)
+        return 2
+    # Before the reader refuses an "old" file: a version lowered below the anchor's is tampering.
+    lowered = downgrade_issues(stored_schema_version(database), earlier)
+    if lowered and earlier is not None:
+        for line in describe(downgrade_verdict(database.name, earlier, lowered)):
+            print(line, file=sys.stderr)
+        print("agent-latch-runtime: not anchored: the event store fails its check", file=sys.stderr)
+        return 1
     reader = SQLiteEventReader(database)
     try:
         reader.open()
@@ -557,8 +570,6 @@ def _anchor_database(args: argparse.Namespace) -> int:
         print(f"agent-latch-runtime: cannot anchor: {error}", file=sys.stderr)
         return 2
     try:
-        destination = make_anchor(args.to)
-        earlier = destination.latest()
         if earlier is not None and earlier.source != SOURCE:
             print(
                 f"agent-latch-runtime: cannot anchor: {args.to} holds points for a trace ledger;"
