@@ -46,6 +46,7 @@ from typing import Any
 
 from agent_latch.catalog import gate
 from agent_latch.gates.alr04 import digest, safe
+from agent_latch.runtime.redact import unescape_text
 
 GATE_ID = "ALR03"
 # Every ALR03 check cites its gate's OWASP categories (agent_latch.catalog).
@@ -338,7 +339,7 @@ def _check_impersonation(server: str, event: Mapping[str, Any], server_info: Map
     for field, value in declared_fields:
         if not isinstance(value, str) or not value.strip():
             continue
-        declared = value[:MAX_NAME_CHARS]
+        declared = unescape_text(value)[:MAX_NAME_CHARS]
         best: tuple[str, str, list[tuple[str, float, bool]]] | None = None
         for reference_kind, reference in references:
             signals = impersonation_signals(declared, reference[:MAX_NAME_CHARS])
@@ -438,7 +439,7 @@ def evaluate(event: dict[str, Any], *, policy: Mapping[str, Any] | None = None) 
         for field in ("name", "title"):
             value = server_info.get(field)
             if isinstance(value, str) and value.strip():
-                _remember_name(value.strip()[:MAX_NAME_CHARS])
+                _remember_name(unescape_text(value.strip())[:MAX_NAME_CHARS])
 
     findings.append(_summary_record(event, server, outcome=worst))
     return {"findings": findings}

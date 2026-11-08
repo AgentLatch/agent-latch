@@ -19,10 +19,10 @@ from fastmcp.client.transports import StdioTransport
 from fastmcp.server import create_proxy
 
 from agent_latch.runtime.events import PayloadEvent
-from agent_latch.runtime.middleware import AgentLatchMiddleware
+from agent_latch.runtime.middleware import AgentLatchMiddleware, _implementation
 from agent_latch.runtime.payloads import PayloadFile, PayloadTap
 from agent_latch.runtime.redact import MASK
-from agent_latch.runtime.trace import TraceLog
+from agent_latch.runtime.trace import TraceLog, summarize_record
 
 FIXTURES = Path(__file__).resolve().parent / "runtime_fixtures"
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -286,3 +286,20 @@ def test_demo_command_records_and_imports_a_session(
     for name in ("trace.jsonl", "payloads.jsonl", "events.csv", "normalized.jsonl"):
         assert FAKE_TOKEN not in (tmp_path / name).read_text(encoding="utf-8")
     assert FAKE_TOKEN not in err
+
+
+def test_hostile_handshake_strings_do_not_reach_trace_or_terminal(tmp_path: Path) -> None:
+    info = _implementation({
+        "name": "evil\x1b[2J\x1b[31m" + "A" * 5000,
+        "version": "1.0\x1b]0;pwned\x07",
+    })
+    log = TraceLog(tmp_path / "trace.jsonl", summary=None)
+    record = log.initialized(
+        session_id="s", request_id="1", server="x",
+        protocol_version="2025\x1b[0m" + "9" * 500, client={}, server_info=info,
+    )
+    line = summarize_record(record)
+    assert "\x1b" not in line and "\x07" not in line
+    assert len(line) < 400
+    raw = (tmp_path / "trace.jsonl").read_text()
+    assert len(raw) < 1000 and "\\x1b" in raw

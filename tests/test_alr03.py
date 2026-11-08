@@ -202,3 +202,13 @@ def test_baseline_rules_are_unchanged_by_the_new_method() -> None:
     assert _by_rule(second)[alr03.RULE_IDS["server_identity_change"]]["outcome"] == "FAIL"
     # A version change alone is not name impersonation.
     assert _impersonation(second) is None
+
+
+def test_escaped_invisible_character_still_counts_as_impersonation() -> None:
+    """The trace stores ``safe_text`` escapes; the gate compares what a reader would see."""
+    from agent_latch.runtime.redact import safe_text
+
+    declared = safe_text("githu\u200bb")
+    assert "\\u200b" in declared
+    findings = alr03.evaluate(_event("github", {"name": declared, "version": "1.0"}))["findings"]
+    assert any(f.get("rule_id") == "ALR03-003" for f in findings), findings

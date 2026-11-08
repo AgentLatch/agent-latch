@@ -58,6 +58,30 @@ def safe_text(value: str, limit: int = MAX_IDENTITY_CHARS) -> str:
     )
 
 
+def unescape_text(value: str) -> str:
+    """Inverse of ``safe_text`` for analysis: turn ``\\xNN``, ``\\uNNNN``, ``\\UNNNNNNNN`` back.
+
+    The trace stores escaped identity strings, but a gate must compare what a reader would see,
+    so an invisible character inside a name still counts toward similarity. Anything that is not
+    a well-formed escape is left as it is. No regular expressions.
+    """
+    out: list[str] = []
+    i, n = 0, len(value)
+    while i < n:
+        width = {"x": 2, "u": 4, "U": 8}.get(value[i + 1]) if value[i] == "\\" and i + 1 < n else None
+        digits = value[i + 2 : i + 2 + width] if width else ""
+        if width and len(digits) == width and all(c in "0123456789abcdefABCDEF" for c in digits):
+            try:
+                out.append(chr(int(digits, 16)))
+                i += 2 + width
+                continue
+            except ValueError:
+                pass
+        out.append(value[i])
+        i += 1
+    return "".join(out)
+
+
 def canonical_json(value: Any) -> str:
     """Stable JSON text for hashing: sorted keys, no whitespace, non-JSON values as strings."""
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
