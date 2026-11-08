@@ -9,9 +9,16 @@ It reads only files the proxy has already written, so it runs in parallel with t
 can neither delay nor change it. A gate that raises is recorded as an error result and the
 remaining gates still run. Restarting is safe: results already in the CSV are not repeated.
 
-With an ``EventStore`` (for example ``SQLiteEventStore``), every normalized event is also saved
+With an ``EventWriter`` (for example ``SQLiteEventStore``), every normalized event is also saved
 there, one transaction per pass. A save that fails while following is retried on the next pass,
 so the store catches up once it is reachable again; a restart catches up from the files.
+
+A store that seals its rows (``ledger/event_seal.py``) is checked before anything is added: a
+store that no longer matches its seals or its schema is refused (``StoreTampered``), and nothing is
+repaired or re-sealed. With an ``anchor`` the newest seal is also published after saves, and the
+store must still match the newest published point. A store found *ahead* of its anchor (a crash
+between saving and publishing) is accepted only if every extra row equals the event rebuilt from
+the trace and payload files; otherwise it is refused.
 """
 
 from __future__ import annotations
@@ -26,11 +33,23 @@ import pkgutil
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
+from agent_latch.runtime.ledger.anchor import Anchor, AnchorError, point_for
+from agent_latch.runtime.ledger.canonical import dumps
+from agent_latch.runtime.ledger.event_seal import (
+    SOURCE,
+    SealedSource,
+    StoreRefused,
+    StoreTampered,
+    changed_message,
+    schema_issues,
+    walk_chain,
+)
+from agent_latch.runtime.ledger.verify import anchor_point_issues
 from agent_latch.runtime.normalizer import (
     PAYLOAD_METHODS,
     EventKey,
@@ -53,6 +72,8 @@ EVENT_COLUMNS = (
 # A spreadsheet runs a cell that starts with one of these as a formula.
 _FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
 POLL_INTERVAL_SECONDS = 0.1
+# With --anchor, new seals are published at most this often while following, and once at the end.
+ANCHOR_INTERVAL_SECONDS = 5.0
 # How long a trace record waits for its payload record before moving on without it (follow mode).
 PAYLOAD_GRACE_SECONDS = 2.0
 _BATCH_LINES = 1000
@@ -66,11 +87,15 @@ class Gate(Protocol):
     def evaluate(self, event: dict[str, Any], /) -> Mapping[str, Any]: ...
 
 
-class EventStore(Protocol):
+class EventWriter(Protocol):
     """Where normalized events are kept. ``SQLiteEventStore`` is the local one.
 
     Another destination (a warehouse, or an opt-in trace exporter) implements this same contract.
-    ``save`` returns how many events were new and raises ``OSError`` when the batch was not stored.
+    ``save`` adds only events whose key is new (saving a key again keeps the first write) and
+    returns how many were new; it raises ``OSError`` when the batch was not stored. Only
+    ``import-logs`` holds a writer. A store that also seals its rows provides what
+    ``event_seal.SealedSource`` asks for, plus ``head()`` and ``as_stored()``, and gets the
+    pre-save check and the anchor.
     """
 
     path: Path | None
@@ -80,6 +105,27 @@ class EventStore(Protocol):
     def save(self, events: list[dict[str, Any]], /) -> int: ...
 
     def close(self) -> None: ...
+
+
+class EventReader(Protocol):
+    """Read-only view of a store, for agent-facing tools and dashboards. No write methods.
+
+    ``SQLiteEventReader`` opens the file read-only and refuses every statement that is not a read.
+    """
+
+    path: Path | None
+
+    def open(self) -> None: ...
+
+    def events(self) -> Iterator[dict[str, Any]]: ...
+
+    def head(self) -> Any: ...
+
+    def close(self) -> None: ...
+
+
+# The name this contract had before the writer and reader were split.
+EventStore = EventWriter
 
 
 @dataclass(frozen=True)
@@ -198,7 +244,8 @@ class RuntimeLogImporter:
         events_csv: Path | None = None,
         normalized_path: Path | None = None,
         summary: TextIO | None = None,
-        store: EventStore | None = None,
+        store: EventWriter | None = None,
+        anchor: Anchor | None = None,
         run_id: str | None = None,
         follow: bool = True,
         poll_interval: float = POLL_INTERVAL_SECONDS,
@@ -206,10 +253,14 @@ class RuntimeLogImporter:
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be greater than zero")
+        if anchor is not None and store is None:
+            raise ValueError("an anchor needs a store: give --database with --anchor")
         store_path = store.path if store is not None else None
+        anchor_path = anchor.path if anchor is not None else None
         paths = [
             p for p in (
                 trace_path, payloads_path, output_csv, events_csv, normalized_path, store_path,
+                anchor_path,
             ) if p
         ]
         if len({p.resolve() for p in paths}) != len(paths):
@@ -221,6 +272,7 @@ class RuntimeLogImporter:
         self.normalized_path = normalized_path
         self.summary = summary
         self.store = store
+        self.anchor = anchor
         self.gates = list(gates)
         self.follow = follow
         self.poll_interval = poll_interval
@@ -242,6 +294,11 @@ class RuntimeLogImporter:
         self._normalized_done: set[tuple[str, str]] = set()
         self._unsaved: list[dict[str, Any]] = []  # events waiting for the store
         self._store_failing = False
+        # Rows found past the newest anchor, by (run_id, order): each must equal the event rebuilt
+        # from the logs before the store is extended or anchored again.
+        self._tail: dict[tuple[str, int], dict[str, Any]] = {}
+        self._dirty = False  # new seals not yet published
+        self._last_publish = 0.0
 
     def stop(self) -> None:
         """Ask a following importer to finish its current pass and return."""
@@ -262,6 +319,8 @@ class RuntimeLogImporter:
                     continue
                 if not self.follow:
                     break
+                if not self._pending and not self._unsaved:
+                    self._require_tail_matched()  # every log line has been read by now
                 self._stop.wait(self.poll_interval)
             if self.follow:
                 self._ingest()
@@ -273,8 +332,13 @@ class RuntimeLogImporter:
                         " saved on the next run",
                         len(self._unsaved),
                     )
+                self._publish(force=True)
             else:
                 self._finish()
+                self._publish(force=True)
+        except KeyboardInterrupt:
+            self._publish_after_interrupt()
+            raise
         finally:
             self._close()
 
@@ -286,6 +350,7 @@ class RuntimeLogImporter:
             pass
         self._drain(final=True)
         self._save_events(final=True)
+        self._require_tail_matched()
         unmatched = sum(len(queue) for queue in self._queues.values())
         if unmatched:
             log.warning("agent-latch-runtime: %d payload record(s) had no trace record", unmatched)
@@ -293,6 +358,7 @@ class RuntimeLogImporter:
     def _open_outputs(self) -> None:
         if self.store is not None:
             self.store.open()  # first, so a bad database leaves no other file open
+            self._audit_store()
         if self.events_csv is not None:
             self._events = _open_private(self.events_csv)
             self._events_writer, self._events_done = _csv_writer(
@@ -323,8 +389,9 @@ class RuntimeLogImporter:
         """Save waiting events in one store transaction; keep them for a retry if that fails."""
         if self.store is None or not self._unsaved:
             return
+        self._match_tail(self._unsaved)
         try:
-            self.store.save(self._unsaved)
+            inserted = self.store.save(self._unsaved)
         except OSError as error:
             if final:
                 raise
@@ -332,6 +399,8 @@ class RuntimeLogImporter:
                 log.warning("agent-latch-runtime: %s; retrying", error)
                 self._store_failing = True
             return
+        if inserted:
+            self._dirty = True
         if self._store_failing:
             log.warning(
                 "agent-latch-runtime: database reachable again; saved %d waiting event(s)",
@@ -339,6 +408,105 @@ class RuntimeLogImporter:
             )
             self._store_failing = False
         self._unsaved = []
+        self._publish(force=False)
+
+    def _audit_store(self) -> None:
+        """Refuse a store that no longer matches its seals, schema or anchor. Writes nothing."""
+        store = self.store
+        if store is None or not isinstance(store, SealedSource):
+            return  # a store that does not seal its rows has nothing to check
+        point = None
+        if self.anchor is not None:
+            try:
+                point = self.anchor.latest()
+            except (AnchorError, OSError) as error:
+                raise StoreRefused(f"the anchor {self.anchor.path} cannot be read: {error}") from error
+            if point is not None and point.source != SOURCE:
+                raise StoreRefused(
+                    f"the anchor {self.anchor.path} belongs to a trace ledger; use a separate"
+                    " anchor file for the event store"
+                )
+        chain = walk_chain(store.sealed_rows(), track_seq=point.seq if point else None)
+        issues = [*chain.issues, *schema_issues(store, point)]
+        head_seq = chain.head.seq if chain.head else 0
+        if point is not None:
+            issues += anchor_point_issues(
+                point.seq, point.digest, head_seq=head_seq, digest_at_seq=chain.tracked_digest
+            )
+        if issues:
+            raise StoreTampered(changed_message(issues))
+        if self.anchor is not None and chain.head is not None and point is None:
+            raise StoreRefused(
+                f"the anchor {self.anchor.path} is missing or empty, but the event store already"
+                " holds sealed rows, which looks the same as a deleted anchor. Nothing was added."
+                " If you mean to start anchoring this store, run"
+                " `agent-latch-runtime anchor --database FILE --to PATH` once"
+            )
+        if point is not None and chain.head is not None and chain.head.seq > point.seq:
+            # A crash between saving and publishing leaves rows past the anchor. They are kept
+            # only if the logs rebuild exactly the same events.
+            for row in store.sealed_rows():
+                if row.seal is not None and row.seal.seq > point.seq:
+                    key = (str(row.event["run_id"]), int(row.event["order"]))
+                    self._tail[key] = row.event
+
+    def _match_tail(self, events: list[dict[str, Any]]) -> None:
+        """Check events against the rows found past the anchor; a difference means tampering."""
+        if not self._tail or self.store is None:
+            return
+        as_stored = self.store.as_stored  # type: ignore[attr-defined]
+        for event in events:
+            key = (str(event["run_id"]), int(event["order"]))
+            stored = self._tail.get(key)
+            if stored is None:
+                continue
+            if dumps(as_stored(event)) != dumps(stored):
+                raise StoreTampered(
+                    changed_message([])
+                    + f" (the row for run {key[0]} event {key[1]} past the anchor differs from"
+                    " what the trace and payload files rebuild)"
+                )
+            del self._tail[key]
+            if not self._tail:
+                self._dirty = True  # the extra rows are now vouched for; anchor them
+
+    def _require_tail_matched(self) -> None:
+        if self._tail:
+            raise StoreTampered(
+                changed_message([])
+                + f" ({len(self._tail)} row(s) past the anchor have no matching trace record)"
+            )
+
+    def _publish(self, *, force: bool) -> None:
+        """Publish the newest seal when there are new ones, at most every few seconds."""
+        if self.anchor is None or self.store is None or not self._dirty or self._tail:
+            return
+        if not force and time.monotonic() - self._last_publish < ANCHOR_INTERVAL_SECONDS:
+            return
+        store = self.store
+        head = store.head()  # type: ignore[attr-defined]
+        if head is None:
+            return
+        point = point_for(
+            store.path or Path("events"),
+            seq=head.seq,
+            digest=head.digest,
+            records=head.seq,
+            source=SOURCE,
+            schema_sha256=store.schema_sha256(),  # type: ignore[attr-defined]
+            schema_version=store.schema_version(),  # type: ignore[attr-defined]
+        )
+        self.anchor.publish(point)
+        self._dirty = False
+        self._last_publish = time.monotonic()
+
+    def _publish_after_interrupt(self) -> None:
+        """Ctrl+C while following: save what is waiting and publish, so a restart starts clean."""
+        try:
+            self._save_events(final=False)
+            self._publish(force=True)
+        except (OSError, RuntimeError) as error:
+            log.warning("agent-latch-runtime: could not publish the anchor on exit: %s", error)
 
     def _ingest(self) -> bool:
         progressed = False

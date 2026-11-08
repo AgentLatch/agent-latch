@@ -202,7 +202,7 @@ For a full live run with a real CrewAI agent and this repo's MCP gateway, follow
 agent-latch-runtime import-logs --database ./runtime.db
 ```
 
-Each event is one row in the `events` table. `SQLiteEventStore` is the first destination behind the importer's `EventStore` contract (`open`, `save`, `close`). A later destination, such as a warehouse or an opt-in trace exporter, implements that same contract. This file is only the local one.
+Each event is one row in the `events` table. `SQLiteEventStore` is the first destination behind the importer's `EventWriter` contract (`open`, `save`, `close`; `EventStore` is the older name for the same thing). Only `import-logs` holds a writer. Anything that merely shows events to an agent or a dashboard holds an `EventReader` instead (`SQLiteEventReader` for this file), which has no write methods and opens the file read-only. A later destination, such as a warehouse or an opt-in trace exporter, implements the same contract. This file is only the local one.
 
 | Column | From the normalized event |
 |---|---|
@@ -213,11 +213,12 @@ Each event is one row in the `events` table. `SQLiteEventStore` is the first des
 | `metadata` | `metadata`, as JSON text |
 | `payload` | `payload`, as JSON text (`NULL` without `--payloads`) |
 | `imported_at` | When the importer stored the row (UTC) |
+| `seal_seq`, `seal_prev`, `seal_digest` | The row's seal: its number in the chain, the previous row's digest, and its own digest. See [Keep the event store tamper-evident](#keep-the-event-store-tamper-evident) |
 
-- **No duplicates.** Rows are keyed by `run_id` and `event_order` and saved with `INSERT OR IGNORE`, one transaction per pass. Importing the same files again, or restarting the importer, adds only events it has not stored yet.
+- **No duplicates, first write wins.** Rows are keyed by `run_id` and `event_order` and saved with `INSERT OR IGNORE`, one transaction per pass. Importing the same files again, or restarting the importer, adds only events it has not stored yet, and saving a key again with different content changes nothing.
 - **Live.** Without `--once`, the importer keeps following the logs and saves new events within about a second. If a save fails (for example the database is locked by another program), it logs one warning, keeps the events and retries on the next pass. Events still waiting when it stops are saved on the next run, which re-reads the files.
 - **Trace only.** Without `--payloads`, `payload`, `payloads_path` and `payloads_line` are `NULL` and `metadata` still holds the trace fields.
-- **Schema.** The schema version is kept in `PRAGMA user_version`, and numbered migrations bring an older database up to date when it is opened, each in one transaction. A database from a newer AgentLatch, or a file that is not SQLite, is refused with exit code `2`.
+- **Schema.** The schema version is kept in `PRAGMA user_version`, and numbered migrations bring an older database up to date when it is opened, each in one transaction. A database from a newer AgentLatch, or a file that is not SQLite, is refused with exit code `2`. Version 3 adds the seal columns and seals the rows already stored, in `(run_id, event_order)` order; version 4 adds triggers that abort `UPDATE` and `DELETE`. **The upgrade is one way:** once a file is at version 3 or 4, an older AgentLatch refuses it. Keep a copy first if you may go back. The seal on an older row only vouches for it from the upgrade on: it cannot prove the row was not changed before.
 - **Readable view.** `event_log` shows one line per event: `time`, `server`, `method`, `stage`, `tool_or_prompt`, `client_id`, `is_error`, `duration_ms`, the masked `excerpt` and `has_payload`.
 
 Read it with Python:
@@ -225,6 +226,25 @@ Read it with Python:
 ```sh
 python -c "import sqlite3; db = sqlite3.connect('runtime.db'); [print(r) for r in db.execute('select time, tool_or_prompt, stage, is_error, excerpt from event_log order by time desc limit 10')]"
 ```
+
+### Keep the event store tamper-evident
+
+Every row is sealed when it is saved: a SHA-256 over the event and its import time, chained to the row before it, computed by AgentLatch and not by the database. The newest seal can be published to an anchor outside the agent's reach, and then an edited, deleted, reordered or rebuilt store shows up. It is off unless you pass `--anchor`; the seals themselves are always written.
+
+```sh
+# Import, and publish the newest seal as the store grows (a new store creates the first point)
+agent-latch-runtime import-logs --database ./runtime.db --anchor /safe/place/store-anchors.jsonl
+
+# Check the store: every seal, the table layout, and the newest anchor point
+agent-latch-runtime verify --database ./runtime.db --anchor /safe/place/store-anchors.jsonl
+
+# Publish the head of a store that already has seals (the first point, or on purpose later)
+agent-latch-runtime anchor --database ./runtime.db --to /safe/place/store-anchors.jsonl
+```
+
+`verify --database` reports the same six verdicts as the trace ledger and exits `0` for `intact` or `unanchored`, `1` for `tampered`, `deleted` or `rewritten`, and `2` for a missing store or a usage error. `import-logs` checks the store before it adds anything: a store that no longer matches its seals, its table layout or its anchor is refused with exit `1`, nothing is added, and nothing is repaired or re-sealed. A sealed store whose anchor file is missing is refused too, because that looks the same as a deleted anchor; run `anchor --database` once on purpose. One anchor file per chain: a trace ledger and an event store number their records separately and cannot share a file.
+
+Detection is not prevention. An agent that runs as the same operating-system user as the store can change the file and its permissions. The only thing that stops that is keeping the store and the anchor in another user or container, with mode `0600`, and never giving the agent their path. See [the event store in the ledger guide](ledger.md#the-event-store-gets-the-same-protection), [setup](ledger-setup.md#also-protect-the-event-store---database) and [the container layout](docker.md#keep-the-audit-store-out-of-the-agents-reach).
 
 **The database is sensitive.** With `--payloads` it holds tool arguments and outputs, masked by pattern only. A new database file is created with mode `0600` on macOS and Linux; on Windows it follows the folder's permissions, so keep it in your user folder. Keep it local and delete it when you no longer need it. The importer makes no network request for this store.
 

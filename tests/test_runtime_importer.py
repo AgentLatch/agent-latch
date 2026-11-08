@@ -485,7 +485,7 @@ def test_migrations_create_and_keep_the_schema(tmp_path: Path) -> None:
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == len(sqlite_store.MIGRATIONS)
         columns = [row[1] for row in conn.execute("PRAGMA table_info(events)")]
-        assert columns == list(sqlite_store.COLUMNS)
+        assert columns == [*sqlite_store.COLUMNS, *sqlite_store.SEAL_COLUMNS]
     finally:
         conn.close()
 

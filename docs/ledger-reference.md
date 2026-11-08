@@ -11,6 +11,8 @@ CLI surface, and the rules for extending it without breaking old files. For the 
 | `trace.jsonl` | `proxy --trace` | One redacted record per MCP message | Yes (that is the log itself) |
 | `trace.ledger.jsonl` | `proxy --ledger` | One sealed block per trace record | Yes — digests, not payloads |
 | `anchors.jsonl` | `agent-latch-runtime anchor` | One line per published head | **No.** Put it where the agent cannot write |
+| `runtime.db` | `import-logs --database` | The event store: one sealed row per event | No: it can hold payload data. Keep it with the importer's user, mode `0600` |
+| `store-anchors.jsonl` | `import-logs --anchor`, `anchor --database` | One line per published store head | **No.** One file per chain: never the same file as a ledger's anchor |
 
 ### Block format (`agentlatch.runtime.ledger/1`)
 
@@ -83,6 +85,32 @@ Three properties follow, and the tests rely on them:
 Points are append-only and monotonic per destination: publishing a `seq` lower than the newest one
 there is refused.
 
+A point for an **event store** carries three more fields. They are written only when set, so a point
+for a trace ledger is byte-for-byte what it always was, and an older reader ignores them:
+
+| Field | Meaning |
+|---|---|
+| `source` | `"event-store"`. A point without it belongs to a trace ledger. A file whose newest point names another source refuses new points, and `verify` flags an anchor of the wrong kind |
+| `schema_sha256` | SHA-256 of every table, index, view and trigger definition when the point was published |
+| `schema_version` | The schema version (`PRAGMA user_version`) that hash belongs to. `verify` compares the hash only for the same version, so an AgentLatch upgrade is not a false alarm |
+
+### Store seal format (`agentlatch.runtime.store-seal/1`)
+
+Each row of the `events` table carries `seal_seq` (1, 2, 3, … with no gaps), `seal_prev` (the previous
+row's `seal_digest`, or 64 zeros for the first) and `seal_digest`. The digest inputs, in
+`runtime/ledger/event_seal.py`:
+
+```text
+event_sha256  = SHA-256( canonical_json({"event": <event as read back>, "imported_at": <time>}) )
+seal_digest   = SHA-256( b"agentlatch.runtime.store-seal/1\x00" +
+                         canonical_json({"prev": …, "seq": …, "event_sha256": …}) )
+```
+
+`canonical_json` is the ledger's (sorted keys, no whitespace, no ASCII escaping), and `<event as read
+back>` is the normalized event rebuilt from the row, so the seal covers what a reader sees. The domain
+tag differs from the trace ledger's on purpose: a store seal can never pass as a ledger block. Rows are
+sealed in `seal_seq` order, and an older database is sealed once, in `(run_id, event_order)` order.
+
 ## Python API
 
 ```python
@@ -135,8 +163,15 @@ statuses), `deleted`, `edited`, `reordered`. `headline()` returns the one senten
 | `reordered` | A block whose `prev` is not the block before it (with no gap explaining it) |
 | `rewritten` | The anchored block is present but has a different digest |
 | `malformed` | A line is not JSON or not a block; a file cannot be read |
-| `unanchored` | `--anchor` was given but holds no points |
+| `unanchored` | `--anchor` was given but holds no points; or, for a store, rows exist past the newest anchor point |
+| `added` | (event store) A row has no valid seal: it was added outside AgentLatch |
+| `schema` | (event store) The table layout, view or triggers differ from what AgentLatch creates, or from the layout the anchor recorded for the same schema version |
 | `missing` | There is no ledger at the path |
+
+The verdict comes from one shared function (`verify.status_for`), so the trace ledger and the event
+store always agree: `edited`, `malformed` or `added` give `tampered`; otherwise `deleted`; otherwise
+`reordered` or `schema` give `tampered`; otherwise `rewritten`; otherwise `unanchored` or `intact`. A deletion is
+reported as `deleted` even when an attacker also had to drop a trigger to make it.
 
 ## CLI
 
@@ -172,6 +207,40 @@ Read-only. Prints the headline and up to five problems.
 A ledger that is gone or empty counts as `deleted` (exit `1`) when `--anchor` has a point, or the
 trace has lines. An empty ledger with neither is a fresh start (`missing`), because the proxy
 creates the file before the first record.
+
+### `agent-latch-runtime anchor --database FILE --to PATH [--quiet]`
+
+`anchor` takes `--ledger` or `--database`, not both. For a store it first checks the seals, the schema
+and any earlier point in `PATH`, and **refuses a store that fails (exit `1`, nothing published)**, so a
+changed store is never blessed. It is also the only way to create the first point for a store that
+already has seals. Exit `2` on a store that cannot be opened, an unsealed (older) database, a
+destination that holds a trace ledger's points, an unwritable destination, or a `seq` that would go
+backwards.
+
+### `agent-latch-runtime verify --database FILE [--anchor PATH]`
+
+Read-only. Opens the store with the read-only reader, recomputes every seal, checks the table layout,
+and compares the head with the newest point in `--anchor`. Not combined with `PATH`, `--ledger`,
+`--all` or `--trace`. `verify PATH` on a SQLite file is refused with exit `2` and a pointer to
+`--database`, so a database is never read as a ledger.
+
+| Exit | Meaning |
+|---|---|
+| `0` | `intact`, or `unanchored` (no anchor, or rows past the newest point that it does not cover yet) |
+| `1` | `tampered`, `deleted` or `rewritten`. A store that is gone counts as `deleted` when the anchor holds a point |
+| `2` | No store at the path and no anchor to say it existed, a database not yet sealed (run `import-logs --database` once), a newer schema, or a usage error |
+
+### `agent-latch-runtime import-logs … --database FILE [--anchor PATH]`
+
+`--anchor` needs `--database`. Before adding anything, the importer recomputes the seals, checks the
+table layout and compares the store with the newest anchor point. With `--anchor`, new seals are then
+published at most every few seconds and once when it stops. Exit codes:
+
+| Exit | Meaning |
+|---|---|
+| `0` | Done |
+| `1` | The store was refused and nothing was added: it no longer matches its seals, layout or anchor; rows past the anchor do not match the trace; or a sealed store has no anchor. This is the same meaning `1` has for `verify` |
+| `2` | A configuration or storage error (unchanged), including an anchor file that holds a trace ledger's points |
 
 ### `agent-latch --runtime-result CSV --ledger FILE [--anchor PATH] [--ledger-rows N] [--format sarif]`
 
@@ -233,7 +302,31 @@ The verifier reads files written by any earlier 0.x version, because the schema 
 per line and the digest inputs are frozen. There is no migration step: keep the old file beside the
 new one and verify each with its own anchor.
 
+## Adding another event store
+
+A store (another database, a warehouse, plain files) implements the writer contract from
+`runtime/importer.py` (`open`, `save`, `close`; a key saved again keeps the first write), keeps the three
+seal values with each row, and provides what `event_seal.SealedSource` asks for (`sealed_rows`, the
+schema methods) plus `head()` and `as_stored()`. Then `tests/store_contract.py` proves it:
+`assert_store_is_append_only(make_store, tamper)` needs only a way to make a fresh store and a way to
+change its rows behind its back. Rules for a store that is not SQLite:
+
+- Keep `metadata` and `payload` as text. A JSON column type that reorders keys or changes number
+  formatting can be fine for the digest (it is computed over canonical JSON), but a lossy type is not.
+- Keep timestamps as text.
+- Write the store's own insert-ignore syntax and its own migrations; `PRAGMA user_version` and
+  `json_extract` are SQLite only.
+- The chain assumes one writer at a time: use a row or advisory lock, or one `import-logs` per store.
+- For a hosted service, "the agent cannot change it" comes from the agent never holding the credentials.
+
 ## Known limits
+
+- The event store verifies by reading every row (one pass, memory proportional to the rows' size per
+  row, not the whole table). A multi-million-row store takes noticeable time; start a new store per
+  period and anchor each one.
+- The seal has no key. Anyone with the code can compute a valid seal for a forged row, so only the
+  anchor, and the trace that `import-logs` rebuilds rows from, show the difference. An optional keyed
+  seal (HMAC, key held outside the agent's reach) would close that gap and is a possible follow-up.
 
 - `verify` loads the whole ledger into memory (`list(iter_blocks(...))`) — roughly 1 KiB per record.
   A million-record ledger needs about a gigabyte to verify. Split long runs by session if that

@@ -95,14 +95,15 @@ src/agent_latch/
     trace.py      # TraceLog: one redacted JSONL record per MCP message (agentlatch.runtime.trace/1)
     payloads.py   # PayloadTap: full-payload records to sinks; PayloadFile (opt-in --payloads, masked)
     normalizer.py # MCPEventNormalizer: joins a trace record and its payload record into one event
-    importer.py   # RuntimeLogImporter: tails logs, writes events, runs gates; optional EventStore
-    sqlite_store.py # SQLiteEventStore: first EventStore, local SQLite via stdlib sqlite3 (`--database`)
+    importer.py   # RuntimeLogImporter: tails logs, writes events, runs gates; optional EventWriter (EventReader is the read-only view)
+    sqlite_store.py # SQLiteEventStore (writer, seals rows, triggers) and SQLiteEventReader (read-only), stdlib sqlite3 (`--database`)
     results.py    # agent-latch --runtime-result: findings table from gate-results.csv, for every gate
     ledger/       # ALR15: tamper-evident hash chain over trace records, plus anchor points (stdlib, local)
       canonical.py # stable JSON bytes: the same value always hashes to the same digest
       chain.py    # block format, digest, Ledger (resumes from the last block), iter_blocks
       anchor.py   # AnchorPoint and FileAnchor; the only destination that ships
-      verify.py   # verify_ledger: intact, unanchored, tampered, deleted, rewritten, missing
+      verify.py   # verify_ledger: intact, unanchored, tampered, deleted, rewritten, missing; status_for is the shared verdict
+      event_seal.py # seal every stored event, verify a store against its seals, schema and anchor (same six verdicts)
       report.py   # audit table rows (terminal and plain) and SARIF results for the verdict
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
@@ -113,10 +114,12 @@ tests/test_scanner.py          # scanner unit tests (synthetic fixtures via tmp_
 tests/test_ledger.py           # ledger: chain, anchor, and every tamper case (edit, delete, truncate, rebuild)
 tests/test_runtime.py          # runtime tests that need no FastMCP
 tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests (no FastMCP)
+tests/test_audit_store.py      # sealed append-only store: tampering, anchor, crash recovery, agent path, second OS user
+tests/store_contract.py        # assert_store_is_append_only: the contract any sealed store must pass
 tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
 tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
 tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
-tests/runtime_fixtures/        # demo-server wrapper, plus the ALR04 event dataset and expected outcomes
+tests/runtime_fixtures/        # demo-server wrapper, audit_reader_server (a reader-only MCP tool), plus the ALR04 event dataset and expected outcomes
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
@@ -170,19 +173,21 @@ agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
             [--http HOST:PORT] (--upstream-url URL | -- SERVER COMMAND...)
 agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
             [--events-csv FILE] [--output-csv FILE] [--normalized-out FILE]
-            [--database FILE] [--run-id ID] [--once] [--quiet]
-agent-latch-runtime anchor --ledger FILE --to PATH [--quiet]
-agent-latch-runtime verify [PATH | --ledger FILE] [--all] [--trace FILE] [--anchor PATH]
+            [--database FILE [--anchor PATH]] [--run-id ID] [--once] [--quiet]
+agent-latch-runtime anchor (--ledger FILE | --database FILE) --to PATH [--quiet]
+agent-latch-runtime verify [PATH | --ledger FILE | --database FILE] [--all] [--trace FILE] [--anchor PATH]
 agent-latch-runtime demo [--dir DIR]
 ```
 
 `agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR04 is installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. ALR04 reports findings only; the runtime report does not clear a tool. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command.
 
-`--database FILE` is the operator's choice of a local store. It saves each normalized event in a SQLite file (`SQLiteEventStore`) and is off when omitted. The importer talks to that file only through the `EventStore` contract in `importer.py` (`open`, `save`, `close`). SQLite is the first implementation, using the standard-library `sqlite3` module, so it adds no dependency and makes no network request. A later destination (a warehouse or an opt-in trace exporter) implements the same contract and is selected the same way: by a flag on `import-logs`, not by a default. The database can hold payload data, so a new file is created with mode `0600` where the platform supports it. Keep it local. Do not add a vendor client as a required dependency.
+`--database FILE` is the operator's choice of a local store. It saves each normalized event in a SQLite file (`SQLiteEventStore`) and is off when omitted. The importer talks to that file only through the `EventWriter` contract in `importer.py` (`open`, `save`, `close`; `EventStore` is its old name), and anything that shows events to an agent or a dashboard gets an `EventReader` (`SQLiteEventReader`: read-only connection that refuses every statement but a read), never the writer. SQLite is the first implementation, using the standard-library `sqlite3` module, so it adds no dependency and makes no network request. A later destination (a warehouse or an opt-in trace exporter) implements the same contract and is selected the same way: by a flag on `import-logs`, not by a default. The database can hold payload data, so a new file is created with mode `0600` where the platform supports it. Keep it local. Do not add a vendor client as a required dependency.
+
+**Stores are append-only and sealed.** Every row carries `seal_seq`, `seal_prev` and `seal_digest`, computed in `runtime/ledger/event_seal.py` (never by the database), chained like the trace ledger under its own domain tag. A saved key is never overwritten. `import-logs --database` checks the store before it adds anything and refuses a store that no longer matches its seals, its table layout or its anchor (exit `1`, nothing added, never repaired or re-sealed); `--anchor PATH` publishes the newest seal (one anchor file per chain), and `verify --database FILE [--anchor PATH]` reports the same six verdicts. Database guards (the SQLite triggers in migration 4) are an extra and nothing relies on them; the protection is the seal, the anchor and keeping the store in another OS user or container. A new store implements the writer and reader contracts and passes `tests/store_contract.py`. Never edit a shipped migration; append one. Docs: `docs/ledger.md` (model), `docs/ledger-reference.md` (formats and exit codes), `docs/audit-trail-dev/` (build, test, debug).
 
 `--ledger FILE` (with `--trace`) seals every trace record into a local hash chain, and `anchor` publishes one short digest to a path the operator chooses. `verify` and `agent-latch --runtime-result --ledger FILE [--anchor PATH]` report `intact`, `unanchored`, `tampered`, `deleted`, `rewritten` or `missing`. `verify PATH` finds the trace beside a ledger by name, and `verify FOLDER [--all]` checks every ledger below it and prints one row each. The report adds a per-record audit table (`--ledger-rows N`, default 20, problem records always shown), and `--runtime-result ... --format sarif` exports the verdict (rule `ALR15-R01`) with the runtime findings; `--format json` is refused there. Standard library only, no network, never in the request path: an append failure warns once on stderr and the call continues. The verifier lives in `runtime/ledger/`, not in `gates/` (that package is for per-event plugins). Docs: `docs/ledger.md` (model), `docs/ledger-setup.md`, `docs/ledger-reference.md`, `docs/ledger-operations.md`.
 
-Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them. One deliberate addition: a runtime report with `--ledger` exits `1` when the trail fails verification even with `--fail-on none` (log integrity is not a severity threshold), and `2` when the ledger path is missing; a run without `--ledger` is unchanged.
+Exit codes are `0` for passed, `1` for findings at or above `--fail-on` (unknown severity fails closed), and `2` for a scan or configuration error. The GitHub Action relies on these values, so do not change them. One deliberate addition: a runtime report with `--ledger` exits `1` when the trail fails verification even with `--fail-on none` (log integrity is not a severity threshold), and `2` when the ledger path is missing; a run without `--ledger` is unchanged. `import-logs` exits `1` when it refuses a store that fails its check (the same meaning `1` has for `verify`) and `2` for a configuration or storage error, as before.
 
 ## Rules
 
@@ -291,7 +296,8 @@ Before building a check, look at how established open-source tools handle it. Bo
 - `docs/docker-setup.md`: step-by-step setup of the images: installing Docker, building or pulling them, a first scan, connecting Claude Desktop, updating and removing, troubleshooting
 - `docker/README.md`: the image dependency locks, the Dockerfile stages, updating the locks and the Python version, checking a change locally
 - `docs/runtime.md`: runtime proxy for MCP (preview, monitor only): install, connecting an app, supported clients, what is recorded, limits
-- `docs/ledger.md`: the tamper-evident audit ledger — the chain, anchors, the six verdicts, what it catches and cannot
+- `docs/audit-trail-dev/`: build, test, debug and fix guide for the sealed event store (setup, implementation map, the test plan and mutation checks, failure runbook)
+- `docs/ledger.md`: the tamper-evident audit ledger and the sealed event store — the chain, anchors, the six verdicts, what it catches and cannot
 - `docs/ledger-setup.md`: ten-minute setup, where to put the anchor, wiring the report and CI, troubleshooting
 - `docs/ledger-reference.md`: on-disk formats, digest inputs, Python API, CLI and exit codes, adding an anchor destination
 - `docs/ledger-operations.md`: cost, anchor cadence, retention and rotation, incident runbook

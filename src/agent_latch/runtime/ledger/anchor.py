@@ -35,9 +35,15 @@ class AnchorPoint:
     records: int
     timestamp: str
     ledger: str
+    # Optional fields, written only when set, so a point for a trace ledger is unchanged and an
+    # older reader ignores the extras. ``source`` says which kind of chain the point belongs to
+    # (``None`` is a trace ledger); the schema fields pin the event store's table layout.
+    source: str | None = None
+    schema_sha256: str | None = None
+    schema_version: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "schema": ANCHOR_SCHEMA,
             "seq": self.seq,
             "digest": self.digest,
@@ -45,6 +51,13 @@ class AnchorPoint:
             "timestamp": self.timestamp,
             "ledger": self.ledger,
         }
+        if self.source is not None:
+            data["source"] = self.source
+        if self.schema_sha256 is not None:
+            data["schema_sha256"] = self.schema_sha256
+        if self.schema_version is not None:
+            data["schema_version"] = self.schema_version
+        return data
 
     @classmethod
     def from_dict(cls, data: Any) -> AnchorPoint | None:
@@ -62,7 +75,25 @@ class AnchorPoint:
             if not isinstance(value, str) or not value:
                 return None
             fields[name] = value
-        return cls(seq=seq, records=records, **fields)
+        source = data.get("source")
+        if source is not None and (not isinstance(source, str) or not source):
+            return None
+        schema_sha256 = data.get("schema_sha256")
+        if schema_sha256 is not None and (not isinstance(schema_sha256, str) or not schema_sha256):
+            return None
+        schema_version = data.get("schema_version")
+        if schema_version is not None and (
+            not isinstance(schema_version, int) or isinstance(schema_version, bool)
+        ):
+            return None
+        return cls(
+            seq=seq,
+            records=records,
+            source=source,
+            schema_sha256=schema_sha256,
+            schema_version=schema_version,
+            **fields,
+        )
 
 
 class Anchor(Protocol):
@@ -107,6 +138,12 @@ class FileAnchor:
 
     def publish(self, point: AnchorPoint) -> AnchorPoint:
         previous = self.latest()
+        if previous is not None and previous.source != point.source:
+            # Two chains number their records separately, so one file cannot hold both.
+            raise AnchorError(
+                f"{self.path} already holds points for another source; "
+                "use one anchor file per ledger or event store"
+            )
         if previous is not None and point.seq < previous.seq:
             raise AnchorError(
                 f"refusing to anchor #{point.seq}: #{previous.seq} is already anchored"
@@ -132,12 +169,24 @@ def make_anchor(spec: str | Path) -> Anchor:
     return FileAnchor(Path(text).expanduser())
 
 
-def point_for(ledger_path: Path, *, seq: int, digest: str, records: int) -> AnchorPoint:
-    """Build a point for a ledger head."""
+def point_for(
+    ledger_path: Path,
+    *,
+    seq: int,
+    digest: str,
+    records: int,
+    source: str | None = None,
+    schema_sha256: str | None = None,
+    schema_version: int | None = None,
+) -> AnchorPoint:
+    """Build a point for a ledger head (or, with ``source``, for an event store's head)."""
     return AnchorPoint(
         seq=seq,
         digest=digest,
         records=records,
         timestamp=utc_now(),
         ledger=Path(ledger_path).name,
+        source=source,
+        schema_sha256=schema_sha256,
+        schema_version=schema_version,
     )

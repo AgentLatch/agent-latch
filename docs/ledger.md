@@ -123,6 +123,57 @@ evidence.
 was recorded". It says nothing about whether what was recorded was safe, whether the agent behaved,
 or whether the tools it called were appropriate. That is the scanner's and the gates' job.
 
+## The event store gets the same protection
+
+`import-logs --database` keeps every normalized event in a local database. That store needs the same
+promise as the trace, and a database can be edited with one SQL statement. So the protection does not
+depend on the database or on SQL. Four layers, each in one place in the code:
+
+1. **Append-only contract.** The store contract splits into a *writer* (`open`, `save`, `close`;
+   saving a key again keeps the first write; only `import-logs` holds it) and a *reader* (no write
+   methods; given to agent-facing tools and dashboards). The SQLite reader also opens the file
+   read-only and refuses every statement that is not a read, so a tool that runs raw SQL still cannot
+   delete, update, drop, alter or attach.
+2. **Seal every event.** Each row carries three plain values, `seal_seq`, `seal_prev` and
+   `seal_digest`: a SHA-256 over the event and its import time, chained to the row before it. AgentLatch
+   computes it; the database never does. Any store that can hold a number and some text can hold it.
+3. **Anchor and fail closed.** The newest seal is published to an anchor file the agent cannot write.
+   `verify --database` recomputes every seal and the table layout and reports the six verdicts above.
+   `import-logs` runs the same check before it adds anything and refuses (exit `1`) a store that
+   fails it. It never repairs or re-seals.
+4. **Separation (deployment).** The only thing that *stops* a change is the agent never reaching the
+   store: it belongs to another OS user or container, mode `0600`, and the agent is not given its path
+   or credentials. The operating system answers "permission denied", because one user cannot change
+   another user's file permissions.
+
+Layers 2 and 3 *detect*; layer 4 *prevents*. SQLite triggers (migration 4) abort plain `UPDATE` and
+`DELETE` as an extra, but anyone who can write the file can drop them, so nothing relies on them.
+
+| Attack on the store | Caught? | By what |
+|---|---|---|
+| Ask a tool to delete, change or drop events | Refused | The reader's connection, and no tool offers a writer |
+| Save an event again with different content | Ignored | The first write stays |
+| Edit, delete or swap rows directly | Yes | The row no longer matches its seal; `import-logs` refuses the store |
+| Drop the table, or cut the newest rows | Yes, `deleted` | The anchored head is higher than the store |
+| Add a forged row after the newest anchor | Yes | `verify` reports `unanchored` for rows past the anchor; `import-logs` keeps only rows the trace and payload files rebuild exactly |
+| Rewrite every row with fresh seals | Yes, `rewritten`, **only with an anchor** | The newest seal no longer equals the published digest |
+| Add a column, edit the `event_log` view, drop a trigger | Yes, `tampered` | The table layout no longer matches what AgentLatch creates |
+| Delete the store file | Yes, `deleted` with an anchor; `missing` without | The anchor proves rows existed |
+| Read, write, chmod or delete the store as another OS user | Blocked by the OS | Layer 4 |
+| Change the anchor as well | **No** | Keep the anchor off the machine or in write-once storage |
+
+**A crash between saving and publishing** leaves the store a few rows ahead of the anchor. The next
+`import-logs` rebuilds those rows from the trace and payload files and keeps them only if every one
+matches; otherwise it refuses the store. A crash never locks the store, and forged rows are still caught.
+
+**The first anchor.** A new store creates its first point on its first `import-logs --anchor`. A store
+that already has seals but no anchor file is refused, because that is what a deleted anchor looks like;
+run `anchor --database` once to start anchoring it on purpose.
+
+**What the seal does not cover.** It cannot show that a row was altered *before* it was sealed, so an
+older database sealed on upgrade is vouched for only from that moment. It does not cover `events.csv`,
+`gate-results.csv` or `normalized.jsonl`. It is a single-writer chain: run one `import-logs` per store.
+
 ## Where it fits
 
 The ledger is a gate in the same catalog as every other check: `ALR15`, *tamper-evident audit

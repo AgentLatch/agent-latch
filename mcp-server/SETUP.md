@@ -320,6 +320,8 @@ agent-latch-runtime import-logs --database runtime-logs/runtime.db
 
 ✅ You see `importing runtime-logs/trace.jsonl into runtime-logs/events.csv and runtime-logs/runtime.db with 1 gate(s); following new lines (Ctrl+C to stop)`. Without `--database` the `and runtime-logs/runtime.db` part is absent.
 
+Every row in that database is sealed, so a later edit or deletion can be detected. To make that strong, also publish the newest seal somewhere the agent cannot write, by adding `--anchor /path/outside/the/agents/reach/store-anchors.jsonl`, and check it with `agent-latch-runtime verify --database runtime-logs/runtime.db --anchor …`. Keep the database and the anchor out of the agent's reach, or the protection only detects: [Keep the event store tamper-evident](../docs/runtime.md#keep-the-event-store-tamper-evident).
+
 **3. Terminal 3: run the agent.**
 
 ```sh

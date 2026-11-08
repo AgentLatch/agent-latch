@@ -76,6 +76,14 @@ jobs:
           test "$(docker run --rm --entrypoint id agent-latch-runtime:test -u)" = 10001
           # Records a synthetic MCP session through the proxy, then imports it and runs the gates.
           docker run --rm agent-latch-runtime:test demo
+          # Seals the demo's events in a store, anchors them, and verifies the result.
+          docker run --rm --entrypoint sh agent-latch-runtime:test -c '
+            set -eu
+            agent-latch-runtime demo >/dev/null 2>&1
+            agent-latch-runtime import-logs --dir runtime-logs/demo --database demo.db \
+              --anchor demo.anchor --once --quiet
+            agent-latch-runtime verify --database demo.db --anchor demo.anchor
+          '
       - name: Check that the images hold no Node.js or compiler
         run: |
           for image in agent-latch:test agent-latch-runtime:test; do

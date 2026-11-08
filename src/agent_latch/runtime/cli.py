@@ -22,10 +22,22 @@ from agent_latch.runtime.ledger import (
     point_for,
     verify_ledger,
 )
+from agent_latch.runtime.ledger.anchor import AnchorError
+from agent_latch.runtime.ledger.event_seal import (
+    SOURCE,
+    StoreIntegrityError,
+    is_sqlite_file,
+    verify_store,
+)
 from agent_latch.runtime.ledger.report import format_summary_table
-from agent_latch.runtime.ledger.verify import STATUS_MISSING, find_ledgers, trace_for
+from agent_latch.runtime.ledger.verify import (
+    STATUS_MISSING,
+    _nothing_to_verify,
+    find_ledgers,
+    trace_for,
+)
 from agent_latch.runtime.payloads import DEFAULT_PAYLOAD_MAX_CHARS, PayloadFile, PayloadTap
-from agent_latch.runtime.sqlite_store import SQLiteEventStore
+from agent_latch.runtime.sqlite_store import SQLiteEventReader, SQLiteEventStore
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
 
 DEFAULT_LOG_DIR = "runtime-logs"
@@ -39,6 +51,9 @@ _EPILOG = """\
   [cyan]agent-latch-runtime verify --ledger t.ledger.jsonl --anchor ~/offbox/anchors.jsonl[/cyan]
   [cyan]agent-latch-runtime verify runtime-logs/trace.ledger.jsonl[/cyan]   (path only: trace found beside it)
   [cyan]agent-latch-runtime verify runtime-logs/ --all[/cyan]   (every ledger below a folder)
+  [cyan]agent-latch-runtime import-logs --database events.db --anchor ~/offbox/store-anchors.jsonl[/cyan]
+  [cyan]agent-latch-runtime verify --database events.db --anchor ~/offbox/store-anchors.jsonl[/cyan]
+  [cyan]agent-latch-runtime anchor --database events.db --to ~/offbox/store-anchors.jsonl[/cyan]
   [cyan]agent-latch-runtime demo[/cyan]   (try it with a synthetic server, no setup)
 
 In an MCP config, put [cyan]agent-latch-runtime[/cyan] as the command and move the real server
@@ -150,6 +165,13 @@ def _parser() -> argparse.ArgumentParser:
         help="also store the normalized events in this local SQLite file; it may hold payload data."
         " Off unless set. Nothing is uploaded",
     )
+    importer.add_argument(
+        "--anchor", type=Path, metavar="PATH",
+        help="with --database: publish the newest seal here as the store grows, and refuse a store"
+        " that no longer matches the newest point (exit 1). Keep this file where the agent"
+        " cannot write. A new store creates the first point; a sealed store with no anchor is"
+        " refused until `anchor --database` is run once",
+    )
     importer.add_argument("--run-id", help="run id for the events (default: hash of first trace line)")
     importer.add_argument(
         "--once", action="store_true",
@@ -167,7 +189,8 @@ def _parser() -> argparse.ArgumentParser:
             " path, the trace beside each ledger (x.ledger.jsonl seals x.jsonl) is compared"
             " automatically, and a missing trace is reported as deleted. Exit codes: 0 intact or"
             " unanchored, 1 altered, deleted, rewritten (or, for a folder, empty), 2 nothing to"
-            " verify or a usage error."
+            " verify or a usage error. With --database, checks an event store's seals and schema"
+            " the same way (see docs/ledger.md)."
         ),
     )
     verify.add_argument("path", nargs="?", type=Path, metavar="PATH",
@@ -175,6 +198,10 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--ledger", type=Path, metavar="FILE",
                         help="the ledger written by proxy --ledger (same as giving it as PATH,"
                              " but the trace is only compared when --trace is given)")
+    verify.add_argument("--database", type=Path, metavar="FILE",
+                        help="verify the event store written by import-logs --database instead of"
+                             " a ledger: every seal, the table layout, and (with --anchor) the"
+                             " newest published point")
     verify.add_argument("--all", action="store_true",
                         help="with a folder: also search its subfolders")
     verify.add_argument("--trace", type=Path, metavar="FILE",
@@ -185,15 +212,20 @@ def _parser() -> argparse.ArgumentParser:
 
     anchor = commands.add_parser(
         "anchor",
-        help="publish the current ledger head to a file outside the agent's reach",
+        help="publish the current ledger or event-store head to a file outside the agent's reach",
         description=(
             "Append one anchor point (sequence, digest, record count, time) for the current head"
-            " of the ledger. Put the file somewhere the agent cannot write: another host, a"
-            " mounted share, or a bucket that syncs to write-once storage."
+            " of the ledger or event store. Put the file somewhere the agent cannot write: another"
+            " host, a mounted share, or a bucket that syncs to write-once storage. For an event"
+            " store the seals and schema are checked first, and a store that fails is not"
+            " anchored (exit 1)."
         ),
     )
-    anchor.add_argument("--ledger", type=Path, required=True, metavar="FILE",
+    target = anchor.add_mutually_exclusive_group(required=True)
+    target.add_argument("--ledger", type=Path, metavar="FILE",
                         help="the ledger written by proxy --ledger")
+    target.add_argument("--database", type=Path, metavar="FILE",
+                        help="the event store written by import-logs --database")
     anchor.add_argument("--to", type=Path, required=True, metavar="PATH",
                         help="where the anchor points go (appended, one JSON line each)")
     anchor.add_argument("--quiet", action="store_true", help="no confirmation on stderr")
@@ -322,6 +354,9 @@ def _import_logs(args: argparse.Namespace) -> int:
     trace = args.trace or directory / "trace.jsonl"
     payloads = args.payloads or (None if args.trace else directory / "payloads.jsonl")
     events_csv = args.events_csv or directory / "events.csv"
+    if args.anchor is not None and not args.database:
+        print("agent-latch-runtime: --anchor needs --database", file=sys.stderr)
+        return 2
     try:
         gates = discover_gates()
         store = SQLiteEventStore(args.database) if args.database else None
@@ -334,12 +369,14 @@ def _import_logs(args: argparse.Namespace) -> int:
             normalized_path=args.normalized_out or directory / "normalized.jsonl",
             summary=None if args.quiet else sys.stderr,
             store=store,
+            anchor=make_anchor(args.anchor) if args.anchor else None,
             run_id=args.run_id,
             follow=not args.once,
         )
         print(
             f"agent-latch-runtime: importing {trace} into {events_csv}"
             + (f" and {args.database}" if args.database else "")
+            + (f" (anchoring to {args.anchor})" if args.anchor else "")
             + f" with {len(gates)} gate(s)"
             + ("" if args.once else "; following new lines (Ctrl+C to stop)"),
             file=sys.stderr,
@@ -347,7 +384,11 @@ def _import_logs(args: argparse.Namespace) -> int:
         importer.run()
     except KeyboardInterrupt:
         return 0
-    except (ImportError, OSError, ValueError) as error:
+    except StoreIntegrityError as error:
+        # The store is not trusted: nothing was added, repaired or re-sealed. Exit 1, as verify does.
+        print(f"agent-latch-runtime: {error}", file=sys.stderr)
+        return 1
+    except (ImportError, OSError, ValueError, AnchorError) as error:
         print(f"agent-latch-runtime: importer failed: {error}", file=sys.stderr)
         return 2
     return 0
@@ -391,7 +432,51 @@ def _verify_folder(args: argparse.Namespace, folder: Path) -> int:
     return 1 if problems else 0
 
 
+def _verify_database(args: argparse.Namespace) -> int:
+    database: Path = args.database
+    if args.path is not None or args.ledger is not None or args.all or args.trace is not None:
+        print(
+            "agent-latch-runtime: --database checks one event store; do not combine it with a"
+            " PATH, --ledger, --all or --trace",
+            file=sys.stderr,
+        )
+        return 2
+    if not database.is_file():
+        verification = _nothing_to_verify(
+            database, f"no event store at {database}", trace_path=None, anchor_path=args.anchor
+        )
+        if verification.status == STATUS_MISSING:
+            print(f"agent-latch-runtime: no event store at {database}", file=sys.stderr)
+            return 2
+        for line in describe(verification):
+            print(line)
+        return 1
+    reader = SQLiteEventReader(database)
+    try:
+        reader.open()
+    except (ValueError, OSError) as error:
+        print(f"agent-latch-runtime: {error}", file=sys.stderr)
+        return 2
+    try:
+        verification = verify_store(reader, name=database.name, anchor_path=args.anchor)
+    finally:
+        reader.close()
+    for line in describe(verification):
+        print(line)
+    return 1 if verification.failed else 0
+
+
 def _verify(args: argparse.Namespace) -> int:
+    if args.database is not None:
+        return _verify_database(args)
+    for given in (args.path, args.ledger):
+        if given is not None and given.is_file() and is_sqlite_file(given):
+            print(
+                f"agent-latch-runtime: {given} is a SQLite database, not a ledger;"
+                " use --database to verify an event store",
+                file=sys.stderr,
+            )
+            return 2
     if args.path is not None and args.ledger is not None:
         print("agent-latch-runtime: give a PATH or --ledger, not both", file=sys.stderr)
         return 2
@@ -412,7 +497,62 @@ def _verify(args: argparse.Namespace) -> int:
     return _verify_one(path, args.trace or trace_for(path), args.anchor)
 
 
+def _anchor_database(args: argparse.Namespace) -> int:
+    database: Path = args.database
+    reader = SQLiteEventReader(database)
+    try:
+        reader.open()
+    except (ValueError, OSError) as error:
+        print(f"agent-latch-runtime: cannot anchor: {error}", file=sys.stderr)
+        return 2
+    try:
+        earlier = make_anchor(args.to).latest()
+        if earlier is not None and earlier.source != SOURCE:
+            print(
+                f"agent-latch-runtime: cannot anchor: {args.to} holds points for a trace ledger;"
+                " use one anchor file per ledger or event store",
+                file=sys.stderr,
+            )
+            return 2
+        # Never bless a store that already fails: check the seals, the schema and any earlier point.
+        verification = verify_store(reader, name=database.name, anchor_path=args.to)
+        if verification.failed or verification.status == STATUS_MISSING:
+            for line in describe(verification):
+                print(line, file=sys.stderr)
+            print("agent-latch-runtime: not anchored: the event store fails its check",
+                  file=sys.stderr)
+            return 1
+        head = reader.head()
+        if head is None:
+            print(f"agent-latch-runtime: {database} has no sealed rows to anchor", file=sys.stderr)
+            return 2
+        destination = make_anchor(args.to)
+        point = point_for(
+            database,
+            seq=head.seq,
+            digest=head.digest,
+            records=head.seq,
+            source=SOURCE,
+            schema_sha256=reader.schema_sha256(),
+            schema_version=reader.schema_version(),
+        )
+        destination.publish(point)
+    except (AnchorError, OSError, ValueError) as error:
+        print(f"agent-latch-runtime: cannot anchor: {error}", file=sys.stderr)
+        return 2
+    finally:
+        reader.close()
+    if not args.quiet:
+        print(
+            f"agent-latch-runtime: anchored #{point.seq} {point.digest[:12]}… to {destination.path}",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def _anchor(args: argparse.Namespace) -> int:
+    if args.database is not None:
+        return _anchor_database(args)
     ledger: Path = args.ledger
     if not ledger.is_file():
         print(f"agent-latch-runtime: no ledger file at {ledger}", file=sys.stderr)
@@ -425,7 +565,7 @@ def _anchor(args: argparse.Namespace) -> int:
         destination = make_anchor(args.to)
         point = point_for(ledger, seq=head.seq, digest=head.digest, records=head.seq)
         destination.publish(point)
-    except (LedgerError, OSError, ValueError) as error:
+    except (LedgerError, AnchorError, OSError, ValueError) as error:
         print(f"agent-latch-runtime: cannot anchor: {error}", file=sys.stderr)
         return 2
     if not args.quiet:
