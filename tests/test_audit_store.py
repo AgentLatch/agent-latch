@@ -351,6 +351,12 @@ def test_5_drop_table_and_cut_rows_are_deleted(
     out = _out(capsys)
     assert "DELETED" in out and "#4 was anchored" in out
     assert cut.import_again() == 1
+    # anchor --database on a store shorter than its anchor is an integrity failure (1), not a
+    # configuration error (2), and publishes nothing.
+    before = cut.anchor.read_text(encoding="utf-8")
+    argv = ["anchor", "--database", str(cut.database), "--to", str(cut.anchor), "--quiet"]
+    assert cli.main(argv) == 1
+    assert cut.anchor.read_text(encoding="utf-8") == before
 
 
 def test_5_forged_row_after_the_anchor_is_caught_by_import(

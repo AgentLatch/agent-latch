@@ -219,10 +219,13 @@ that already has seals, but only after you have confirmed it was never anchored.
 Once an anchor exists, `anchor --database` **refuses rows past the newest point** (exit `1`), because they
 were never compared with the logs and anchoring them here would make a forged row look trusted. Run
 `import-logs --database FILE --anchor PATH`, which checks them and anchors them, or pass
-`--accept-unchecked-rows` to anchor them as they are when you trust the store. A store with no rows has
-nothing to anchor (exit `2`). Exit `2` on a store that cannot be opened, an unsealed (older) database, a
-destination that holds a trace ledger's points, an unwritable destination, or a `seq` that would go
-backwards.
+`--accept-unchecked-rows` to anchor them as they are when you trust the store.
+
+| Exit | Meaning |
+|---|---|
+| `0` | The point was published |
+| `1` | Nothing was published, because the store or its anchor cannot be trusted: the store fails its check (edited, deleted, rewritten, or a changed layout); the store is **shorter than its anchor** (reported `deleted`, so a store whose head is behind the newest point is an integrity failure, not a configuration error); a schema version lowered below the anchor's; or rows past the newest point that have not been checked, without `--accept-unchecked-rows` |
+| `2` | A configuration or usage problem: a store that cannot be opened, an unsealed (older) database, a store with no rows (nothing to anchor), an anchor file that holds a trace ledger's points, or an unwritable destination |
 
 ### `agent-latch-runtime verify --database FILE [--anchor PATH]`
 
