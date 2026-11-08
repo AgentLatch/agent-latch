@@ -414,7 +414,8 @@ def _import_logs(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         return 0
     except StoreIntegrityError as error:
-        # The store is not trusted: nothing was added, repaired or re-sealed. Exit 1, as verify does.
+        # The store is not trusted: it is never repaired or re-sealed, and no forged head is anchored.
+        # Exit 1, as verify does.
         print(f"agent-latch-runtime: {error}", file=sys.stderr)
         return 1
     except (ImportError, OSError, ValueError, AnchorError) as error:

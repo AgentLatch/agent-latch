@@ -47,7 +47,7 @@ CHANGED_MESSAGE = (
 
 
 class StoreIntegrityError(RuntimeError):
-    """The store cannot be trusted, or cannot be extended safely. Nothing was added."""
+    """The store cannot be trusted, or cannot be extended safely. Nothing newer is published."""
 
 
 class StoreTampered(StoreIntegrityError):

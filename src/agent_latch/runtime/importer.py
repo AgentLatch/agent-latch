@@ -304,6 +304,10 @@ class RuntimeLogImporter:
         self._tail: dict[tuple[str, int], dict[str, Any]] = {}
         self._dirty = False  # new seals not yet published
         self._last_publish = 0.0
+        # The seal of every row this importer saved since it last published, by number. A row
+        # saved but not yet anchored is covered by no anchor point, so the importer itself
+        # remembers it and checks it again before it saves or publishes anything newer.
+        self._saved_seals: dict[int, str] = {}
 
     def stop(self) -> None:
         """Ask a following importer to finish its current pass and return."""
@@ -402,6 +406,8 @@ class RuntimeLogImporter:
         if self.store is None or not self._unsaved:
             return
         self._match_tail(self._unsaved)
+        self._refuse_if_saved_rows_changed()  # before the next save chains onto them
+        before = self._head_seq()
         try:
             inserted = self.store.save(self._unsaved)
         except OSError as error:
@@ -413,6 +419,7 @@ class RuntimeLogImporter:
             return
         if inserted:
             self._dirty = True
+            self._remember_saved_seals(before)
         if self._store_failing:
             log.warning(
                 "agent-latch-runtime: database reachable again; saved %d waiting event(s)",
@@ -523,6 +530,7 @@ class RuntimeLogImporter:
         head = store.head()  # type: ignore[attr-defined]
         if head is None:
             return
+        self._refuse_if_saved_rows_changed()
         self._refuse_if_rewritten_since_last_point()
         point = point_for(
             store.path or Path("events"),
@@ -534,8 +542,45 @@ class RuntimeLogImporter:
             schema_version=store.schema_version(),  # type: ignore[attr-defined]
         )
         self.anchor.publish(point)
+        self._saved_seals.clear()  # every row saved so far is now covered by an anchor point
         self._dirty = False
         self._last_publish = time.monotonic()
+
+    def _head_seq(self) -> int:
+        """The newest seal number in the store, or 0 (a store that does not seal has none)."""
+        head = getattr(self.store, "head", None)
+        seal = head() if head is not None else None
+        return 0 if seal is None else int(seal.seq)
+
+    def _remember_saved_seals(self, before: int) -> None:
+        """Record the seals the save just added, so they can be checked again before publishing."""
+        seals_after = getattr(self.store, "seals_after", None)
+        if self.anchor is not None and seals_after is not None:  # no anchor: nothing to protect
+            self._saved_seals.update(seals_after(before))
+
+    def _refuse_if_saved_rows_changed(self) -> None:
+        """Refuse when a row this importer saved, and has not published yet, has been changed.
+
+        These rows sit after the newest anchor point, so no point covers them. Without this check,
+        someone could rewrite and reseal one of them from the genuine digest before it, and the next
+        genuine event would chain onto the forgery and be published.
+        """
+        digest_at = getattr(self.store, "seal_digest_at", None)
+        if digest_at is None:
+            return
+        for seq, digest in self._saved_seals.items():
+            if digest_at(seq) != digest:
+                raise StoreTampered(
+                    changed_message(
+                        [
+                            Issue(
+                                "edited",
+                                seq,
+                                "this row was saved by this run and changed before it was anchored",
+                            )
+                        ]
+                    )
+                )
 
     def _refuse_if_rewritten_since_last_point(self) -> None:
         """Never publish a head that sits on a chain which no longer matches the newest point.

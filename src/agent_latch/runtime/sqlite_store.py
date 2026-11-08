@@ -286,6 +286,17 @@ class _Reading:
         row = self._connection().execute(_HEAD).fetchone()
         return None if row is None else _seal_from(tuple(row))
 
+    def seals_after(self, seq: int) -> list[tuple[int, str]]:
+        """``(number, digest)`` of every seal after ``seq``, oldest first (what a save just added)."""
+        try:
+            rows = self._connection().execute(
+                "SELECT seal_seq, seal_digest FROM events WHERE seal_seq > ? ORDER BY seal_seq",
+                (seq,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [(int(row[0]), str(row[1])) for row in rows]
+
     def seal_digest_at(self, seq: int) -> str | None:
         """The stored digest of seal number ``seq``, or None when there is no such row."""
         try:

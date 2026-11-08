@@ -220,7 +220,7 @@ backwards `seq` — that refusal is your cue that you are looking at two differe
 ## When `import-logs` refuses the event store
 
 `import-logs --database … --anchor …` checks the store before it adds a row. When it exits `1` with
-"the event store changed after it was sealed", nothing was added and nothing was repaired. The same
+"the event store changed after it was sealed", nothing was repaired, and the forged head was not anchored. If it was found at start, nothing was added either; if it was found while the importer ran, events saved before then stay in the store, and the message names the row. The same
 rules apply as for a ledger: freeze, record, classify, and never fix the file first.
 
 **Freeze and record.** Stop the importer, copy the store and the anchor file somewhere read-only, and

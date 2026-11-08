@@ -1159,3 +1159,87 @@ def test_an_unreadable_anchor_is_refused_before_an_old_store_is_opened(
     conn = sqlite3.connect(database)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
     conn.close()
+
+
+def _start_importer(
+    sealed: Sealed, monkeypatch: pytest.MonkeyPatch, *, interval: float
+) -> tuple[RuntimeLogImporter, threading.Thread, list[BaseException]]:
+    """Start a following importer on a sealed run and return it with what stops it."""
+    monkeypatch.setattr(importer_module, "ANCHOR_INTERVAL_SECONDS", interval)
+    importer = RuntimeLogImporter(
+        sealed.trace, None, [], payloads_path=sealed.payloads,
+        store=SQLiteEventStore(sealed.database), anchor=FileAnchor(sealed.anchor),
+        follow=True, poll_interval=0.02, payload_grace=0.05,
+    )
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        """Run the importer and keep whatever stopped it, so the test can inspect it."""
+        try:
+            importer.run()
+        except BaseException as error:  # noqa: BLE001 - the test inspects what stopped it
+            errors.append(error)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return importer, thread, errors
+
+
+def _wait_for_rows(sealed: Sealed, count: int) -> None:
+    """Wait until the store holds ``count`` rows, which means the importer has saved them."""
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and sealed.rows() < count:
+        time.sleep(0.05)
+    assert sealed.rows() == count
+
+
+def _rewrite_saved_row(sealed: Sealed) -> None:
+    """Change the newest row and reseal, from the genuine digest before it (rows 1 to 4 are intact)."""
+    conn = _connect_as_attacker(sealed.database)
+    conn.execute("UPDATE events SET name = 'cover-up' WHERE seal_seq = 5")
+    _reseal_all(conn)
+    _cover_tracks(conn)
+    conn.close()
+
+
+def test_a_row_saved_but_not_yet_anchored_cannot_be_rewritten_and_extended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A saved row no anchor covers yet is re-checked before the next save chains onto it."""
+    sealed = Sealed(tmp_path)  # anchored at #4
+    importer, thread, errors = _start_importer(sealed, monkeypatch, interval=60)
+    try:
+        time.sleep(0.5)
+        importer._last_publish = time.monotonic()  # the next publish is skipped: #5 stays unanchored
+        _add_genuine_event(sealed)
+        _wait_for_rows(sealed, 5)  # genuine #5 is saved, and no anchor point covers it
+        _rewrite_saved_row(sealed)  # forged #5, resealed from the genuine #4
+        _add_genuine_event(sealed)  # the next event would chain onto the forged #5
+        thread.join(15)
+        assert not thread.is_alive(), "the importer should have refused and stopped"
+    finally:
+        importer.stop()
+        thread.join(5)
+    assert errors and "changed before it was anchored" in str(errors[0])
+    assert FileAnchor(sealed.anchor).latest().seq == 4  # type: ignore[union-attr]
+
+
+def test_a_forged_unanchored_row_is_never_published_even_without_a_new_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check also runs just before a publish, so an idle importer does not anchor a forgery."""
+    sealed = Sealed(tmp_path)  # anchored at #4
+    importer, thread, errors = _start_importer(sealed, monkeypatch, interval=0.4)
+    try:
+        time.sleep(0.5)
+        importer._last_publish = time.monotonic() + 3  # the publish waits a few seconds
+        _add_genuine_event(sealed)
+        _wait_for_rows(sealed, 5)
+        _rewrite_saved_row(sealed)  # before the delayed publish
+        thread.join(15)  # no new event: only the delayed publish can notice
+        assert not thread.is_alive(), "the importer should have refused and stopped"
+    finally:
+        importer.stop()
+        thread.join(5)
+    assert errors and "changed before it was anchored" in str(errors[0])
+    assert FileAnchor(sealed.anchor).latest().seq == 4  # type: ignore[union-attr]
