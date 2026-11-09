@@ -259,9 +259,11 @@ Rules:
     documentation, and it does not promise that an object survives a power loss there.)
   - **Object stores:** use a conditional put ("only if absent").
   - **Name already exists:** read the existing object and check that its SHA-256 matches the name
-    and the intended bytes. Only then is the write a no-op success. A mismatch means the existing
-    object is damaged: it is left untouched and the batch is reported as `ConnectorRejected`, so
-    `--once` exits `2`.
+    and the intended bytes, and (for local files) sync the containing folder as above, since an
+    earlier attempt may have failed at exactly that step. Only then is the write a no-op success.
+    If that sync fails, the write raises `ConnectorUnavailable` and is retried. A hash mismatch
+    means the existing object is damaged: it is left untouched and the batch is reported as
+    `ConnectorRejected`, so `--once` exits `2`.
 - **Each event** is the normalized event that every gate and `normalized.jsonl` already see:
 
   | Field | Type | Notes |
