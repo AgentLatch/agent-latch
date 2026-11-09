@@ -197,10 +197,10 @@ but only if the files are kept exactly as they are:
    first line, including everything written before the license lapsed, and the matching
    `payloads.jsonl` for the same period whenever the proxy writes one (the connector may need
    it, and the gate re-check below always does). Do not rotate, truncate or edit them until
-   step 4 and the gate re-check below are finished. The importer derives each event's identity from them:
-   the run id is a hash of the first trace line, and an event's `order` is its trace line number.
-   A file that was cut or rotated produces different identities, so connectors can no longer
-   match events they already have, and recovery is incomplete.
+   step 4 and the gate re-check below are finished. The importer derives each event's
+   identity from them: the run id is a hash of the first trace line, and an event's `order` is
+   its trace line number. A file that was cut or rotated produces different identities, so
+   connectors can no longer match events they already have, and recovery is incomplete.
 2. **Stop the running follow-mode importer** (Ctrl+C, or stop its service). Never run a catch-up
    while it is still running: two importers writing to the same connector at once can deliver
    the same events twice.
