@@ -24,6 +24,13 @@ class EventStore(Protocol):
     def close(self) -> None: ...
 ```
 
+`import-logs` runs in one of two modes (existing flag, `src/agent_latch/runtime/cli.py:155`):
+
+- **Follow mode** (the default) keeps watching the log files and imports new lines as the proxy
+  writes them, until you press Ctrl+C.
+- **`--once`** imports whatever the files hold right now, then exits. It is used for a one-off or
+  catch-up import, for example in a script or after the fact.
+
 How it behaves **today**:
 
 - `open()` runs before any other output is opened. If it fails, `import-logs` exits `2`.
