@@ -71,10 +71,22 @@ Customers run AgentLatch on their own machines. Paid packages reach them in one 
    never uses it. Download logs on the index record the token, package and version, never any
    customer event data, because none is sent.
 
-2. **Offline bundle (air-gapped installs).** A `.tar.gz` per release containing the wheels for
-   the connector, `agentlatch-license` and their dependencies, a `SHA256SUMS` file and a detached
-   signature of that file. The customer verifies the signature, then installs with
-   `pip install --no-index --find-links ./bundle --require-hashes -r requirements.txt`.
+2. **Offline bundle (air-gapped installs).** A `.tar.gz` per release containing:
+   - the wheels for the connector, `agentlatch-license` and all their dependencies;
+   - a `requirements.txt` that pins every one of those packages to an exact version with its
+     `--hash=sha256:` digest;
+   - a `SHA256SUMS` file listing the digest of `requirements.txt` and of every wheel;
+   - a detached signature of `SHA256SUMS`, made with the release key.
+
+   The customer installs in this order and stops at the first failure:
+   1. Verify the signature of `SHA256SUMS` against the AgentLatch release public key they
+      obtained separately (published on the website and in the customer portal, never only
+      inside the bundle).
+   2. Check every digest in `SHA256SUMS` against the files in the bundle
+      (`sha256sum --check --strict SHA256SUMS`). A missing or mismatched file means the bundle
+      is not installed.
+   3. Install only from the bundle with pip's hash checking:
+      `pip install --no-index --find-links ./bundle --require-hashes -r requirements.txt`.
 
 3. **Container image.** A paid runtime image built on the public runtime image
    (`docs/docker.md`), adding the paid wheels, pushed to a private registry. It follows the same
@@ -111,7 +123,9 @@ committed to a public repository.
 - **`kind`** is `subscription` or `trial`. Trial licenses have `grace_days: 0`.
 - **`kid`** names the signing key. `agentlatch-license` ships a small set of public keys by `kid`,
   so keys can be rotated: a new key is added in a library release before it is used, and an old
-  key is removed only after every license it signed has expired.
+  key is removed only after every license it signed is past `expires_at` **plus** its
+  `grace_days`. Removing it earlier would turn a license that is still inside its grace period
+  into "not valid".
 - **Canonical JSON** for the signature uses the same rules as the ledger
   (`runtime/ledger/canonical.py`): sorted keys, no spaces, UTF-8, so the same license always
   verifies the same way.
@@ -169,7 +183,29 @@ so the importer needs no licensing-specific code.
 | **Not yet valid** (`not_before` in the future, beyond a 24-hour clock-skew allowance) | Create | `ConnectorConfigError`, exit `2`, showing the start date. |
 | **Expired, inside the grace period** | Create | The connector works normally. A warning is printed at startup and in the final summary, with the number of days left. |
 | **Expired, past the grace period** (trials have no grace period) | Create | `ConnectorConfigError`, exit `2`, showing the expiry date and how to renew. |
-| **Expires while the importer is running** (follow mode) | `write`, at most once an hour, comparing the clock with the license already loaded (no file or network access) | Inside the grace period: one warning, then normal work. Past the grace period: the connector raises `ConnectorConfigError`, which the importer treats like any connector bug (`docs/connectors.md`, section 5): that connector is disabled for the rest of the run, its waiting batches count as undelivered, and every other output keeps running. No event is lost, because events can be rebuilt from the trace files: after renewing, run `import-logs --once` with the same options to catch up. |
+| **Expires while the importer is running** (follow mode) | `write`, at most once an hour, comparing the clock with the license already loaded (no file or network access) | Inside the grace period: one warning, then normal work. Past the grace period: the connector raises `ConnectorConfigError`, which the importer treats like any connector bug (`docs/connectors.md`, section 5): that connector is disabled for the rest of the run, its waiting batches count as undelivered, and every other output keeps running. See [section 6.1](#61-recovering-after-renewal). |
+
+### 6.1 Recovering after renewal
+
+A paid connector that stopped because its license lapsed missed the events that arrived while it
+was stopped. Those events still exist in the proxy's log files, so they can be delivered later,
+but only if the files are kept:
+
+1. **Keep the log files until recovery is done.** Keep `trace.jsonl`, and also `payloads.jsonl`
+   when the connector receives payloads, for the whole period the connector was stopped. If they
+   are rotated or deleted before step 3, the events in them cannot be delivered to that
+   connector, and recovery is incomplete.
+2. **Install the renewed license** (section 4.1).
+3. **Catch up:** run `import-logs --once` with the same input paths, connector options and
+   `--run-id` as the original run (`docs/connectors.md`, section 5). This delivers what is in the
+   files now and then exits. Connectors deduplicate by event key, so events already delivered
+   are not stored twice.
+4. **Restart follow mode.** A disabled connector stays disabled in the running importer, and
+   `--once` does not change that. To resume live delivery, stop the running `import-logs` and
+   start it again in follow mode with the renewed license.
+
+Steps 3 and 4 can be combined by simply restarting follow mode: on start it reads the files from
+the beginning, delivers everything it has not delivered yet, and then keeps following.
 
 Guarantees in every case:
 
@@ -177,7 +213,9 @@ Guarantees in every case:
   sees them immediately. They can renew, or remove that `--connector` and run everything else
   (CSVs, gates, `--database`, free connectors) exactly as before.
 - **No data is deleted or locked.** Data a paid connector already wrote stays where it is, in its
-  normal format, readable without a license. Expiry stops new writes only.
+  normal format, readable without a license. Expiry stops new writes only. Events that arrive
+  while the connector is stopped can be delivered later as long as the log files are kept
+  (section 6.1).
 - **The proxy and the scanner are never affected.** Licensing code is loaded only when the
   operator names a paid connector with `--connector`.
 
