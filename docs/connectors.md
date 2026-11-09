@@ -55,9 +55,9 @@ There are three kinds. They share one lifecycle but promise different things.
 | Plain meaning | A database you query later | Forwards events to another live system | Long-term, write-once copy |
 | Examples | SQLite (today), PostgreSQL, DuckDB | OpenTelemetry, Splunk HEC, a webhook | Folder of `.jsonl.gz` files, S3 bucket |
 | Keeps the data? | Yes, and can read it back | No, the other system keeps it | Yes, but it is not meant for queries |
-| Duplicate handling | **Must** ignore an event it already has (`run_id`, `order`) | Sends `batch_id` and event keys so the receiver can drop duplicates | Same batch, same object name, so a retry overwrites identical bytes |
+| Duplicate handling | **Must** ignore an event it already has (`run_id`, `order`) | Sends the event key `(run_id, order)` with every event so the receiver can drop duplicates | Object named by `batch_id`, so a retry overwrites identical bytes; readers drop duplicates by event key (section 4.1) |
 | Typical failure | Database locked or unreachable | Network down, rate limited | Disk full, bucket permission |
-| Gets payloads by default? | Yes if local (it has a `path`), no if remote | **No**, unless the operator opts in | **No**, unless the operator opts in |
+| Gets payloads by default? | **No**, unless the operator opts in (`--database` is unchanged and keeps storing them) | **No**, unless the operator opts in | **No**, unless the operator opts in |
 | Network use | Only if it is a remote database | Always | Only if it is remote |
 
 Rules of thumb:
@@ -66,8 +66,9 @@ Rules of thumb:
 - If something else receives the data and AgentLatch forgets it, it is an **exporter**.
 - If its purpose is retention or audit and it is written once, it is an **archive**.
 
-An archive is **not** the tamper-evident ledger (`ALR15`). The ledger proves the trace was not
-edited. An archive only keeps a copy of the events, and a copy never replaces verification.
+An archive is **not** the tamper-evident ledger (`ALR15`). The ledger can detect edits through
+verification; a trusted anchor is needed to detect a rebuilt chain (see `docs/ledger.md`). An
+archive only keeps a copy of the events, and a copy never replaces verification.
 
 ## 3. The contract in code
 
@@ -97,10 +98,12 @@ class Connector(Protocol):
     connector_api: int                   # the contract version this connector was written for
     path: Path | None                    # local file it writes, or None (used for the
                                          # "all outputs are different files" check)
-    accepts_payloads: bool               # whether it was configured to receive payloads
+    accepts_payloads: bool               # set by the core from the operator's `payloads`
+                                         # option; False unless they opted in
 
     def open(self) -> None: ...
-    def write(self, batch: EventBatch, /) -> int: ...   # number of events accepted
+    def write(self, batch: EventBatch, /) -> int: ...   # events handled: always len(batch.events)
+                                                        # on success, duplicates included
     def close(self) -> None: ...
 
 
@@ -117,20 +120,30 @@ class StoreConnector:
     kind = "store"
     connector_api = CONNECTOR_API
 
-    def __init__(self, store: EventStore) -> None:
+    def __init__(self, store: EventStore, *, accepts_payloads: bool = False) -> None:
         self.store = store
         self.path = store.path
-        self.accepts_payloads = store.path is not None   # local stores only, by default
+        self.accepts_payloads = accepts_payloads    # from the operator's `payloads` option only
 
     def open(self) -> None:
         self.store.open()
 
     def write(self, batch: EventBatch, /) -> int:
-        return self.store.save(list(batch.events))
+        try:
+            self.store.save(list(batch.events))     # returns new events; duplicates are skipped
+        except ConnectorUnavailable:
+            raise
+        except OSError as error:                    # the store contract's "not stored" signal
+            raise ConnectorUnavailable(str(error)) from error
+        return len(batch.events)                    # every event in the batch is now handled
 
     def close(self) -> None:
         self.store.close()
 ```
+
+`write` returns the number of events handled, not the number newly stored, so replaying a batch
+the store already has still counts as success. The adapter turns the store's plain `OSError` into
+`ConnectorUnavailable`, so a failed save is retried as it is today rather than treated as a bug.
 
 The adapter exists so that new store packages can be written against `EventStore`. The
 `--database` path itself does **not** go through the adapter (see section 7).
@@ -174,7 +187,10 @@ never starts work by itself.
    background) must deliver everything they have accepted before `close()` returns.
 6. **Close.** `close()` is called exactly once in the importer's `finally` block, even after
    errors and on Ctrl+C. An exception from `close()` is logged as a warning and never hides the
-   original error.
+   original error. Because a buffering connector may have accepted batches it has not delivered
+   yet, a failed `close()` counts every batch accepted since its last successful flush as
+   **undelivered**, even when the importer's own queue is empty, so `--once` exits `2`
+   (section 5).
 
 Threading: the importer calls a connector from one thread only, so connectors need no locks.
 Each call must finish within the connector's own `timeout` option (default 10 seconds). The
@@ -202,9 +218,17 @@ Rules:
 - **Size.** At most `max_batch_events` events (default 500, configurable per connector). A larger
   pass is split into several batches.
 - **Frozen once tried.** After a batch is handed to `write()`, it is never changed. A retry sends
-  the identical batch with the same `batch_id`, and new events go into the next batch. This lets
-  exporters and archives deduplicate by `batch_id`. (The `--database` store keeps its current
+  the identical batch with the same `batch_id`, and new events go into the next batch. So an exact
+  retry produces an identical object or request. (The `--database` store keeps its current
   merge-and-retry behavior, which is safe because SQLite ignores duplicate keys.)
+- **The event key is the unit of deduplication, not the batch.** Batch boundaries depend on how
+  many lines each pass happened to read, so a later replay of the same logs (for example
+  `--once` after a follow-mode run) can group the same events into different batches with
+  different `batch_id`s. Every consumer must therefore treat `(run_id, order)` as the identity of
+  an event: stores ignore a key they already have, exporters send the key so the receiver can drop
+  duplicates, and archive readers keep the first copy of each key. An archive connector may also
+  skip keys it has already written (for example from a small local index under `log_dir`), but
+  readers must not rely on that.
 - **Each event** is the normalized event that every gate and `normalized.jsonl` already see:
 
   | Field | Type | Notes |
@@ -221,8 +245,11 @@ Rules:
   | `payload` | object \| null | Full masked payload (only with `--payloads`) |
 
 - **Payloads are removed unless allowed.** If `connector.accepts_payloads` is false, the importer
-  sets `payload` to `null` in that connector's copy before `write`. Exporters and archives default
-  to `false`. The operator turns it on per connector with `--connector-option NAME.payloads=true`.
+  sets `payload` to `null` in that connector's copy before `write`. Every connector loaded with
+  `--connector` defaults to `false`, whatever its kind and whether it looks local or remote: the
+  core does not guess where a destination is. The only way to turn it on is the operator's
+  explicit `--connector-option NAME.payloads=true` (or `payloads = true` in the config file), and
+  that explicit setting always wins over any default a connector package suggests.
   Payloads are masked, but they still hold tool arguments and outputs, so sending them off the
   machine must be a deliberate choice.
 - **Additive changes only** within `/1`. New optional fields may appear, and connectors must
@@ -241,8 +268,9 @@ counts as a bug:
 | `ConnectorRejected(Exception)` | The destination refused **this** batch for good (for example HTTP 400) | Does not retry. Writes the batch to `runtime-logs/<name>.rejected.jsonl` (mode `0600`), warns, and moves on. |
 | Any other exception | A bug in the connector | Warns with the exception type only, **disables that connector** for the rest of the run, keeps every other output going. |
 
-`ConnectorUnavailable` subclasses `OSError` on purpose, so the existing store contract ("raise
-`OSError` when the batch was not stored") is already a special case of it.
+`ConnectorUnavailable` subclasses `OSError` so that it reads like any other storage failure. A
+plain `OSError` is **not** a `ConnectorUnavailable`, though, so connectors must raise
+`ConnectorUnavailable` themselves. `StoreConnector` does this for every `EventStore` (section 3).
 
 **Backoff.** Retries wait 1 s, then 2, 4, 8 … up to 60 s between attempts, per connector. They
 never block the importer's normal pass, which keeps running every 0.1 s for the other outputs.
@@ -251,8 +279,18 @@ never block the importer's normal pass, which keeps running every 0.1 s for the 
 100, which is up to 50,000 events at the default batch size). When that is full, the **oldest**
 batch is dropped. The connector warns with a running count, and the final summary line reports
 it. Nothing is lost for good: every event can be rebuilt from the trace files, and all three
-kinds deduplicate. So the fix is to run `import-logs --once --connector NAME` again once the
-destination is back.
+kinds deduplicate by event key. So the fix is to run `import-logs --once` again once the
+destination is back, with the **same** input paths, connector instance and options as the
+original run, for example:
+
+```bash
+agent-latch-runtime import-logs --once --dir runtime-logs \
+  --connector pg=postgres \
+  --connector-option pg.dsn=env:AGENTLATCH_PG_DSN \
+  --connector-option pg.table=agent_events
+```
+
+(or the same `--connector-config FILE`).
 
 **Never in the request path.** No connector error can reach the proxy. The importer is a separate
 process that only reads log files (see `docs/runtime.md`).
@@ -264,8 +302,8 @@ messages.
 **Exit codes for `import-logs`** (unchanged values: `0` and `2`):
 
 - `2`: a config error at create or open, or an unknown connector name or API version.
-- With `--once`, also `2` when any connector still has undelivered batches at the end, or
-  rejected or dropped any. This matches today, where a final failed database save exits `2`.
+- With `--once`, also `2` when any connector still has undelivered batches at the end
+  (including batches lost by a failed `close()`), or rejected or dropped any. This matches today, where a final failed database save exits `2`.
 - Follow mode ends on Ctrl+C with `0`, as today, after a final summary that lists undelivered,
   rejected and dropped counts per connector.
 
@@ -316,7 +354,7 @@ agent-latch-runtime import-logs \
   show secrets only as `env:` references. The core never logs option values. `connectors` and
   error messages show `KEY=***` for every option.
 - **Options every connector gets** (handled by the core, not the connector): `payloads`
-  (default `false` for exporters, archives and remote stores), `max_batch_events`, `max_pending_batches`,
+  (default `false` for every connector), `max_batch_events`, `max_pending_batches`,
   `timeout`.
 
 ### 6.3 Where connector code lives
