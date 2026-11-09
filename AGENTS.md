@@ -301,6 +301,7 @@ Before building a check, look at how established open-source tools handle it. Bo
 - `docs/ledger-setup.md`: ten-minute setup, where to put the anchor, wiring the report and CI, troubleshooting
 - `docs/ledger-reference.md`: on-disk formats, digest inputs, Python API, CLI and exit codes, adding an anchor destination
 - `docs/ledger-operations.md`: cost, anchor cadence, retention and rotation, incident runbook
+- `docs/connector-licensing.md`: design for paid connector packages: MIT core vs. commercial packages, distribution, offline license files, behavior on missing/expired/invalid licenses, pending legal review. Not implemented yet
 - `docs/clients/chatgpt.md`: ChatGPT reaches the proxy through OpenAI's Secure MCP Tunnel. Local apps use the config change in `docs/runtime.md`
 - `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions, including starting `import-logs --database` before a live CrewAI or Claude Desktop run; `mcp-server/README.md` is an overview that links to it
 - `CONTRIBUTING.md`, `SECURITY.md`, `llms.txt`
