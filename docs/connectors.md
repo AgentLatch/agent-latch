@@ -130,7 +130,7 @@ class StoreConnector:
 
     def write(self, batch: EventBatch, /) -> int:
         try:
-            self.store.save(list(batch.events))     # returns new events; duplicates are skipped
+            self.store.save(list(batch.events))     # merges duplicates per section 4.1
         except ConnectorUnavailable:
             raise
         except OSError as error:                    # the store contract's "not stored" signal
@@ -144,6 +144,12 @@ class StoreConnector:
 `write` returns the number of events handled, not the number newly stored, so replaying a batch
 the store already has still counts as success. The adapter turns the store's plain `OSError` into
 `ConnectorUnavailable`, so a failed save is retried as it is today rather than treated as a bug.
+
+A store used through the adapter must apply the merge rule of section 4.1 inside `save`: when
+an event's key already exists, fill in `payload`, `payloads` and `client_id` if they were `null`,
+and never replace a non-null value. Skipping a known key is not enough, because a later copy can
+carry a payload the first one lacked. `SQLiteEventStore` skips known keys (`INSERT OR IGNORE`),
+which is one reason `--database` stays outside the adapter and unchanged.
 
 The adapter exists so that new store packages can be written against `EventStore`. The
 `--database` path itself does **not** go through the adapter (see section 7).
