@@ -191,23 +191,29 @@ so the importer needs no licensing-specific code.
 
 A paid connector that stopped because its license lapsed missed the events that arrived while it
 was stopped. Those events still exist in the proxy's log files, so they can be delivered later,
-but only if the files are kept:
+but only if the files are kept exactly as they are:
 
-1. **Keep the log files until recovery is done.** Keep `trace.jsonl`, and also `payloads.jsonl`
-   when the connector receives payloads, for the whole period the connector was stopped. If they
-   are rotated or deleted before step 3, the events in them cannot be delivered to that
-   connector, and recovery is incomplete.
-2. **Install the renewed license** (section 4.1).
-3. **Catch up:** run `import-logs --once` with the same input paths, connector options and
-   `--run-id` as the original run (`docs/connectors.md`, section 5). This delivers what is in the
-   files now and then exits. Connectors deduplicate by event key, so events already delivered
-   are not stored twice.
-4. **Restart follow mode.** A disabled connector stays disabled in the running importer, and
-   `--once` does not change that. To resume live delivery, stop the running `import-logs` and
-   start it again in follow mode with the renewed license.
+1. **Keep the log files whole until recovery is done.** Keep the original `trace.jsonl` from its
+   first line, including everything written before the license lapsed, and, when the connector
+   receives payloads, the matching `payloads.jsonl` for the same period. Do not rotate, truncate
+   or edit them until step 4 is finished. The importer derives each event's identity from them:
+   the run id is a hash of the first trace line, and an event's `order` is its trace line number.
+   A file that was cut or rotated produces different identities, so connectors can no longer
+   match events they already have, and recovery is incomplete.
+2. **Stop the running follow-mode importer** (Ctrl+C, or stop its service). Never run a catch-up
+   while it is still running: two importers writing to the same connector at once can deliver
+   the same events twice.
+3. **Install the renewed license** (section 4.1).
+4. **Start follow mode again** with the same input paths, connector options and `--run-id` as
+   before (`docs/connectors.md`, section 5). On start the importer reads the log files from the
+   beginning, delivers every event the connector does not have yet (connectors deduplicate by
+   event key), and then keeps following, so this one step both catches up and resumes live
+   delivery.
 
-Steps 3 and 4 can be combined by simply restarting follow mode: on start it reads the files from
-the beginning, delivers everything it has not delivered yet, and then keeps following.
+If the importer normally runs only with `--once` (for example from a scheduled job), step 4 is
+simply the next `--once` run with the same options, after steps 2 and 3. A `--once` run alone
+never resumes live delivery for a follow-mode setup, because it exits when it reaches the end of
+the files.
 
 Guarantees in every case:
 
