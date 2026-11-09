@@ -241,9 +241,9 @@ Rules:
   the payload. When a key is seen again, a connector keeps every field it already has and fills
   in only `payload`, `payloads` and `client_id` if they were `null` before (`client_id` comes from
   the payload record, so it arrives late together with the payload). It never replaces a
-  non-null value and never discards the more complete copy just because the key was seen before. Stores update
-  the row, exporters send the event again (receivers apply the same rule), and archive readers
-  prefer the copy with a payload. The `--database` store is unchanged and keeps its current
+  non-null value and never discards the more complete copy just because the key was seen
+  before. Stores update the row, exporters send the event again (receivers apply the same rule),
+  and archive readers prefer the copy with a payload. The `--database` store is unchanged and keeps its current
   `INSERT OR IGNORE`. Changing it is out of scope here (section 7).
 - **Archive objects are write-once.** `batch_id` can contain characters that are not valid in
   file names (`:`, and anything an operator passes to `--run-id`), so it is never used as a name
