@@ -210,12 +210,23 @@ but only if the files are kept exactly as they are:
    event key), and then keeps following, so this one step both catches up and resumes live
    delivery.
 
-**Rotating log files later.** Recovery is not the only reason to be careful with rotation: a
-running follow-mode importer keeps reading the file it opened, so if `trace.jsonl` is renamed and
-a new one is started underneath it, the importer misses everything written to the new file. Never
-rotate the log files while a follow-mode importer is running. To rotate safely, stop the
-importer, rotate the files, then start it again; it begins a new run on the new files. This is a
-property of the importer today, not of licensing, and applies to free connectors too.
+**Rotating log files later.** Recovery is not the only time rotation matters. A running
+follow-mode importer keeps reading the file it opened, and the proxy keeps writing to the file it
+opened, so renaming `trace.jsonl` underneath them loses events. Stopping the importer with
+Ctrl+C also does not finish reading what is already in the files. Rotate only in this order:
+
+1. **Stop the proxy**, so nothing more is written to the current files.
+2. **Stop the follow-mode importer**, then **drain the old files**: run `import-logs --once` on
+   them with the same input paths, connector options and `--run-id` as before, and check that it
+   exits `0` with no undelivered batches. Keep the old files until it does.
+3. **Move the old files away** (archive or delete them, as your retention policy says).
+4. **Start the proxy again**, so it writes new `trace.jsonl` and `payloads.jsonl` files.
+5. **Start the follow-mode importer** on the new files **without** the old `--run-id`: leave the
+   option out so a new run id is derived from the new trace, or give a new one. Reuse an old run
+   id only when replaying the old files.
+
+This is a property of the proxy and importer today, not of licensing, and it applies to free
+connectors too.
 
 If the importer normally runs only with `--once` (for example from a scheduled job), step 4 is
 simply the next `--once` run with the same options, after steps 2 and 3. A `--once` run alone
