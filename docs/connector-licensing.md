@@ -194,9 +194,10 @@ was stopped. Those events still exist in the proxy's log files, so they can be d
 but only if the files are kept exactly as they are:
 
 1. **Keep the log files whole until recovery is done.** Keep the original `trace.jsonl` from its
-   first line, including everything written before the license lapsed, and, when the connector
-   receives payloads, the matching `payloads.jsonl` for the same period. Do not rotate, truncate
-   or edit them until step 4 is finished. The importer derives each event's identity from them:
+   first line, including everything written before the license lapsed, and the matching
+   `payloads.jsonl` for the same period whenever the proxy writes one (the connector may need
+   it, and the gate re-check below always does). Do not rotate, truncate or edit them until
+   step 4 and the gate re-check below are finished. The importer derives each event's identity from them:
    the run id is a hash of the first trace line, and an event's `order` is its trace line number.
    A file that was cut or rotated produces different identities, so connectors can no longer
    match events they already have, and recovery is incomplete.
@@ -231,6 +232,17 @@ new folder. Leave out `--connector` and `--database`, so the pass only evaluates
 Review the findings with
 `agent-latch --runtime-result recheck/gate-results.csv`. The live importer from step 4 keeps
 running unchanged.
+
+Two limits apply to this re-check:
+
+- **It needs the payloads.** ALR03 reads a server's identity from the `initialize` handshake
+  payload. Without `payloads.jsonl` (the proxy was started without `--payloads`, or the file was
+  not kept), ALR03 reports `INCONCLUSIVE` with `payload_unavailable` and cannot detect an
+  identity change, in the re-check or anywhere else.
+- **It does not repair the live importer.** The re-check runs in its own process with its own
+  baseline. The importer restarted in step 4 keeps the baseline it built from the first
+  handshake it evaluated, so later identity changes are judged against that baseline, not the
+  one from the re-check.
 
 **Log rotation is out of scope here.** Rotating the proxy's log files touches the trace, the
 payloads file, the audit ledger and its anchor, and the state the runtime gates keep, none of
