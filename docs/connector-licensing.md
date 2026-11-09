@@ -223,15 +223,16 @@ state, run one extra pass after step 4, over the same kept log files and with ou
 not exist yet, so nothing is skipped:
 
 ```bash
-agent-latch-runtime import-logs --once --dir recheck \
+agent-latch-runtime import-logs --once --dir RECHECK_DIR \
   --trace PATH/trace.jsonl --payloads PATH/payloads.jsonl --run-id RUN_ID
 ```
 
-`--dir recheck` sends every output of this pass (events, gate results, normalized events) to a
-new folder. Leave out `--connector` and `--database`, so the pass only evaluates gates.
-Review the findings with
-`agent-latch --runtime-result recheck/gate-results.csv`. The live importer from step 4 keeps
-running unchanged.
+`RECHECK_DIR` is a new, empty folder that only the operator can read, outside any source
+repository. `--dir` sends every output of this pass there: events, gate results, and
+`normalized.jsonl`, which holds full arguments, payloads and responses, so treat the folder as
+sensitive. Leave out `--connector` and `--database`, so the pass only evaluates gates. Review
+the findings with `agent-latch --runtime-result RECHECK_DIR/gate-results.csv`, then delete the
+folder. The live importer from step 4 keeps running unchanged.
 
 Two limits apply to this re-check:
 
