@@ -68,8 +68,10 @@ Customers run AgentLatch on their own machines. Paid packages reach them in one 
    ```
 
    The token only grants download access. It is not the license, and the installed connector
-   never uses it. Download logs on the index record the token, package and version, never any
-   customer event data, because none is sent.
+   never uses it. Each token has a non-secret token ID. The index's download logs record that ID, the
+   package and the version, never the token itself, and never any customer event data, because
+   none is sent. Index logs are readable only by AgentLatch staff who run the index, and a
+   customer can revoke and reissue their token from the customer portal at any time.
 
 2. **Offline bundle (air-gapped installs).** A `.tar.gz` per release containing:
    - the wheels for the connector, `agentlatch-license` and all their dependencies;
