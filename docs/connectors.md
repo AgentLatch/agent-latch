@@ -263,12 +263,17 @@ Rules:
     not force the drive's cache to permanent storage, so every sync above uses
     `fcntl(fd, F_FULLFSYNC)` there instead. A sync failure is handled by its cause:
     - **Not supported** (for example `ENOTSUP` or `EINVAL` from `F_FULLFSYNC` on a network or
-      FUSE file system): this will never succeed, so it is not retried. The connector checks for
-      it once in `open()` by syncing a test file in the archive folder and raises
+      FUSE file system): this will never succeed, so it is never retried. The connector checks
+      for it once in `open()` by running every sync step it will use later on a test file in the
+      archive folder (the file sync, `F_FULLFSYNC` on macOS, and the folder sync), and raises
       `ConnectorConfigError` (exit `2`) unless the operator chose
       `--connector-option NAME.durability=best-effort`. In that mode the connector uses plain
       `fsync` (or no folder sync where none exists), logs once at open that objects may not
-      survive a power loss, and reports success after the steps it can do.
+      survive a power loss, and reports success after the steps it can do. If a "not supported"
+      error still appears later in `write` (for example the folder was remounted), the connector
+      raises `ConnectorConfigError` there too: the importer disables that connector for the rest
+      of the run, its waiting batches count as undelivered, `--once` exits `2`, and nothing is
+      retried in a loop (section 5).
     - **Temporary** (for example `EINTR`, `EAGAIN`, `ENOSPC`, or an I/O error on a device that
       may come back): `write` does not report success; it raises `ConnectorUnavailable` and the
       batch is retried with the usual backoff.
