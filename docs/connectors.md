@@ -225,22 +225,37 @@ Rules:
   many lines each pass happened to read, so a later replay of the same logs (for example
   `--once` after a follow-mode run) can group the same events into different batches with
   different `batch_id`s. Every consumer must therefore treat `(run_id, order)` as the identity of
-  an event. An archive connector may also skip keys it has already written (for example from a
-  small local index under `log_dir`), but readers must not rely on that.
+  an event. An archive connector may keep a small local index under `log_dir` to avoid writing
+  the same event twice, but it may skip a copy only when that copy adds nothing: a later copy
+  that carries a `payload` or `client_id` the earlier copy lacked must still be archived. Readers
+  must not rely on the index.
 - **A later copy can be more complete, so duplicates are merged, not dropped.** In follow mode a
   trace record waits only 2 seconds for its payload record; if the payload arrives later, the
   event goes out with `payload: null`, and a later `--once` replay produces the same key *with*
   the payload. When a key is seen again, a connector keeps every field it already has and fills
-  in only `payload` and `payloads` if they were `null` before. It never replaces a non-null value
+  in only `payload`, `payloads` and `client_id` if they were `null` before (`client_id` comes from
+  the payload record, so it arrives late together with the payload). It never replaces a non-null value
   and never discards the more complete copy just because the key was seen before. Stores update
   the row, exporters send the event again (receivers apply the same rule), and archive readers
   prefer the copy with a payload. The `--database` store is unchanged and keeps its current
   `INSERT OR IGNORE`. Changing it is out of scope here (section 7).
-- **Archive objects are write-once.** An archive names each object
-  `<batch_id>-<sha256 of the object's bytes>`, so a retry of an identical batch maps to the same
-  name and is a no-op, and a replay with different contents (for example now with a payload) gets
-  a new name. A connector must never overwrite an existing object. Where the destination supports
-  it, it writes with "create only if absent" (for example `O_EXCL` locally, or a conditional put).
+- **Archive objects are write-once.** `batch_id` can contain characters that are not valid in
+  file names (`:`, and anything an operator passes to `--run-id`), so it is never used as a name
+  directly. An archive names each object
+  `<first_order>-<last_order>-<first 16 hex of sha256(batch_id)>-<sha256 of the object's bytes>`,
+  which uses only digits, hex and `-` and is valid on Windows, macOS, Linux and object stores.
+  A retry of an identical batch maps to the same name, and a replay with different contents (for
+  example now with a payload) gets a new name. A connector must never overwrite an existing
+  object:
+  - **Local files:** write the complete bytes to a temporary file in the same folder, flush and
+    `fsync` it, then publish it with a create-only atomic step (`os.link` to the final name, which
+    fails if the name exists), and remove the temporary file. A failed write therefore never
+    leaves a partial object under the final name.
+  - **Object stores:** use a conditional put ("only if absent").
+  - **Name already exists:** read the existing object and check that its SHA-256 matches the name
+    and the intended bytes. Only then is the write a no-op success. A mismatch means the existing
+    object is damaged: it is left untouched and the batch is reported as `ConnectorRejected`, so
+    `--once` exits `2`.
 - **Each event** is the normalized event that every gate and `normalized.jsonl` already see:
 
   | Field | Type | Notes |
@@ -293,18 +308,18 @@ batch is dropped. The connector warns with a running count, and the final summar
 it. Nothing is lost for good: every event can be rebuilt from the trace files, and all three
 kinds deduplicate by event key. So the fix is to run `import-logs --once` again once the
 destination is back, with the **same** input paths, connector instance and options as the
-original run, and the same `--run-id` if the original run set one (otherwise the run id is
-derived from the trace again and matches by itself). For example:
+original run. For example:
 
 ```bash
 agent-latch-runtime import-logs --once --dir runtime-logs \
-  [--run-id ID] \
   --connector pg=postgres \
   --connector-option pg.dsn=env:AGENTLATCH_PG_DSN \
   --connector-option pg.table=agent_events
 ```
 
-(or the same `--connector-config FILE`).
+(or the same `--connector-config FILE`). If the original run was given `--run-id ID`, add the
+same `--run-id ID` to this command. If it was not, leave the option out: the run id is derived
+from the trace again and matches by itself.
 
 **Never in the request path.** No connector error can reach the proxy. The importer is a separate
 process that only reads log files (see `docs/runtime.md`).
