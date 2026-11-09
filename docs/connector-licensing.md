@@ -210,6 +210,13 @@ but only if the files are kept exactly as they are:
    event key), and then keeps following, so this one step both catches up and resumes live
    delivery.
 
+**Rotating log files later.** Recovery is not the only reason to be careful with rotation: a
+running follow-mode importer keeps reading the file it opened, so if `trace.jsonl` is renamed and
+a new one is started underneath it, the importer misses everything written to the new file. Never
+rotate the log files while a follow-mode importer is running. To rotate safely, stop the
+importer, rotate the files, then start it again; it begins a new run on the new files. This is a
+property of the importer today, not of licensing, and applies to free connectors too.
+
 If the importer normally runs only with `--once` (for example from a scheduled job), step 4 is
 simply the next `--once` run with the same options, after steps 2 and 3. A `--once` run alone
 never resumes live delivery for a follow-mode setup, because it exits when it reaches the end of
