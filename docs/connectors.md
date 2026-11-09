@@ -55,7 +55,7 @@ There are three kinds. They share one lifecycle but promise different things.
 | Plain meaning | A database you query later | Forwards events to another live system | Long-term, write-once copy |
 | Examples | SQLite (today), PostgreSQL, DuckDB | OpenTelemetry, Splunk HEC, a webhook | Folder of `.jsonl.gz` files, S3 bucket |
 | Keeps the data? | Yes, and can read it back | No, the other system keeps it | Yes, but it is not meant for queries |
-| Duplicate handling | Merges by event key `(run_id, order)` (section 4.1) | Sends the event key with every event so the receiver can merge duplicates | Objects are write-once and named by `batch_id` plus a content hash, so nothing is ever overwritten; readers merge by event key (section 4.1) |
+| Duplicate handling | Merges by event key `(run_id, order)` (section 4.1) | Sends the event key with every event so the receiver can merge duplicates | Objects are write-once, with portable names built from the order range, a hash of `batch_id` and a hash of the content, so nothing is ever overwritten; readers merge by event key (section 4.1) |
 | Typical failure | Database locked or unreachable | Network down, rate limited | Disk full, bucket permission |
 | Gets payloads by default? | **No**, unless the operator opts in (`--database` is unchanged and keeps storing them) | **No**, unless the operator opts in | **No**, unless the operator opts in |
 | Network use | Only if it is a remote database | Always | Only if it is remote |
@@ -202,8 +202,8 @@ Threading: the importer calls a connector from one thread only, so connectors ne
 Each call must finish within the connector's own `timeout` option (default 10 seconds). The
 importer does not wrap calls in threads, so a connector that ignores its timeout stalls the
 importer's other outputs too. It never stalls the MCP traffic, because the importer is a separate
-process from the proxy. Our own `ALR08-S01` rule exists for exactly
-this, and connector code must pass the self-scan.
+process from the proxy. Our own `ALR08-S01` rule exists for exactly this, and connector code
+must pass the self-scan.
 
 ### 4.1 Event batch format
 
@@ -240,8 +240,8 @@ Rules:
   event goes out with `payload: null`, and a later `--once` replay produces the same key *with*
   the payload. When a key is seen again, a connector keeps every field it already has and fills
   in only `payload`, `payloads` and `client_id` if they were `null` before (`client_id` comes from
-  the payload record, so it arrives late together with the payload). It never replaces a non-null value
-  and never discards the more complete copy just because the key was seen before. Stores update
+  the payload record, so it arrives late together with the payload). It never replaces a
+  non-null value and never discards the more complete copy just because the key was seen before. Stores update
   the row, exporters send the event again (receivers apply the same rule), and archive readers
   prefer the copy with a payload. The `--database` store is unchanged and keeps its current
   `INSERT OR IGNORE`. Changing it is out of scope here (section 7).
@@ -307,7 +307,7 @@ counts as a bug:
 | `ConnectorConfigError(ValueError)` | Can never work as configured | At create or open: exit `2` with the message. During `write`: treated as a bug (last row). |
 | `ConnectorUnavailable(OSError)` | Temporary: network, lock, rate limit, disk full | Keeps the batch, warns **once**, retries with backoff. Logs "reachable again" when it recovers. Same idea as today's SQLite retry. |
 | `ConnectorRejected(Exception)` | The destination refused **this** batch for good (for example HTTP 400) | Does not retry. Writes the batch to `runtime-logs/<name>.rejected.jsonl` (mode `0600`), warns, and moves on. |
-| Any other exception | A bug in the connector | Warns with the exception type only, **disables that connector** for the rest of the run, keeps every other output going. |
+| Any other exception | A bug in the connector | Warns with the exception type only, **disables that connector** for the rest of the run, keeps every other output going. The disabled connector's waiting batches count as undelivered. |
 
 `ConnectorUnavailable` subclasses `OSError` so that it reads like any other storage failure. A
 plain `OSError` is **not** a `ConnectorUnavailable`, though, so connectors must raise
@@ -346,7 +346,9 @@ messages.
 
 - `2`: a config error at create or open, or an unknown connector name or API version.
 - With `--once`, also `2` when any connector still has undelivered batches at the end
-  (including batches lost by a failed `close()`), or rejected or dropped any. This matches today, where a final failed database save exits `2`.
+  (including batches lost by a failed `close()`, or held by a connector that was disabled or
+  never opened), or rejected or dropped any. This matches today, where a final failed database
+  save exits `2`.
 - Follow mode ends on Ctrl+C with `0`, as today, after a final summary that lists undelivered,
   rejected and dropped counts per connector.
 
