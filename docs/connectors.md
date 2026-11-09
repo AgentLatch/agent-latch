@@ -251,8 +251,12 @@ Rules:
     `fsync` it, then publish it with a create-only atomic step (`os.link` to the final name, which
     fails if the name exists), remove the temporary file, and then `fsync` the containing folder
     so the new name survives a crash. Only after that does `write` report success. A failed write
-    therefore never leaves a partial object under the final name. (Where a platform cannot sync a
-    folder, such as Windows, the connector skips that step and says so in its documentation.)
+    therefore never leaves a partial object under the final name. On macOS, plain `fsync` does
+    not force the drive's cache to permanent storage, so every sync above uses
+    `fcntl(fd, F_FULLFSYNC)` there instead. If any sync step fails, `write` does not report
+    success: it raises `ConnectorUnavailable` and the batch is retried. (Where a platform cannot
+    sync a folder, such as Windows, the connector skips that step and says so in its
+    documentation, and it does not promise that an object survives a power loss there.)
   - **Object stores:** use a conditional put ("only if absent").
   - **Name already exists:** read the existing object and check that its SHA-256 matches the name
     and the intended bytes. Only then is the write a no-op success. A mismatch means the existing
