@@ -1,7 +1,7 @@
-# Log connectors: design (draft)
+# Log connectors: design
 
-> **Status: draft for review.** This document proposes how AgentLatch sends runtime events to
-> other destinations. Nothing here is implemented yet except what is marked **today**. The
+> **Status: accepted design, not implemented yet.** This document defines how AgentLatch sends
+> runtime events to other destinations. Only what is marked **today** exists in the code. The
 > existing SQLite store and the `--database` flag stay exactly as they are (see
 > [Keeping today's behavior untouched](#7-keeping-todays-behavior-untouched)).
 
@@ -57,7 +57,7 @@ There are three kinds. They share one lifecycle but promise different things.
 | Keeps the data? | Yes, and can read it back | No, the other system keeps it | Yes, but it is not meant for queries |
 | Duplicate handling | **Must** ignore an event it already has (`run_id`, `order`) | Sends `batch_id` and event keys so the receiver can drop duplicates | Same batch, same object name, so a retry overwrites identical bytes |
 | Typical failure | Database locked or unreachable | Network down, rate limited | Disk full, bucket permission |
-| Gets payloads by default? | Yes, if it is local | **No**, unless the operator opts in | **No**, unless the operator opts in |
+| Gets payloads by default? | Yes if local (it has a `path`), no if remote | **No**, unless the operator opts in | **No**, unless the operator opts in |
 | Network use | Only if it is a remote database | Always | Only if it is remote |
 
 Rules of thumb:
@@ -67,8 +67,7 @@ Rules of thumb:
 - If its purpose is retention or audit and it is written once, it is an **archive**.
 
 An archive is **not** the tamper-evident ledger (`ALR15`). The ledger proves the trace was not
-edited. An archive only keeps a copy. An archive can also store the ledger file, but it never
-replaces verification.
+edited. An archive only keeps a copy of the events, and a copy never replaces verification.
 
 ## 3. The contract in code
 
@@ -117,11 +116,20 @@ without any change to the store:
 class StoreConnector:
     kind = "store"
     connector_api = CONNECTOR_API
-    accepts_payloads = True
-    def __init__(self, store: EventStore) -> None: self.store = store; self.path = store.path
-    def open(self) -> None: self.store.open()
-    def write(self, batch: EventBatch) -> int: return self.store.save(list(batch.events))
-    def close(self) -> None: self.store.close()
+
+    def __init__(self, store: EventStore) -> None:
+        self.store = store
+        self.path = store.path
+        self.accepts_payloads = store.path is not None   # local stores only, by default
+
+    def open(self) -> None:
+        self.store.open()
+
+    def write(self, batch: EventBatch, /) -> int:
+        return self.store.save(list(batch.events))
+
+    def close(self) -> None:
+        self.store.close()
 ```
 
 The adapter exists so that new store packages can be written against `EventStore`. The
@@ -132,11 +140,12 @@ The adapter exists so that new store packages can be written against `EventStore
 Every connector goes through the same six steps. The importer drives them, and the connector
 never starts work by itself.
 
-```
- discover ──▶ create ──▶ open ──▶ write, write, write … ──▶ close
- (entry       (factory     (once,      (once per importer        (always, also
-  point)       + config)    before      pass, in order)           after errors)
-                            other files)
+```text
+ discover ──▶ create ──▶ open ──▶ write, write … ──▶ flush ──▶ close
+ (entry       (factory    (once,    (once per          (before     (always, also
+  point)       + config)   before    importer pass,     close)      after errors)
+                           other     in order)
+                           files)
 ```
 
 1. **Discover.** The importer lists the entry points in the group `agent_latch.connectors`
@@ -158,7 +167,8 @@ never starts work by itself.
 4. **Write.** After each pass over the log files, the importer builds the new events into one or
    more batches (section 4.1). It calls `write(batch)` on each connector in the order given on
    the command line. Connectors are independent: each has its own queue of waiting batches, so a
-   slow or broken one never holds back another, the CSVs, the gates, or the proxy.
+   failing one never holds back another, the CSVs or the gates. (A call that hangs does stall
+   the importer, which is why every call has a timeout; see below.)
    `write` must either accept the whole batch or raise. It must not accept half of a batch.
 5. **Flush.** Connectors that buffer internally (for example an exporter sending in the
    background) must deliver everything they have accepted before `close()` returns.
@@ -168,8 +178,9 @@ never starts work by itself.
 
 Threading: the importer calls a connector from one thread only, so connectors need no locks.
 Each call must finish within the connector's own `timeout` option (default 10 seconds). The
-importer does not wrap calls in threads, so a connector that ignores its timeout would stall
-only the importer process, never the MCP traffic. Our own `ALR08-S01` rule exists for exactly
+importer does not wrap calls in threads, so a connector that ignores its timeout stalls the
+importer's other outputs too. It never stalls the MCP traffic, because the importer is a separate
+process from the proxy. Our own `ALR08-S01` rule exists for exactly
 this, and connector code must pass the self-scan.
 
 ### 4.1 Event batch format
@@ -220,7 +231,8 @@ Rules:
 
 ## 5. Error behavior
 
-Connectors raise one of three exceptions, defined in `connectors.py`:
+Connectors signal failures with three exceptions, defined in `connectors.py`. Anything else
+counts as a bug:
 
 | Exception | Meaning | What the importer does |
 |---|---|---|
@@ -236,10 +248,11 @@ Connectors raise one of three exceptions, defined in `connectors.py`:
 never block the importer's normal pass, which keeps running every 0.1 s for the other outputs.
 
 **Bounded memory.** Each connector holds at most `max_pending_batches` waiting batches (default
-100). When that is full, the **oldest** batch is dropped. The connector warns with a running
-count, and the final summary line reports it. Nothing is lost for good: every event can be
-rebuilt from the trace files, and all three kinds deduplicate. So the fix is to run
-`import-logs --once --connector NAME` again once the destination is back.
+100, which is up to 50,000 events at the default batch size). When that is full, the **oldest**
+batch is dropped. The connector warns with a running count, and the final summary line reports
+it. Nothing is lost for good: every event can be rebuilt from the trace files, and all three
+kinds deduplicate. So the fix is to run `import-logs --once --connector NAME` again once the
+destination is back.
 
 **Never in the request path.** No connector error can reach the proxy. The importer is a separate
 process that only reads log files (see `docs/runtime.md`).
@@ -303,14 +316,14 @@ agent-latch-runtime import-logs \
   show secrets only as `env:` references. The core never logs option values. `connectors` and
   error messages show `KEY=***` for every option.
 - **Options every connector gets** (handled by the core, not the connector): `payloads`
-  (default `false` for exporters and archives), `max_batch_events`, `max_pending_batches`,
+  (default `false` for exporters, archives and remote stores), `max_batch_events`, `max_pending_batches`,
   `timeout`.
 
 ### 6.3 Where connector code lives
 
 Connectors are **separate packages kept in this repository**, in one top-level folder:
 
-```
+```text
 connectors/
   README.md                         # list of connectors, how to add one
   _template/                        # copy this to start a new connector
@@ -387,8 +400,11 @@ that prove it:
   traffic.
 - Not a replacement for the ledger (`ALR15`). Sending events to a store or archive does not prove
   they were not edited.
-- Gate results and ledger files are out of scope for `CONNECTOR_API = 1`. They can be added later
-  as optional batch types without breaking version 1.
+- Not a way to ship ledger files. Archiving the ledger is out of scope for `CONNECTOR_API = 1`.
+- Gate results (findings) are **planned but not in the first release**. They will arrive as a
+  second, opt-in batch type, `agentlatch.runtime.gate-results/1`. A connector declares that it
+  accepts it, so a dashboard can show alerts and not only raw events. Connectors that do not
+  declare it keep receiving events only, so `CONNECTOR_API` stays `1`.
 
 ## 9. Proposed rollout
 
@@ -399,12 +415,4 @@ that prove it:
    local and stdlib-only, so it proves the contract with no network behavior.
 4. Add network connectors (PostgreSQL, OpenTelemetry), each documented as opt-in network
    behavior.
-
-## 10. Open questions for review
-
-1. Is a default of 100 pending batches per connector right? That is up to 50,000 events in
-   memory.
-2. Should `--once` exit `1` rather than `2` when a connector fails? This draft keeps `2` to match
-   the current database behavior.
-3. Should a later contract version carry gate results (findings) to exporters, so a dashboard sees
-   alerts and not only raw events?
+5. Add the gate-results batch type (section 8) so exporters can forward findings.
