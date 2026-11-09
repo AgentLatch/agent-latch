@@ -55,7 +55,7 @@ There are three kinds. They share one lifecycle but promise different things.
 | Plain meaning | A database you query later | Forwards events to another live system | Long-term, write-once copy |
 | Examples | SQLite (today), PostgreSQL, DuckDB | OpenTelemetry, Splunk HEC, a webhook | Folder of `.jsonl.gz` files, S3 bucket |
 | Keeps the data? | Yes, and can read it back | No, the other system keeps it | Yes, but it is not meant for queries |
-| Duplicate handling | **Must** ignore an event it already has (`run_id`, `order`) | Sends the event key `(run_id, order)` with every event so the receiver can drop duplicates | Object named by `batch_id`, so a retry overwrites identical bytes; readers drop duplicates by event key (section 4.1) |
+| Duplicate handling | Merges by event key `(run_id, order)` (section 4.1) | Sends the event key with every event so the receiver can merge duplicates | Objects are write-once and named by `batch_id` plus a content hash, so nothing is ever overwritten; readers merge by event key (section 4.1) |
 | Typical failure | Database locked or unreachable | Network down, rate limited | Disk full, bucket permission |
 | Gets payloads by default? | **No**, unless the operator opts in (`--database` is unchanged and keeps storing them) | **No**, unless the operator opts in | **No**, unless the operator opts in |
 | Network use | Only if it is a remote database | Always | Only if it is remote |
@@ -225,10 +225,22 @@ Rules:
   many lines each pass happened to read, so a later replay of the same logs (for example
   `--once` after a follow-mode run) can group the same events into different batches with
   different `batch_id`s. Every consumer must therefore treat `(run_id, order)` as the identity of
-  an event: stores ignore a key they already have, exporters send the key so the receiver can drop
-  duplicates, and archive readers keep the first copy of each key. An archive connector may also
-  skip keys it has already written (for example from a small local index under `log_dir`), but
-  readers must not rely on that.
+  an event. An archive connector may also skip keys it has already written (for example from a
+  small local index under `log_dir`), but readers must not rely on that.
+- **A later copy can be more complete, so duplicates are merged, not dropped.** In follow mode a
+  trace record waits only 2 seconds for its payload record; if the payload arrives later, the
+  event goes out with `payload: null`, and a later `--once` replay produces the same key *with*
+  the payload. When a key is seen again, a connector keeps every field it already has and fills
+  in only `payload` and `payloads` if they were `null` before. It never replaces a non-null value
+  and never discards the more complete copy just because the key was seen before. Stores update
+  the row, exporters send the event again (receivers apply the same rule), and archive readers
+  prefer the copy with a payload. The `--database` store is unchanged and keeps its current
+  `INSERT OR IGNORE`. Changing it is out of scope here (section 7).
+- **Archive objects are write-once.** An archive names each object
+  `<batch_id>-<sha256 of the object's bytes>`, so a retry of an identical batch maps to the same
+  name and is a no-op, and a replay with different contents (for example now with a payload) gets
+  a new name. A connector must never overwrite an existing object. Where the destination supports
+  it, it writes with "create only if absent" (for example `O_EXCL` locally, or a conditional put).
 - **Each event** is the normalized event that every gate and `normalized.jsonl` already see:
 
   | Field | Type | Notes |
@@ -281,10 +293,12 @@ batch is dropped. The connector warns with a running count, and the final summar
 it. Nothing is lost for good: every event can be rebuilt from the trace files, and all three
 kinds deduplicate by event key. So the fix is to run `import-logs --once` again once the
 destination is back, with the **same** input paths, connector instance and options as the
-original run, for example:
+original run, and the same `--run-id` if the original run set one (otherwise the run id is
+derived from the trace again and matches by itself). For example:
 
 ```bash
 agent-latch-runtime import-logs --once --dir runtime-logs \
+  [--run-id ID] \
   --connector pg=postgres \
   --connector-option pg.dsn=env:AGENTLATCH_PG_DSN \
   --connector-option pg.table=agent_events
