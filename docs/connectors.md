@@ -202,8 +202,10 @@ Threading: the importer calls a connector from one thread only, so connectors ne
 Each call must finish within the connector's own `timeout` option (default 10 seconds). The
 importer does not wrap calls in threads, so a connector that ignores its timeout stalls the
 importer's other outputs too. It never stalls the MCP traffic, because the importer is a separate
-process from the proxy. Our own `ALR08-S01` rule exists for exactly this, and connector code
-must pass the self-scan.
+process from the proxy. Connector code must also pass the repo's self-scan, whose `ALR08-S01`
+rule flags common HTTP calls made without a timeout. That rule only recognizes selected call
+patterns, so a clean scan does not prove that every connector call has a deadline: each
+connector's tests must cover its timeout handling too.
 
 ### 4.1 Event batch format
 
@@ -259,10 +261,20 @@ Rules:
     so the new name survives a crash. Only after that does `write` report success. A failed write
     therefore never leaves a partial object under the final name. On macOS, plain `fsync` does
     not force the drive's cache to permanent storage, so every sync above uses
-    `fcntl(fd, F_FULLFSYNC)` there instead. If any sync step fails, `write` does not report
-    success: it raises `ConnectorUnavailable` and the batch is retried. (Where a platform cannot
-    sync a folder, such as Windows, the connector skips that step and says so in its
-    documentation, and it does not promise that an object survives a power loss there.)
+    `fcntl(fd, F_FULLFSYNC)` there instead. A sync failure is handled by its cause:
+    - **Not supported** (for example `ENOTSUP` or `EINVAL` from `F_FULLFSYNC` on a network or
+      FUSE file system): this will never succeed, so it is not retried. The connector checks for
+      it once in `open()` by syncing a test file in the archive folder and raises
+      `ConnectorConfigError` (exit `2`) unless the operator chose
+      `--connector-option NAME.durability=best-effort`. In that mode the connector uses plain
+      `fsync` (or no folder sync where none exists), logs once at open that objects may not
+      survive a power loss, and reports success after the steps it can do.
+    - **Temporary** (for example `EINTR`, `EAGAIN`, `ENOSPC`, or an I/O error on a device that
+      may come back): `write` does not report success; it raises `ConnectorUnavailable` and the
+      batch is retried with the usual backoff.
+
+    Platforms that cannot sync a folder at all, such as Windows, need `durability=best-effort`,
+    and the connector's documentation says so.
   - **Object stores:** use a conditional put ("only if absent").
   - **Name already exists:** read the existing object and check that its SHA-256 matches the name
     and the intended bytes, and (for local files) sync the containing folder as above, since an
