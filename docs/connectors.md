@@ -249,8 +249,10 @@ Rules:
   object:
   - **Local files:** write the complete bytes to a temporary file in the same folder, flush and
     `fsync` it, then publish it with a create-only atomic step (`os.link` to the final name, which
-    fails if the name exists), and remove the temporary file. A failed write therefore never
-    leaves a partial object under the final name.
+    fails if the name exists), remove the temporary file, and then `fsync` the containing folder
+    so the new name survives a crash. Only after that does `write` report success. A failed write
+    therefore never leaves a partial object under the final name. (Where a platform cannot sync a
+    folder, such as Windows, the connector skips that step and says so in its documentation.)
   - **Object stores:** use a conditional put ("only if absent").
   - **Name already exists:** read the existing object and check that its SHA-256 matches the name
     and the intended bytes. Only then is the write a no-op success. A mismatch means the existing
