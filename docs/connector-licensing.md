@@ -210,6 +210,28 @@ but only if the files are kept exactly as they are:
    event key), and then keeps following, so this one step both catches up and resumes live
    delivery.
 
+**Stateful gates after a restart (known gap).** Step 4 restarts the importer, and a restarted
+importer skips every event whose gate rows are already in `gate-results.csv`. Gates that keep
+state between events, such as ALR03, therefore do not see those earlier events again. ALR03's
+identity baseline lives only in memory for one importer run (its `cross_run_baseline` check
+already reports `PARTIAL` for this reason), so after the restart the first handshake the importer
+evaluates, possibly one recorded while it was stopped, becomes the new baseline, and an identity
+change across the stop can be missed. This is a property of any importer restart, not of
+licensing, and this design does not change it. To check the whole recording again with fresh gate
+state, run one extra pass after step 4, over the same kept log files and with outputs that do
+not exist yet, so nothing is skipped:
+
+```bash
+agent-latch-runtime import-logs --once --dir recheck \
+  --trace PATH/trace.jsonl --payloads PATH/payloads.jsonl --run-id RUN_ID
+```
+
+`--dir recheck` sends every output of this pass (events, gate results, normalized events) to a
+new folder. Leave out `--connector` and `--database`, so the pass only evaluates gates.
+Review the findings with
+`agent-latch --runtime-result recheck/gate-results.csv`. The live importer from step 4 keeps
+running unchanged.
+
 **Log rotation is out of scope here.** Rotating the proxy's log files touches the trace, the
 payloads file, the audit ledger and its anchor, and the state the runtime gates keep, none of
 which is about licensing. This design does not define a rotation procedure. Until one is
