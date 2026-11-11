@@ -25,6 +25,7 @@ Set up the gateway once with [SETUP.md](SETUP.md) before using this guide. From 
 |---|---|---|
 | Speaks MCP (ECC, CrewAI) | Point it straight at the gateway | Gateway + MCP client verified; per-framework wiring from each project's docs |
 | Takes plain Python tools (BabyAGI, Swarm, classic AutoGPT) | Use [`bridge.py`](bridge.py), which turns the gateway's tools into callables | `bridge.py` verified over stdio and HTTP |
+| Written in JavaScript or TypeScript | Use the [JS connector](js/README.md). It gives your code the gateway's tools as normal functions, or hands them to Claude | Connector tests run against the real gateway over stdio and HTTP |
 
 **What I verified here:** the gateway, and `bridge.py` connecting to it over both stdio and HTTP and calling tools. **What I did not run end to end:** each agent framework with live model keys. The per-agent steps below follow each project's own documentation; treat them as a starting point and check the project's README for its current version.
 

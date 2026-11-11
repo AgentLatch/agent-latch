@@ -19,7 +19,7 @@
 
 ![Example AgentLatch scan showing detected security findings](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/gent-latch-scan-example.png)
 
-> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs one preview gate, ALR04, on MCP tool definitions. It reports findings and does not block calls.
+> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs two preview gates: ALR03 on the connection handshake and ALR04 on MCP tool definitions. It reports findings and does not block calls.
 
 ## What AgentLatch does so far
 
@@ -225,7 +225,7 @@ agent-latch-runtime demo
 
 `demo` starts the synthetic server behind the real proxy, makes a few tool calls (one returns a fake credential, one fails), then imports the logs. This is real output:
 
-![Output of agent-latch-runtime demo: ten MCP events, from tools/list to prompts/get, each joined with its payload](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/runtime-demo.svg)
+![Output of agent-latch-runtime demo: eleven MCP events, from initialize to prompts/get, each joined with its payload](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/runtime-demo.svg)
 
 Watch a real agent. Put the proxy in front of any MCP server, then follow its logs from a second terminal:
 
@@ -495,7 +495,7 @@ The goal is to grow in layers:
 
 1. **Now: local scanner.** Focused checks of Python source, agent manifests, and prompt templates; optional Python dependency advisories; portable reports; and pre-commit and GitHub Action integrations.
 2. **Now, preview: runtime recording for MCP.** A proxy records live MCP tool traffic with secrets masked, and an importer turns it into reviewable events. `--database FILE` optionally keeps those events in a local SQLite file. It never blocks, and it does not upload them.
-3. **Now, preview: one runtime gate.** ALR04 reports a finding when a MCP tool definition (name, description, or schema) contains instruction-like content, and maps that finding to ASI01, ASI02, and ASI04. Calls are not blocked. The report lists findings only.
+3. **Now, preview: two runtime gates.** ALR03 reports a finding when an MCP server does not identify itself, its identity changes, or its declared name impersonates a known server, and ALR04 reports a finding when a MCP tool definition (name, description, or schema) contains instruction-like content. Calls are not blocked. The report lists findings only.
 4. **Planned: enforcement and adapters.** Blocking only when the operator turns it on in their own policy; framework adapters and broader evaluation checks after that.
 
 These layers will remain clearly distinguished: detecting a risky pattern is not the same as testing agent behavior, and neither alone guarantees runtime enforcement.
