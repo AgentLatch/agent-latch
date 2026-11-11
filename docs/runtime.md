@@ -291,7 +291,7 @@ agent-latch-runtime verify --ledger runtime-logs/trace.ledger.jsonl \
   --trace runtime-logs/trace.jsonl --anchor /mnt/audit/anchors.jsonl
 ```
 
-`agent-latch --runtime-result FILE --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl` prints the verdict as the first thing in the report, in bold in a terminal:
+`agent-latch --runtime-result FILE --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl` prints the verdict as the first thing in the report, in bold in a terminal (add `--database FILE [--database-anchor PATH]` for the event store's verdict too; the findings are listed by gate):
 
 ```
 AUDIT TRAIL TAMPERED — a record was altered; the log cannot be trusted.

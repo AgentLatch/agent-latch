@@ -128,7 +128,9 @@ machine at that time.
 The report you already generate can carry the verdict as its first line, followed by a table with
 one row per record (add `--ledger-rows 0` for all of them). For code scanning or another SARIF
 viewer, add `--format sarif --output audit.sarif`: a failed trail becomes `ALR15-R01` results
-located in the ledger file, and the verdict is kept in the run properties.
+located in the ledger file, and the verdict is kept in the run properties. If you also keep an
+event store, add `--database runtime-logs/events.db --database-anchor /Volumes/audit/store-anchors.jsonl`
+so its verdict is shown too; a store that does not seal its rows is reported as `ALR15-R02`.
 
 ```sh
 agent-latch scan . \

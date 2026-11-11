@@ -63,6 +63,7 @@ from agent_latch.runtime.normalizer import (
     run_id_for,
     trace_key,
 )
+from agent_latch.runtime.store_check import STORE_ORDER, UNSEALED_GATE_ID, unsealed_result
 from agent_latch.runtime.trace import summarize_record
 
 log = logging.getLogger("agent_latch.runtime")
@@ -303,6 +304,8 @@ class RuntimeLogImporter:
         self._done: set[tuple[str, ...]] = set()
         self._events_done: set[tuple[str, ...]] = set()
         self._normalized_done: set[tuple[str, str]] = set()
+        # Set when the store does not seal its rows: reported once per run as ALR15-R02.
+        self._unsealed_store: str | None = None
         self._unsaved: list[dict[str, Any]] = []  # events waiting for the store
         self._store_failing = False
         # Rows found past the newest anchor, by (run_id, order): each must equal the event rebuilt
@@ -472,6 +475,7 @@ class RuntimeLogImporter:
                 " detected (only a sealed store is tamper-evident)",
                 type(store).__name__,
             )
+            self._unsealed_store = type(store).__name__
             return
         points: list[Any] = []
         if self.anchor is not None:
@@ -734,6 +738,7 @@ class RuntimeLogImporter:
             self._unsaved.append(copy.deepcopy(event))  # saved at the end of this pass
         findings = errors = 0
         if self._csv is not None and self._writer is not None:
+            findings += self._record_unsealed_store(run_id)
             for gate in self.gates:
                 if (run_id, order, gate.gate_id) in self._done:
                     continue
@@ -759,6 +764,24 @@ class RuntimeLogImporter:
             self.summary.write(f"agent-latch-runtime: {line}\n")
             self.summary.flush()
 
+
+    def _record_unsealed_store(self, run_id: str) -> int:
+        """Write the ALR15-R02 row for an unsealed store once per run; return findings written."""
+        key = (run_id, STORE_ORDER, UNSEALED_GATE_ID)
+        if self._unsealed_store is None or self._writer is None or key in self._done:
+            return 0
+        assert self._csv is not None
+        where = str(self.store.path) if self.store and self.store.path else self._unsealed_store
+        result = unsealed_result(where, f"{self._unsealed_store} does not seal its rows")
+        self._writer.writerow({
+            "run_id": run_id,
+            "order": STORE_ORDER,
+            "gate_id": UNSEALED_GATE_ID,
+            "result_json": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+        })
+        self._csv.flush()
+        self._done.add(key)
+        return 1
 
 def _csv_writer(
     output: TextIO, columns: tuple[str, ...], key: tuple[str, ...]

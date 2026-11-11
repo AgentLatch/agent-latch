@@ -8,6 +8,7 @@ No test uses the network; synthetic fixtures only.
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ from typing import Any
 import pytest
 from store_contract import assert_store_is_append_only, sample_events
 
+from agent_latch import cli as scanner_cli
 from agent_latch.runtime import (
     PayloadFile,
     PayloadTap,
@@ -36,7 +38,7 @@ from agent_latch.runtime import (
     sqlite_store,
 )
 from agent_latch.runtime import importer as importer_module
-from agent_latch.runtime.importer import RuntimeLogImporter
+from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
 from agent_latch.runtime.ledger.anchor import AnchorError, AnchorPoint, FileAnchor
 from agent_latch.runtime.ledger.chain import GENESIS, Ledger
 from agent_latch.runtime.ledger.event_seal import (
@@ -63,6 +65,7 @@ from agent_latch.runtime.sqlite_store import (
     event_to_row,
     row_to_event,
 )
+from agent_latch.runtime.store_check import unsealed_result
 
 FIXTURES = Path(__file__).resolve().parent / "runtime_fixtures"
 
@@ -1434,11 +1437,18 @@ def test_an_unsealed_store_is_imported_with_a_warning(
     """A store that does not seal its rows still gets events, but never silently."""
     trace, _ = _record_run(tmp_path / "run", payloads=False)
     store = _UnsealedStore()
-    importer = RuntimeLogImporter(trace, None, [], store=store, follow=False)
+    gates = tmp_path / "gate-results.csv"
     with caplog.at_level("WARNING", logger="agent_latch.runtime"):
-        importer.run()
+        RuntimeLogImporter(trace, gates, discover_gates(), store=store, follow=False).run()
+        # A second import of the same run must not report it twice.
+        RuntimeLogImporter(trace, gates, discover_gates(), store=store, follow=False).run()
     assert store.saved
     assert "_UnsealedStore does not seal its rows" in caplog.text
+    rows = [row for row in csv.DictReader(gates.open(encoding="utf-8")) if row["gate_id"] == "ALR15"]
+    assert len(rows) == 1 and rows[0]["order"] == "store"
+    finding = json.loads(rows[0]["result_json"])["findings"][0]
+    assert finding["rule_id"] == "ALR15-R02" and finding["severity"] == "high"
+    assert finding["owasp"] == ["ASI10"]
 
 
 def test_an_anchor_is_refused_for_a_store_that_does_not_seal(tmp_path: Path) -> None:
@@ -1450,3 +1460,130 @@ def test_an_anchor_is_refused_for_a_store_that_does_not_seal(tmp_path: Path) -> 
             anchor=FileAnchor(tmp_path / "anchors.jsonl"), follow=False,
         )
     assert not (tmp_path / "anchors.jsonl").exists()
+
+
+# --- the event store in agent-latch --runtime-result (ALR15) ---------------------------------------
+
+
+def _report(tmp_path: Path, *extra: str) -> int:
+    """``agent-latch --runtime-result`` over an empty gate-results file plus ``extra`` flags."""
+    gates = tmp_path / "gate-results.csv"
+    if not gates.exists():
+        gates.write_text("run_id,order,gate_id,result_json\n", encoding="utf-8")
+    return scanner_cli.main([str(tmp_path), "--runtime-result", str(gates), "--plain", *extra])
+
+
+def _v2_store(database: Path) -> None:
+    """An older (version 2) store: rows, and no seals."""
+    conn = sqlite3.connect(database, isolation_level=None)
+    for step in sqlite_store.MIGRATIONS[:2]:
+        step(conn)
+    conn.execute("PRAGMA user_version = 2")
+    for event in sample_events(2):
+        conn.execute(
+            f"INSERT INTO events ({', '.join(COLUMNS)}) VALUES ({', '.join('?' for _ in COLUMNS)})",
+            event_to_row(event, "2026-01-01T00:00:00.000Z"),
+        )
+    conn.close()
+
+
+def test_report_shows_an_intact_store_under_alr15(
+    sealed: Sealed, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An intact store gets a verdict and no finding, and the report passes."""
+    code = _report(sealed.root, "--database", str(sealed.database),
+                   "--database-anchor", str(sealed.anchor), "--fail-on", "high")
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "Event store:" in out and "intact" in out.lower()
+    assert "ALR15-R02" not in out
+
+
+def test_report_fails_a_tampered_store_even_with_fail_on_none(
+    sealed: Sealed, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A changed row fails the report: integrity is not a severity threshold."""
+    conn = _connect_as_attacker(sealed.database)
+    conn.execute("UPDATE events SET name = 'nothing_to_see' WHERE seal_seq = 2")
+    conn.close()
+    code = _report(sealed.root, "--database", str(sealed.database),
+                   "--database-anchor", str(sealed.anchor), "--fail-on", "none")
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "tampered" in captured.out.lower()
+    assert "event store tampered" in captured.err
+
+
+def test_report_lists_an_unsealed_store_as_alr15_r02(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An older, unsealed store is a finding under its gate, and fails even with --fail-on none."""
+    database = tmp_path / "old.db"
+    _v2_store(database)
+    code = _report(tmp_path, "--database", str(database), "--fail-on", "none")
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "== ALR15 Tamper-evident audit trail ==" in out
+    assert "ALR15-R02" in out and "Event store is not tamper-evident" in out
+    assert sqlite_store.stored_schema_version(database) == 2  # the report never upgrades it
+
+
+def test_report_sarif_carries_the_store_verdict_and_the_unsealed_finding(
+    sealed: Sealed, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """SARIF names the gate on every result: R01 for a changed store, R02 for an unsealed one."""
+    conn = _connect_as_attacker(sealed.database)
+    conn.execute("DELETE FROM events WHERE seal_seq = 2")
+    conn.close()
+    sarif_path = sealed.root / "report.sarif"
+    _report(sealed.root, "--database", str(sealed.database), "--database-anchor",
+            str(sealed.anchor), "--format", "sarif", "--output", str(sarif_path))
+    run = json.loads(sarif_path.read_text(encoding="utf-8"))["runs"][0]
+    assert run["properties"]["eventStore"]["status"] == "deleted"
+    results = [r for r in run["results"] if r["ruleId"] == "ALR15-R01"]
+    assert results and all(r["properties"]["gate"]["id"] == "ALR15" for r in results)
+    location = results[0]["locations"][0]
+    assert location["physicalLocation"]["artifactLocation"]["uri"].endswith("events.db")
+    assert "region" not in location["physicalLocation"]  # a database has no lines
+
+    old = tmp_path / "unsealed"
+    old.mkdir()
+    _v2_store(old / "old.db")
+    capsys.readouterr()
+    _report(old, "--database", str(old / "old.db"), "--format", "sarif",
+            "--output", str(old / "r.sarif"))
+    run = json.loads((old / "r.sarif").read_text(encoding="utf-8"))["runs"][0]
+    (result,) = [r for r in run["results"] if r["ruleId"] == "ALR15-R02"]
+    assert result["properties"]["gate"] == {"id": "ALR15", "name": "Tamper-evident audit trail"}
+    assert result["level"] == "error"
+
+
+def test_report_refuses_a_missing_store_and_flags_without_their_partner(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A store that is not there, or flags given alone, are usage errors (exit 2)."""
+    assert _report(tmp_path, "--database", str(tmp_path / "nope.db")) == 2
+    assert "no event store" in capsys.readouterr().err
+    assert _report(tmp_path, "--database-anchor", str(tmp_path / "a.jsonl")) == 2
+    assert scanner_cli.main([str(tmp_path), "--database", str(tmp_path / "x.db")]) == 2
+
+
+def test_runtime_findings_are_grouped_by_gate(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Findings are listed gate by gate (catalog order), the most severe first within a gate."""
+    gates = tmp_path / "gate-results.csv"
+    rows = [
+        ("1", "ALR15", unsealed_result("events.db", "the store does not seal its rows")),
+        ("2", "ALR04", {"gate_id": "ALR04", "status": "ok", "error": None, "findings": [
+            {"rule_id": "ALR04-004", "is_finding": True, "severity": "medium",
+             "message": "tool text", "owasp": ["ASI01"]},
+        ]}),
+    ]
+    with gates.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["run_id", "order", "gate_id", "result_json"])
+        for order, gate, result in rows:
+            writer.writerow(["run", order, gate, json.dumps(result)])
+    scanner_cli.main([str(tmp_path), "--runtime-result", str(gates), "--plain"])
+    out = capsys.readouterr().out
+    assert out.index("== ALR04 ") < out.index("ALR04-004") < out.index("== ALR15 ")
+    assert out.index("== ALR15 ") < out.index("ALR15-R02")

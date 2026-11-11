@@ -279,6 +279,9 @@ GATES: tuple[Gate, ...] = (
             ("ALR15-R01", "runtime",
              ("An agent, or whoever holds its account, can hide what it did by editing or "
               "rebuilding its own audit log")),
+            ("ALR15-R02", "runtime",
+             ("An event store that does not seal its rows can be changed without a trace, so "
+              "its record cannot be checked at all")),
         ),
     ),
 )

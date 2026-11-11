@@ -280,6 +280,33 @@ exits `2`. Exit codes are the same as for text.
 | `1` | Trail failed, **or** a finding matched `--fail-on`. A failed trail fails even with `--fail-on none` |
 | `2` | No ledger at that path, or a missing CSV/project |
 
+### `agent-latch --runtime-result CSV --database FILE [--database-anchor PATH] [--format sarif]`
+
+Checks the event store written by `import-logs --database` the same way `verify --database` does
+(read-only; it never upgrades or seals the file) and prints its verdict in an **Event store** panel
+above the findings. Use it with or without `--ledger`; the store has its own anchor file, so its
+anchor is `--database-anchor`, not `--anchor`. `--database` without `--runtime-result`, or
+`--database-anchor` without `--database`, is a usage error (`2`).
+
+Two detectors of gate `ALR15` can appear:
+
+- **`ALR15-R01`**: a changed, deleted or rebuilt store, the same six verdicts as the ledger. In SARIF
+  each problem is a result located in the database file (no line: a database has none) with the seal
+  number as a logical location, and the verdict is in the run properties (`eventStore`).
+- **`ALR15-R02` Event store is not tamper-evident** (severity high): the store's rows carry no seals,
+  so nothing in it can be checked. The report raises it for an older (version 2) database, and
+  `import-logs` writes it to `gate-results.csv` (one row per run, `order` = `store`) when it is given
+  a store that does not seal. It appears in the findings table and in SARIF like any gate finding.
+
+The findings table lists every runtime finding grouped by gate, in catalog order (a `Gate` column in
+a terminal, a `== ALRnn name ==` heading in `--plain`), most severe first within a gate.
+
+| Exit | Meaning |
+|---|---|
+| `0` | Store `intact`/`unanchored` and no finding at or above `--fail-on` |
+| `1` | Store failed its check, **or** it is unsealed, **or** a finding matched `--fail-on`. The first two fail even with `--fail-on none` |
+| `2` | No store at that path, a store with no rows and no anchor, a file that is not an AgentLatch store, or a missing CSV/project |
+
 ## Adding another anchor destination
 
 The contract is three members:

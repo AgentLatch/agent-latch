@@ -47,7 +47,7 @@ AgentLatch is often run on agents someone else wrote, so nothing inside the scan
 | ASI07 | Insecure Inter-Agent Communication | `ALR03`, `ALR12` | `ALR03-S01`, `ALR12-S01` (partial) |
 | ASI08 | Cascading Failures | `ALR08` | `AG007`, `ALR08-S01`, `ALR08-S02` (partial) |
 | ASI09 | Human-Agent Trust Exploitation | `ALR09` | `AG004`, `AG006`, `MAN001` (partial) |
-| ASI10 | Rogue Agents | `ALR14`, `ALR15` | `ALR14-S01`, `ALR14-S02`, `ALR14-S03`, `ALR15-R01` (partial) |
+| ASI10 | Rogue Agents | `ALR14`, `ALR15` | `ALR14-S01`, `ALR14-S02`, `ALR14-S03`, `ALR15-R01`, `ALR15-R02` (partial) |
 
 Keep this table up to date whenever a rule is added or its OWASP mapping changes.
 
@@ -58,7 +58,7 @@ A gate is a security outcome (for example `ALR09` Human approval for sensitive a
 - A detector's OWASP IDs must be a subset of its gate's. A test checks this, and that every rule in `RULE_CATEGORIES` and every ALR04 rule ID has a gate (or is listed in `DIAGNOSTICS`).
 - `docs/GATES.md` is generated: `python -I -m agent_latch.catalog > docs/GATES.md`. A test fails when it is out of date.
 - Framework mappings are informational. Never claim compliance with the EU AI Act, ISO/IEC 42001 or OWASP.
-- `ALR15` (tamper-evident audit trail, `ASI10`) is verified by `runtime/ledger/verify.py`, not by a module in `gates/`. Its detector is `ALR15-R01`. A gate whose evidence is a whole-file property, like this one, belongs in the catalog and in the report, not in the per-event plugin loader.
+- `ALR15` (tamper-evident audit trail, `ASI10`) is verified by `runtime/ledger/verify.py`, not by a module in `gates/`. Its detectors are `ALR15-R01` (the six verdicts, for the trace ledger and the event store) and `ALR15-R02` (an event store that does not seal its rows, so nothing can be checked). A gate whose evidence is a whole-file property, like this one, belongs in the catalog and in the report, not in the per-event plugin loader.
 - `agent_latch/gates/` holds runtime gate plugins only (one module per gate, `GATE_ID` = the gate ID). Keep the catalog out of that package: the importer loads every module in it as a plugin.
 
 ## Repository layout
@@ -97,7 +97,8 @@ src/agent_latch/
     normalizer.py # MCPEventNormalizer: joins a trace record and its payload record into one event
     importer.py   # RuntimeLogImporter: tails logs, writes events, runs gates; optional EventWriter (EventReader is the read-only view)
     sqlite_store.py # SQLiteEventStore (writer, seals rows, triggers) and SQLiteEventReader (read-only), stdlib sqlite3 (`--database`)
-    results.py    # agent-latch --runtime-result: findings table from gate-results.csv, for every gate
+    results.py    # agent-latch --runtime-result: findings from gate-results.csv grouped by gate, plus the ledger and store verdicts
+    store_check.py # check_store: one read-only look at an event store (verdict, unsealed, or error); the ALR15-R02 finding
     ledger/       # ALR15: tamper-evident hash chain over trace records, plus anchor points (stdlib, local)
       canonical.py # stable JSON bytes: the same value always hashes to the same digest
       chain.py    # block format, digest, Ledger (resumes from the last block), iter_blocks
@@ -167,7 +168,8 @@ agent-latch [scan] [path] [--config MANIFEST] [--exclude PATH]... [--ignore-file
             [--project-ignores] [--dependencies] [-i/--interactive]
             [--format text|json|sarif] [--output FILE] [--plain] [--min-severity LEVEL]
             [--fail-on none|low|medium|high|critical]
-            [--runtime-result [CSV]] [--ledger FILE] [--anchor PATH] [--ledger-rows N] [-V]
+            [--runtime-result [CSV]] [--ledger FILE] [--anchor PATH] [--ledger-rows N]
+            [--database FILE] [--database-anchor PATH] [-V]
 
 agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
             [--payloads FILE] [--payload-max-chars N] [--ledger FILE] [--quiet]
@@ -185,7 +187,7 @@ agent-latch-runtime demo [--dir DIR]
 
 `--database FILE` is the operator's choice of a local store. It saves each normalized event in a SQLite file (`SQLiteEventStore`) and is off when omitted. The importer talks to that file only through the `EventWriter` contract in `importer.py` (`open`, `save`, `close`; `EventStore` is its old name), and anything that shows events to an agent or a dashboard gets an `EventReader` (`SQLiteEventReader`: read-only connection that refuses every statement but a read), never the writer. SQLite is the first implementation, using the standard-library `sqlite3` module, so it adds no dependency and makes no network request. A later destination (a warehouse or an opt-in trace exporter) implements the same contract and is selected the same way: by a flag on `import-logs`, not by a default. The database can hold payload data, so a new file is created with mode `0600` where the platform supports it. Keep it local. Do not add a vendor client as a required dependency.
 
-**Stores are append-only and sealed.** Every row carries `seal_seq`, `seal_prev` and `seal_digest`, computed in `runtime/ledger/event_seal.py` (never by the database), chained like the trace ledger under its own domain tag. A saved key is never overwritten. `import-logs --database` checks the store before it adds anything and refuses a store that no longer matches its seals, its table layout or its anchor (exit `1`, never repaired or re-sealed, and no forged head is anchored, as long as the agent cannot write the store: someone who can write it can still append a correctly sealed row before it is published, so keep the store in another OS user or container, and protect the trace and payload files too, because the importer seals and anchors whatever they hold; found at start nothing is added, found while it runs it stops before saving or publishing anything newer); `--anchor PATH` publishes the newest seal (one anchor file per chain), and `verify --database FILE [--anchor PATH]` reports the same six verdicts. Database guards (the SQLite triggers in migration 4) are an extra and nothing relies on them; the protection is the seal, the anchor and keeping the store in another OS user or container. A new store implements the writer and reader contracts and passes `tests/store_contract.py`. Never edit a shipped migration; append one. Docs: `docs/ledger.md` (model), `docs/ledger-reference.md` (formats and exit codes), `docs/audit-trail-dev/` (build, test, debug).
+**Stores are append-only and sealed.** Every row carries `seal_seq`, `seal_prev` and `seal_digest`, computed in `runtime/ledger/event_seal.py` (never by the database), chained like the trace ledger under its own domain tag. A saved key is never overwritten. `import-logs --database` checks the store before it adds anything and refuses a store that no longer matches its seals, its table layout or its anchor (exit `1`, never repaired or re-sealed, and no forged head is anchored, as long as the agent cannot write the store: someone who can write it can still append a correctly sealed row before it is published, so keep the store in another OS user or container, and protect the trace and payload files too, because the importer seals and anchors whatever they hold; found at start nothing is added, found while it runs it stops before saving or publishing anything newer); `--anchor PATH` publishes the newest seal (one anchor file per chain), and `verify --database FILE [--anchor PATH]` and `agent-latch --runtime-result --database FILE [--database-anchor PATH]` report the same six verdicts (both through `store_check.check_store`). A store that does not seal its rows is never accepted silently: `import-logs` warns, refuses `--anchor` with it, and writes an `ALR15-R02` row to `gate-results.csv`; the report raises `ALR15-R02` for an older unsealed database and exits `1`. Database guards (the SQLite triggers in migration 4) are an extra and nothing relies on them; the protection is the seal, the anchor and keeping the store in another OS user or container. A new store implements the writer and reader contracts and passes `tests/store_contract.py`. Never edit a shipped migration; append one. Docs: `docs/ledger.md` (model), `docs/ledger-reference.md` (formats and exit codes), `docs/audit-trail-dev/` (build, test, debug).
 
 `--ledger FILE` (with `--trace`) seals every trace record into a local hash chain, and `anchor` publishes one short digest to a path the operator chooses. `verify` and `agent-latch --runtime-result --ledger FILE [--anchor PATH]` report `intact`, `unanchored`, `tampered`, `deleted`, `rewritten` or `missing`. `verify PATH` finds the trace beside a ledger by name, and `verify FOLDER [--all]` checks every ledger below it and prints one row each. The report adds a per-record audit table (`--ledger-rows N`, default 20, problem records always shown), and `--runtime-result ... --format sarif` exports the verdict (rule `ALR15-R01`) with the runtime findings; `--format json` is refused there. Standard library only, no network, never in the request path: an append failure warns once on stderr and the call continues. The verifier lives in `runtime/ledger/`, not in `gates/` (that package is for per-event plugins). Docs: `docs/ledger.md` (model), `docs/ledger-setup.md`, `docs/ledger-reference.md`, `docs/ledger-operations.md`.
 

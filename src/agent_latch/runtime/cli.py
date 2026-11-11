@@ -34,7 +34,6 @@ from agent_latch.runtime.ledger.event_seal import (
 from agent_latch.runtime.ledger.report import format_summary_table
 from agent_latch.runtime.ledger.verify import (
     STATUS_MISSING,
-    _nothing_to_verify,
     find_ledgers,
     trace_for,
 )
@@ -44,6 +43,7 @@ from agent_latch.runtime.sqlite_store import (
     SQLiteEventStore,
     stored_schema_version,
 )
+from agent_latch.runtime.store_check import check_store
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
 
 DEFAULT_LOG_DIR = "runtime-logs"
@@ -476,41 +476,22 @@ def _verify_database(args: argparse.Namespace) -> int:
         return 2
     # `--anchor file:/path` must name the file the anchor commands write to, so resolve it once.
     anchor_path = make_anchor(args.anchor).path if args.anchor else None
-    if not database.is_file():
-        verification = _nothing_to_verify(
-            database, f"no event store at {database}", trace_path=None, anchor_path=anchor_path
-        )
-        if verification.status == STATUS_MISSING:
-            print(f"agent-latch-runtime: no event store at {database}", file=sys.stderr)
-            return 2
-        for line in describe(verification):
-            print(line)
-        return 1
-    if anchor_path is not None:
-        # A file whose schema version was lowered below its anchor's is tampering, not an old file.
-        try:
-            point = make_anchor(anchor_path).latest()
-        except (AnchorError, OSError):
-            point = None
-        issues = downgrade_issues(stored_schema_version(database), point)
-        if issues and point is not None:
-            for line in describe(downgrade_verdict(database.name, point, issues)):
-                print(line)
-            return 1
-    reader = SQLiteEventReader(database)
-    try:
-        reader.open()
-    except (ValueError, OSError) as error:
-        print(f"agent-latch-runtime: {error}", file=sys.stderr)
+    found = check_store(database, anchor_path)
+    if found.unsealed is not None or found.error is not None:
+        print(f"agent-latch-runtime: {found.unsealed or found.error}", file=sys.stderr)
         return 2
-    try:
-        verification = verify_store(reader, name=database.name, anchor_path=anchor_path)
-    finally:
-        reader.close()
+    verification = found.verification
+    assert verification is not None
+    if verification.status == STATUS_MISSING:
+        # No file (or no rows) and no anchor point: there is nothing to verify.
+        if not database.is_file():
+            print(f"agent-latch-runtime: no event store at {database}", file=sys.stderr)
+        else:
+            for line in describe(verification):
+                print(line)
+        return 2
     for line in describe(verification):
         print(line)
-    if verification.status == STATUS_MISSING:
-        return 2  # a store with no rows and no anchor point has nothing to verify
     return 1 if verification.failed else 0
 
 
