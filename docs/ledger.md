@@ -2,7 +2,7 @@
 
 The runtime proxy writes a log of what an agent did. That log is the only record you have. If the
 agent — or anyone with its account — can quietly edit it, it is not evidence: it is a story the
-agent tells about itself.
+agent tells about itself .
 
 The audit ledger is a small, local, standard-library layer that makes those edits visible. It does
 **not** move your logs, call a chain, add a dependency, or sit in the request path.
