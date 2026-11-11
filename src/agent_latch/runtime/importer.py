@@ -261,6 +261,11 @@ class RuntimeLogImporter:
             raise ValueError("poll_interval must be greater than zero")
         if anchor is not None and store is None:
             raise ValueError("an anchor needs a store: give --database with --anchor")
+        if anchor is not None and not isinstance(store, SealedSource):
+            raise ValueError(
+                f"{type(store).__name__} does not seal its rows, so it has no seal to anchor;"
+                " use a sealed store or leave out --anchor"
+            )
         store_path = store.path if store is not None else None
         anchor_path = anchor.path if anchor is not None else None
         paths = [
@@ -458,8 +463,16 @@ class RuntimeLogImporter:
     def _audit_store(self) -> None:
         """Refuse a store that no longer matches its seals, schema or anchor. Writes nothing."""
         store = self.store
-        if store is None or not isinstance(store, SealedSource):
-            return  # a store that does not seal its rows has nothing to check
+        if store is None:
+            return
+        if not isinstance(store, SealedSource):
+            # Nothing to check, but say so: an unsealed store can be changed without a trace.
+            log.warning(
+                "agent-latch-runtime: %s does not seal its rows; changes to it cannot be"
+                " detected (only a sealed store is tamper-evident)",
+                type(store).__name__,
+            )
+            return
         points: list[Any] = []
         if self.anchor is not None:
             try:

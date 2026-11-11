@@ -26,7 +26,7 @@ could have broken:
 | The trace ledger's verdicts, anchors and report | `tests/test_ledger.py` passes **unmodified** (the verdict logic was moved, not changed) |
 | The importer, the CSV and JSONL outputs, restart behaviour | `tests/test_runtime_importer.py`. One assertion changed on purpose: the `events` table now has three more columns |
 | The proxy, the middleware and the demo | `tests/test_runtime_middleware.py`, `tests/test_runtime.py` |
-| An importer given a store that does not seal rows | The flaky and broken stores in `test_runtime_importer.py` |
+| An importer given a store that does not seal rows | The flaky and broken stores in `test_runtime_importer.py`; `test_an_unsealed_store_is_imported_with_a_warning` and `test_an_anchor_is_refused_for_a_store_that_does_not_seal` (a warning, never silence; no anchor) |
 | An anchor point for a trace ledger | `test_anchor_points_without_the_new_fields_are_unchanged` (same keys, same bytes) |
 | Scanner rules, SARIF, GATES.md | `tests/test_scanner.py`, `tests/test_alr04.py` |
 | Exit codes `0`/`1`/`2` | The CLI tests, and the table in `ledger-reference.md` |

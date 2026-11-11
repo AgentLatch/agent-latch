@@ -1408,3 +1408,45 @@ def test_a_query_whose_rows_add_up_to_too_much_is_refused(sealed: Sealed) -> Non
         assert reader.query("SELECT COUNT(*) AS n FROM events")[0]["n"] == sealed.rows()
     finally:
         reader.close()
+
+
+class _UnsealedStore:
+    """A store that keeps events but does not seal them: what a connector without seals is."""
+
+    def __init__(self) -> None:
+        self.path: Path | None = None
+        self.saved: list[dict[str, Any]] = []
+
+    def open(self) -> None:
+        pass
+
+    def save(self, events: list[dict[str, Any]], /) -> int:
+        self.saved.extend(events)
+        return len(events)
+
+    def close(self) -> None:
+        pass
+
+
+def test_an_unsealed_store_is_imported_with_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A store that does not seal its rows still gets events, but never silently."""
+    trace, _ = _record_run(tmp_path / "run", payloads=False)
+    store = _UnsealedStore()
+    importer = RuntimeLogImporter(trace, None, [], store=store, follow=False)
+    with caplog.at_level("WARNING", logger="agent_latch.runtime"):
+        importer.run()
+    assert store.saved
+    assert "_UnsealedStore does not seal its rows" in caplog.text
+
+
+def test_an_anchor_is_refused_for_a_store_that_does_not_seal(tmp_path: Path) -> None:
+    """An anchor on an unsealed store would protect nothing, so it is a configuration error."""
+    trace, _ = _record_run(tmp_path / "run", payloads=False)
+    with pytest.raises(ValueError, match="does not seal its rows"):
+        RuntimeLogImporter(
+            trace, None, [], store=_UnsealedStore(),
+            anchor=FileAnchor(tmp_path / "anchors.jsonl"), follow=False,
+        )
+    assert not (tmp_path / "anchors.jsonl").exists()

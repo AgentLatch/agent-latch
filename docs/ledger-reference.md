@@ -323,7 +323,9 @@ A store (another database, a warehouse, plain files) implements the writer contr
 seal values with each row, and provides what `event_seal.SealedSource` asks for (`sealed_rows`, the
 schema methods) plus `head()` and `as_stored()`. Then `tests/store_contract.py` proves it:
 `assert_store_is_append_only(make_store, tamper)` needs only a way to make a fresh store and a way to
-change its rows behind its back. Rules for a store that is not SQLite:
+change its rows behind its back. A store that skips the seals still receives events, but it is not
+tamper-evident: `import-logs` logs a warning that changes to it cannot be detected, and refuses
+`--anchor` with it (exit `2`). Rules for a store that is not SQLite:
 
 - Keep `metadata` and `payload` as text. A JSON column type that reorders keys or changes number
   formatting can be fine for the digest (it is computed over canonical JSON), but a lossy type is not.
