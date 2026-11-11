@@ -140,11 +140,18 @@ depend on the database or on SQL. Four layers, each in one place in the code:
 3. **Anchor and fail closed.** The newest seal is published to an anchor file the agent cannot write.
    `verify --database` recomputes every seal and the table layout and reports the six verdicts above.
    `import-logs` runs the same check before it adds anything and refuses (exit `1`) a store that
-   fails it. It never repairs or re-seals.
+   fails it. It never repairs or re-seals. `agent-latch --runtime-result --database FILE` puts the
+   same verdict at the top of the runtime report and in SARIF.
 4. **Separation (deployment).** The only thing that *stops* a change is the agent never reaching the
    store: it belongs to another OS user or container, mode `0600`, and the agent is not given its path
    or credentials. The operating system answers "permission denied", because one user cannot change
    another user's file permissions.
+
+**A store that does not seal is never accepted silently.** A store that skips layer 2 (a
+connector written only to the writer contract) still receives events, but `import-logs` warns that
+changes to it cannot be detected, refuses `--anchor` with it, and records `ALR15-R02` *Event store is
+not tamper-evident* in `gate-results.csv`. The runtime report raises the same finding for an older,
+not-yet-sealed database. Both fail the report even with `--fail-on none`.
 
 Layers 2 and 3 *detect*; layer 4 *prevents*. SQLite triggers (migration 4) abort plain `UPDATE` and
 `DELETE` as an extra, but anyone who can write the file can drop them, so nothing relies on them.
@@ -185,7 +192,9 @@ older database sealed on upgrade is vouched for only from that moment. It does n
 
 The ledger is a gate in the same catalog as every other check: `ALR15`, *tamper-evident audit
 trail*, mapped to `ASI10` (Rogue Agents) — an agent that covers its tracks is the behaviour this
-outcome addresses. Its detector is `ALR15-R01`, a runtime check. Like every gate, it is
+outcome addresses. Its detectors are runtime checks: `ALR15-R01` (the six verdicts, for the trace
+ledger and the event store) and `ALR15-R02` (an event store that does not seal its rows, so nothing in
+it can be checked). Like every gate, it is
 informational: no compliance claim, no OWASP endorsement. See [GATES.md](GATES.md).
 
 The verifier is deliberately **not** a plugin under `src/agent_latch/gates/`. That package holds

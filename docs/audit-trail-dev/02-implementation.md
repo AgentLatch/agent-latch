@@ -111,8 +111,10 @@ trigger inside the same migration, or avoid `UPDATE`. Then update the schema exp
 - `EventWriter` and `EventReader` are the two contracts. `EventStore` is kept as an alias of the writer,
   so existing code and docs keep working.
 - **Audit before writing** (`_audit_store`): recompute the chain and the schema, compare with the newest
-  anchor point. A store without `sealed_rows` (a minimal writer) is skipped, which is what keeps the
-  older importer tests meaning what they meant.
+  anchor point. A store without `sealed_rows` (a minimal writer) is not checked, but never silently:
+  the importer logs a warning, refuses `--anchor` with it (`ValueError`, exit 2), and writes one
+  `ALR15-R02` row per run to `gate-results.csv` (`order` = `store`). The older importer tests still
+  use such stores.
 - **A store ahead of its anchor** (a crash between save and publish): the rows past the anchor go into
   `_tail`. Each is compared with the event the logs rebuild (`as_stored`); a difference, or a row with no
   log line, raises `StoreTampered`. Only when `_tail` is empty may the importer publish. That guard is
@@ -131,6 +133,7 @@ trigger inside the same migration, or avoid `UPDATE`. Then update the schema exp
 | `anchor --database F --to A` | Verifies the store (and any earlier point) first and refuses a failing one (exit 1). An anchor file that holds a ledger's points is a configuration error (exit 2), not a store failure |
 | `verify --database F [--anchor A]` | Uses the **read-only reader**. A missing file is `deleted` with an anchor point, otherwise exit 2. An unsealed (older) file is exit 2 |
 | `verify PATH` on a SQLite file | Refused, exit 2, pointing at `--database` |
+| `agent-latch --runtime-result CSV --database F [--database-anchor A]` | Same check as `verify --database` (both call `store_check.check_store`). A failed or unsealed store exits **1** even with `--fail-on none`; a missing or empty store exits 2 |
 
 Exit codes are a contract with CI: `0` pass, `1` the trail or store cannot be trusted, `2` a usage or
 configuration error. Do not change them.

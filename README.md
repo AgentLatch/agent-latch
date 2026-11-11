@@ -248,10 +248,12 @@ Run both from the same folder, in the environment where AgentLatch is installed.
 agent-latch . --runtime-result runtime-logs/gate-results.csv
 ```
 
-This prints the gate findings in the same table as a scan, with the local tool's file and line when the project defines it (add `--plain` for text). Real output, shortened:
+This prints the gate findings grouped by gate, with the local tool's file and line when the project defines it (add `--plain` for text). Real output, shortened:
 
 ```text
 Runtime findings · 3
+
+== ALR04 Tool schema injection ==
 
 HIGH     ALR04-003  mcp-server/tools/alr04_fixture_tools.py:14
   concealment
@@ -336,7 +338,7 @@ agent-latch . --runtime-result runtime-logs/gate-results.csv \
 
 A failed trail exits `1` even with `--fail-on none`, because log integrity is not a severity threshold.
 
-**The event store gets the same protection.** `import-logs --database` seals every stored event (a hash chain computed by AgentLatch, not by the database), `--anchor PATH` publishes the newest seal, and `verify --database FILE --anchor PATH` reports the same six verdicts. A store that fails its check is refused (exit `1`) and never repaired. Keeping the store and the anchor in another OS user or container is what prevents a change; the seals detect one. See [the event store in the ledger guide](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md#the-event-store-gets-the-same-protection).
+**The event store gets the same protection.** `import-logs --database` seals every stored event (a hash chain computed by AgentLatch, not by the database), `--anchor PATH` publishes the newest seal, and `verify --database FILE --anchor PATH` reports the same six verdicts; `agent-latch . --runtime-result … --database FILE --database-anchor PATH` puts that verdict in the report and in SARIF. A store that fails its check is refused (exit `1`) and never repaired, and a store that does not seal its rows is reported as `ALR15-R02` instead of being accepted silently. Keeping the store and the anchor in another OS user or container is what prevents a change; the seals detect one. See [the event store in the ledger guide](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md#the-event-store-gets-the-same-protection).
 
 **What to expect:** without an anchor the best verdict is `unanchored`: the chain is consistent, but nothing outside the machine proves the file was not rebuilt. The ledger makes tampering visible; it does not prevent it, and it cannot show a change made before a record was sealed. Check live sessions with `verify runtime-logs` (the folder, without `--all`) and use `--all` to audit archived sessions on purpose. What an agent with write access can still do, and how to narrow it: [the ledger operations guide](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md#what-an-agent-can-still-do).
 

@@ -36,6 +36,8 @@ what actually stops a change; the seals detect one.
 | Migrations 3 (seal) and 4 (triggers), `SQLiteEventStore`, `SQLiteEventReader` | `src/agent_latch/runtime/sqlite_store.py` |
 | `EventWriter` / `EventReader`, the pre-save check, crash recovery, publishing | `src/agent_latch/runtime/importer.py` |
 | `import-logs --anchor`, `anchor --database`, `verify --database`, `audit-tool` | `src/agent_latch/runtime/cli.py` |
+| One read-only look at a store (`check_store`), the `ALR15-R02` finding | `src/agent_latch/runtime/store_check.py` |
+| The store verdict and `ALR15-R02` in `agent-latch --runtime-result` (by gate, SARIF) | `src/agent_latch/runtime/results.py` |
 | The read-only MCP tool an agent gets (`audit-tool`) | `src/agent_latch/runtime/audit_tool.py` |
 | Tests | `tests/test_audit_store.py`, `tests/store_contract.py`, `tests/runtime_fixtures/audit_reader_server.py` |
 | CI | `.github/workflows/tests.yml` (second-user step, runtime job), `.github/workflows/images.yml` (sealed-store smoke) |

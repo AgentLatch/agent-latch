@@ -51,6 +51,7 @@ one expected change is the `events` column list.
 | 11 | `test_11_schema_changes_are_caught` (add column, edit view, drop trigger) | Layout changes are `tampered` though no row changed |
 | 12 | `test_12_*` | A database is never read as a ledger; one anchor file per chain |
 | — | `test_seal_*`, `test_walk_chain_*`, `test_store_seals_use_their_own_domain_*` | The seal is deterministic, covers every field, and has its own domain |
+| — | `test_report_*`, `test_runtime_findings_are_grouped_by_gate` | The runtime report shows the store verdict and `ALR15-R02` (text and SARIF, gate on every result), fails a tampered or unsealed store with `--fail-on none`, refuses a missing store, and lists findings gate by gate |
 
 ### What each attacker is allowed to do
 
