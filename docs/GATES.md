@@ -27,6 +27,7 @@ A gate is a security outcome AgentLatch checks for, such as "destructive actions
 | `ALR13` | Memory and context integrity | Untrusted content is not written to agent memory or vector stores | `ALR13-S01`, `ALR13-S02` | `ASI06` | Art. 15 | partial |
 | `ALR14` | Rogue agent containment | Agents cannot modify their own prompts or config, or spawn agents without limits | `ALR14-S01`, `ALR14-S02`, `ALR14-S03` | `ASI10` | Art. 14, Art. 15 | partial |
 | `ALR15` | Tamper-evident audit trail | The record of what the agent did cannot be altered, deleted or rebuilt unnoticed | `ALR15-R01` | `ASI10` | Art. 12, Art. 15 | preview (runtime) |
+| `ALR16` | Package installation integrity | Tool-invoked package installs use trusted sources and fixed versions | `ALR16-001`, `ALR16-002`, `ALR16-003`, `ALR16-004` | `ASI04`, `ASI05` | Art. 15 | preview (runtime) |
 
 ## Detectors
 
@@ -77,8 +78,12 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `ALR14-S02` | `ALR14` | static | Persistence brings the agent back after it is stopped, outside a user's view | `ASI10` |
 | `ALR14-S03` | `ALR14` | static | Installing packages at runtime pulls unreviewed code into the agent process | `ASI10` |
 | `ALR15-R01` | `ALR15` | runtime | An agent, or whoever holds its account, can hide what it did by editing or rebuilding its own audit log | `ASI10` |
+| `ALR16-001` | `ALR16` | runtime | Tool arguments invoke a package install the operator never reviewed | `ASI04`, `ASI05` |
+| `ALR16-002` | `ALR16` | runtime | The install pulls from a custom index, VCS, URL or local path instead of the trusted source | `ASI04`, `ASI05` |
+| `ALR16-003` | `ALR16` | runtime | The install is unpinned, hashless or a lookalike name, so its content is not fixed | `ASI04`, `ASI05` |
+| `ALR16-004` | `ALR16` | runtime | The install arrives through a pipe-to-shell, chained command or write-then-run sequence | `ASI04`, `ASI05` |
 
-Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR03-090` alr03 could not fully identify an endpoint from its handshake (coverage); `ALR03-099` alr03 per-scan summary; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary.
+Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR03-090` alr03 could not fully identify an endpoint from its handshake (coverage); `ALR03-099` alr03 per-scan summary; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary; `ALR16-090` alr16 could not fully inspect a tool-call argument (coverage); `ALR16-099` alr16 per-scan summary.
 
 ## Framework references
 

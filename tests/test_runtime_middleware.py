@@ -255,7 +255,7 @@ def test_handshake_is_recorded_and_alr03_identifies_the_server(tmp_path: Path) -
     ).run()
     with out_csv.open(encoding="utf-8", newline="") as stream:
         rows = list(csv.DictReader(stream))
-    assert {row["gate_id"] for row in rows} == {"ALR03", "ALR04"}
+    assert {row["gate_id"] for row in rows} == {"ALR03", "ALR04", "ALR16"}
 
     alr03_rows = [r for r in rows if r["gate_id"] == "ALR03"]
     handshake_rows = [
