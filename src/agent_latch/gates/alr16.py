@@ -43,6 +43,8 @@ MAX_SEGMENTS = 32
 MAX_PACKAGES = 64
 MAX_DECODED_CHARS = 8_000
 MAX_DECODE_CANDIDATES = 64
+MAX_SHELL_DEPTH = 3
+MAX_ARGUMENT_DEPTH = 5
 MAX_EVIDENCE_REPORTED = 8
 MAX_OUTPUT_RECORDS = 400
 MAX_REMEMBERED = 2048
@@ -275,13 +277,13 @@ def _try_decoded(token: str) -> str | None:
         except (ValueError, TypeError, binascii.Error):
             continue
         if len(data) > MAX_DECODED_CHARS:
-            return None
+            continue
         try:
             text = data.decode("utf-8", errors="strict")
         except UnicodeError:
-            return None
+            continue
         if len(text) < 8:
-            return None
+            continue
         printable = sum(c.isprintable() or c in "\n\t" for c in text) / len(text)
         wordlike = sum(c.isalpha() or c.isspace() for c in text) / len(text)
         if printable >= 0.9 and wordlike >= 0.5:
@@ -317,7 +319,9 @@ def _gate_policy(policy: Mapping[str, Any] | None) -> tuple[dict[str, Any] | Non
         if not isinstance(value, list):
             return None
         names = {str(item).casefold() for item in value if isinstance(item, str) and item}
-        return names if names or not value else names
+        if value and not names:
+            return None
+        return names
 
     packages = candidate.get("packages", {})
     allow: set[str] | None = None
@@ -406,19 +410,39 @@ def _classify_segment(segment: str, path: str, scan: Scan,
                 skip_next = False
                 continue
             low = token.lower()
+            index_flag = None
+            index_value = ""
+            consume_next = False
+            if low in ("-i", "--index-url", "--extra-index-url", "--registry"):
+                index_flag = low
+                index_value = rest[pos + 1] if pos + 1 < len(rest) else ""
+                consume_next = True
+            else:
+                for flag in ("--index-url", "--extra-index-url", "--registry"):
+                    if low.startswith(f"{flag}="):
+                        index_flag = flag
+                        index_value = token[len(flag) + 1:]
+                        break
+                if index_flag is None and low.startswith("-i") and low != "-i":
+                    index_flag = "-i"
+                    index_value = token[2:].lstrip("=")
+            if index_flag is not None:
+                scan.add("source_class", "source", False, "custom_index",
+                         path, "arguments", index_flag)
+                if index_flag == "--extra-index-url":
+                    scan.add("source_class", "source", False,
+                             "extra_index_merge_shape", path, "arguments", index_flag)
+                if parsed is not None and parsed["indexes"] \
+                        and index_value not in parsed["indexes"]:
+                    index_hard = True
+                if consume_next:
+                    skip_next = True
+                continue
             if low in VALUE_FLAGS:
                 if low == "-r":
                     scan.add("pinning_integrity", "pin", False,
                              "requirements_unresolved", path, "arguments",
                              "requirements_file")
-                if low in ("-i", "--index-url", "--extra-index-url", "--registry",
-                           "--find-links", "--client-cert", "--cert", "--proxy"):
-                    value = rest[pos + 1] if pos + 1 < len(rest) else ""
-                    if parsed is not None and parsed["indexes"] and value not in parsed["indexes"]:
-                        index_hard = True
-                    if low == "--extra-index-url":
-                        scan.add("source_class", "source", False,
-                                 "extra_index_merge_shape", path, "arguments", token)
                 if low == "--trusted-host":
                     scan.add("source_class", "integrity_bypass", True,
                              "trusted_host_disables_tls", path, "arguments", token)
@@ -500,7 +524,7 @@ def _classify_segment(segment: str, path: str, scan: Scan,
 
 
 def _classify_text(text: str, path: str, scan: Scan,
-                   parsed: dict[str, Any] | None) -> None:
+                   parsed: dict[str, Any] | None, depth: int = 0) -> None:
     """Pipeline shapes and env first (they vanish after unwrapping/splitting), then segments."""
     if (PIPE_SHELL.search(text) or PROCESS_SUBST.search(text) or SOURCE_PIPE.search(text)
             or OBFUSCATED_PIPE.search(text) or FETCH_AND_RUN.search(text)):
@@ -534,7 +558,13 @@ def _classify_text(text: str, path: str, scan: Scan,
         scan.add("source_class", "integrity_bypass", True, "plaintext_http_index",
                  path, "arguments", "http_index")
     unwrapped = _unwrap_shell(text)
-    segments, cut = _split_segments(unwrapped)
+    if unwrapped != text:
+        if depth >= MAX_SHELL_DEPTH:
+            scan.notes.add("unparsed")
+            return
+        _classify_text(unwrapped, path, scan, parsed, depth + 1)
+        return
+    segments, cut = _split_segments(text)
     if cut:
         scan.notes.add("segment_limit")
     for segment in segments:
@@ -598,7 +628,7 @@ def _basenames(text: str) -> list[str]:
 
 
 _lock = RLock()
-_seen: OrderedDict[tuple[str, str, str], bool] = OrderedDict()
+_seen: OrderedDict[tuple[str, ...], bool] = OrderedDict()
 _writes: deque[tuple[str, str, str]] = deque()  # (run_id, server, basename)
 
 
@@ -609,7 +639,7 @@ def reset_state() -> None:
         _writes.clear()
 
 
-def _remember(key: tuple[str, str, str]) -> bool:
+def _remember(key: tuple[str, ...]) -> bool:
     with _lock:
         if key in _seen:
             _seen.move_to_end(key)
@@ -627,6 +657,12 @@ def _note_writes(run_id: str, server: str, values: list[str]) -> None:
                 _writes.append((run_id, server, base))
         while len(_writes) > MAX_WRITE_HISTORY:
             _writes.popleft()
+
+
+def _write_history_state(run_id: str, server: str) -> str:
+    with _lock:
+        relevant = [base for run, host, base in _writes if run == run_id and host == server]
+    return digest("\n".join(relevant))
 
 
 def _matches_prior_write(run_id: str, server: str, segment: str) -> str | None:
@@ -756,17 +792,28 @@ def _scan_arguments(arguments: Mapping[str, Any], role: str, run_id: str, server
                     parsed: dict[str, Any] | None) -> Scan:
     scan = Scan([], set(), [], False, set())
     strings: list[tuple[str, str]] = []
-    declared = observed = 0
+
+    def collect(value: Any, path: str, depth: int) -> None:
+        if isinstance(value, str):
+            if not value:
+                return
+            if len(value) > MAX_VALUE_CHARS:
+                scan.notes.add("value_limit")
+                value = value[:MAX_VALUE_CHARS]
+            strings.append((path, value))
+        elif isinstance(value, Mapping):
+            if depth >= MAX_ARGUMENT_DEPTH:
+                scan.notes.add("unparsed")
+                return
+            for key, child in value.items():
+                collect(child, f"{path}.{safe(key, 60)}", depth + 1)
+        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+            collect(" ".join(value), path, depth)
+        else:
+            scan.notes.add("unparsed")
+
     for key, value in arguments.items():
-        if not isinstance(value, str) or not value:
-            continue
-        path = f"arguments.{safe(key, 60)}"
-        if len(value) > MAX_VALUE_CHARS:
-            scan.notes.add("value_limit")
-            value = value[:MAX_VALUE_CHARS]
-        declared += len(value)
-        observed += len(value)
-        strings.append((path, value))
+        collect(value, f"arguments.{safe(key, 60)}", 0)
     for path, value in strings:
         _classify_text(value, path, scan, parsed)
         _classify_decoded(value, path, scan)
@@ -789,7 +836,6 @@ def _scan_arguments(arguments: Mapping[str, Any], role: str, run_id: str, server
                     scan.add("sequence_execution", "execution", False,
                              "write_then_execute_sequence", path, "sequence", matched)
                     break
-    _ = observed, declared
     return scan
 
 
@@ -843,9 +889,10 @@ def evaluate(event: dict[str, Any], *, policy: Mapping[str, Any] | None = None) 
                         notes | {"non_exec_tool"})]
         return {"findings": out}
     args_hash = digest(json.dumps(arguments, sort_keys=True, ensure_ascii=False, default=str))
-    if _remember((server, tool, args_hash)):
-        return {"findings": []}  # exact duplicate call already reported
+    history_state = _write_history_state(run_id, server) if role == "exec" else ""
     scan = _scan_arguments(arguments, role, run_id, server, parsed)
+    if _remember((run_id, server, tool, args_hash, history_state)):
+        return {"findings": []}  # exact duplicate call already reported
     scan.notes |= notes
     coverage = 1.0
     if scan.notes & UNKNOWN_EXTENT_NOTES:
