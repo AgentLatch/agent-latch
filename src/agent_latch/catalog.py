@@ -287,6 +287,26 @@ GATES: tuple[Gate, ...] = (
               "rebuilding its own audit log")),
         ),
     ),
+    Gate(
+        "ALR16",
+        "Package installation integrity",
+        "Tool-invoked package installs use trusted sources and fixed versions",
+        ("ASI04", "ASI05"),
+        ("Art. 15",),
+        detectors=(
+            ("ALR16-001", "runtime",
+             "Tool arguments invoke a package install the operator never reviewed"),
+            ("ALR16-002", "runtime",
+             ("The install pulls from a custom index, VCS, URL or local path instead of "
+              "the trusted source")),
+            ("ALR16-003", "runtime",
+             ("The install is unpinned, hashless or a lookalike name, so its content is "
+              "not fixed")),
+            ("ALR16-004", "runtime",
+             ("The install arrives through a pipe-to-shell, chained command or "
+              "write-then-run sequence")),
+        ),
+    ),
 )
 
 # Derived from the gate groups above, flat and in gate order. Never add to this directly.
@@ -303,6 +323,8 @@ DIAGNOSTICS: dict[str, str] = {
     "ALR03-099": "ALR03 per-scan summary",
     "ALR04-090": "ALR04 could not inspect enough of a tool definition (coverage)",
     "ALR04-099": "ALR04 per-scan summary",
+    "ALR16-090": "ALR16 could not fully inspect a tool-call argument (coverage)",
+    "ALR16-099": "ALR16 per-scan summary",
 }
 
 GATES_BY_ID: dict[str, Gate] = {gate.id: gate for gate in GATES}

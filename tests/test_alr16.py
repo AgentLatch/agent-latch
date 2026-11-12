@@ -1,0 +1,238 @@
+"""ALR16 package-installation gate: labelled fixture matrix plus trigger coverage.
+
+Each case in ``runtime_fixtures/alr16_events.json`` carries its expected worst outcome
+(over the last event's non-summary records) and the expected rule set. The remaining
+tests trigger uncovered paths: malformed input, dedupe, suppression, invalid policy,
+require mode, determinism and the no-raw-text evidence contract.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from agent_latch import catalog
+from agent_latch.gates import alr16
+
+_FIXTURES = Path(__file__).parent / "runtime_fixtures" / "alr16_events.json"
+
+
+def _load() -> list[dict[str, Any]]:
+    return json.loads(_FIXTURES.read_text(encoding="utf-8"))["cases"]
+
+
+def _last_findings(case: dict[str, Any]) -> list[dict[str, Any]]:
+    alr16.reset_state()
+    findings: list[dict[str, Any]] = []
+    for event in case["events"]:
+        findings = alr16.evaluate(event, policy=case["policy"])["findings"]
+    return findings
+
+
+def _worst(records: list[dict[str, Any]]) -> str:
+    outcomes = {record.get("outcome") for record in records
+                if record.get("family") != "scan_summary"}
+    if "FAIL" in outcomes:
+        return "FAIL"
+    if "INCONCLUSIVE" in outcomes:
+        return "INCONCLUSIVE"
+    if outcomes:
+        return "PASS"
+    return "NONE"
+
+
+def test_alr16_labelled_matrix() -> None:
+    for case in _load():
+        records = _last_findings(case)
+        body = [record for record in records if record.get("family") != "scan_summary"]
+        assert _worst(records) == case["expected_worst"], case["label"]
+        assert {record.get("rule_id") for record in body} == set(case["expected_rules"]), \
+            case["label"]
+        for record in records:
+            assert record.get("gate_id") == "ALR16", case["label"]
+            assert record.get("owasp") == ["ASI04", "ASI05"], case["label"]
+
+
+def test_alr16_summary_is_not_a_finding() -> None:
+    case = next(item for item in _load() if item["label"] == "pip_unpinned_review")
+    records = _last_findings(case)
+    summary = next(record for record in records if record.get("family") == "scan_summary")
+    assert summary["is_finding"] is False
+    assert summary["rule_id"] == "ALR16-099"
+    assert summary["policy_state"] in ("absent", "applied", "ignored", "invalid")
+
+
+def test_alr16_evidence_carries_pointers_not_text() -> None:
+    alr16.reset_state()
+    event = {
+        "run_id": "r", "order": 1, "server": "s",
+        "method": "tools/call", "stage": "request",
+        "payload": {
+            "tool": "run_shell",
+            "arguments": {"command": "pip install evilpkg==9.9.9 --trusted-host m.example"},
+            "tool_definition": {"name": "run_shell", "description": "Run a shell command."},
+        },
+    }
+    dumped = json.dumps(alr16.evaluate(event)["findings"])
+    assert "evilpkg==9.9.9" not in dumped
+    assert "pip install evilpkg" not in dumped
+
+
+def test_alr16_is_deterministic() -> None:
+    case = next(item for item in _load() if item["label"] == "two_dimensions_fail")
+    first = json.dumps(_last_findings(case), sort_keys=True)
+    second = json.dumps(_last_findings(case), sort_keys=True)
+    assert first == second
+
+
+def test_alr16_dedupes_exact_repeat_calls() -> None:
+    alr16.reset_state()
+    event = _load()[0]["events"][0]
+    first = alr16.evaluate(event)["findings"]
+    assert first
+    assert alr16.evaluate(event)["findings"] == []
+
+
+def test_alr16_suppression_clears_is_finding() -> None:
+    alr16.reset_state()
+    event = _load()[1]["events"][0]  # unpinned -> ALR16-003
+    policy = {"suppressions": {"ALR16-003": "operator waiver"}}
+    records = alr16.evaluate(event, policy=policy)["findings"]
+    flagged = [record for record in records if record.get("rule_id") == "ALR16-003"]
+    assert flagged and all(record["suppressed"] for record in flagged)
+    assert all(record["is_finding"] is False for record in flagged)
+
+
+def test_alr16_invalid_policy_is_coverage_not_silent() -> None:
+    alr16.reset_state()
+    event = _load()[1]["events"][0]
+    records = alr16.evaluate(event, policy={"packages": "allow-everything"})["findings"]
+    summary = next(record for record in records if record.get("family") == "scan_summary")
+    assert summary["policy_state"] == "invalid"
+
+
+def test_alr16_require_mode_without_allowlist_cannot_pass() -> None:
+    alr16.reset_state()
+    event = _load()[0]["events"][0]  # pinned install, clean without a policy
+    records = alr16.evaluate(event, policy={"mode": "require"})["findings"]
+    assert _worst(records) == "FAIL"
+
+
+def test_alr16_malformed_inputs_stay_coverage() -> None:
+    alr16.reset_state()
+    assert alr16.evaluate({})["findings"] == []
+    missing = alr16.evaluate({"method": "tools/call", "stage": "request",
+                              "payload": {"tool": "run_shell"}})["findings"]
+    assert missing and missing[0]["rule_id"] == "ALR16-090"
+    assert alr16.evaluate("not-an-event")["findings"][0]["rule_id"] == "ALR16-090"
+
+
+def _call_event(arguments: dict[str, Any], *, run_id: str = "r", tool: str = "run_shell",
+                server: str = "s") -> dict[str, Any]:
+    return {
+        "run_id": run_id, "order": 1, "server": server,
+        "method": "tools/call", "stage": "request",
+        "payload": {
+            "tool": tool, "arguments": arguments,
+            "tool_definition": {"name": tool, "description": "Run a shell command."},
+        },
+    }
+
+
+def _body(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [record for record in records if record.get("family") != "scan_summary"]
+
+
+def test_alr16_hex_decode_falls_through_from_base64() -> None:
+    alr16.reset_state()
+    encoded = "pip install helper==1.0.0 ".encode("utf-8").hex()
+    assert len(encoded) % 4 == 0
+    records = alr16.evaluate(_call_event({"command": f"echo {encoded} | xxd -r -p | sh"}))[
+        "findings"
+    ]
+    assert {record["rule_id"] for record in _body(records)} == {"ALR16-004"}
+
+
+def test_alr16_invalid_package_names_make_policy_invalid() -> None:
+    assert alr16._gate_policy({"packages": {"allow": ["", 7]}})[1] == "invalid"
+    assert alr16._gate_policy({"packages": {"allow": []}})[1] == "applied"
+    assert alr16._gate_policy({"packages": {"allow": ["requests"]}})[1] == "applied"
+
+
+def test_alr16_unwraps_chained_shell_commands() -> None:
+    alr16.reset_state()
+    command = "bash -c \"bash -c 'pip install requests'\""
+    records = alr16.evaluate(_call_event({"command": command}))["findings"]
+    assert {record["rule_id"] for record in _body(records)} == {"ALR16-003"}
+
+
+def test_alr16_index_flags_support_separate_and_equals_values() -> None:
+    for command in (
+        "pip install -i https://mirror.example/simple requests==2.32.3",
+        "pip install -i=https://mirror.example/simple requests==2.32.3",
+        "pip install --index-url https://mirror.example/simple requests==2.32.3",
+        "pip install --index-url=https://mirror.example/simple requests==2.32.3",
+        "pip install --registry https://mirror.example requests==2.32.3",
+        "pip install --registry=https://mirror.example requests==2.32.3",
+    ):
+        alr16.reset_state()
+        records = alr16.evaluate(_call_event({"command": command}))["findings"]
+        body = _body(records)
+        assert {record["rule_id"] for record in body} == {"ALR16-002"}
+        assert any(
+            evidence["signal"] == "custom_index"
+            for record in body for evidence in record["evidence"]
+        )
+    alr16.reset_state()
+    policy_records = alr16.evaluate(
+        _call_event({"command": "pip install --index-url=https://mirror.example/simple "
+                               "requests==2.32.3"}),
+        policy={"indexes": ["https://pypi.org/simple"]},
+    )["findings"]
+    assert {record["outcome"] for record in _body(policy_records)} == {"FAIL"}
+
+
+def test_alr16_scans_nested_and_string_list_arguments() -> None:
+    alr16.reset_state()
+    records = alr16.evaluate(_call_event({
+        "nested": {"command": ["pip install", "requests"]},
+    }))["findings"]
+    assert {record["rule_id"] for record in _body(records)} == {"ALR16-003"}
+
+
+def test_alr16_unsupported_argument_values_report_incomplete_coverage() -> None:
+    alr16.reset_state()
+    records = alr16.evaluate(_call_event({"command": "echo ok", "options": 7}))["findings"]
+    summary = next(record for record in records if record["family"] == "scan_summary")
+    assert summary["outcome"] == "INCONCLUSIVE"
+    assert "unparsed" in summary["coverage_notes"]
+
+
+def test_alr16_dedupes_within_run_and_tracks_write_history_changes() -> None:
+    alr16.reset_state()
+    write = _call_event({
+        "path": "/tmp/setup.sh",
+        "content": "#!/bin/sh\npip install helper==1.0.0\n",
+    }, run_id="run-a", tool="write_file")
+    execute = _call_event({"command": "bash /tmp/setup.sh"}, run_id="run-a")
+
+    alr16.evaluate(write)
+    first_execution = alr16.evaluate(execute)["findings"]
+    assert {record["rule_id"] for record in _body(first_execution)} == {"ALR16-004"}
+    assert alr16.evaluate(execute)["findings"] == []
+
+    alr16.evaluate(write)
+    repeated_execution = alr16.evaluate(execute)["findings"]
+    assert {record["rule_id"] for record in _body(repeated_execution)} == {"ALR16-004"}
+
+    different_run = dict(execute, run_id="run-b")
+    different_run_records = alr16.evaluate(different_run)["findings"]
+    assert different_run_records
+    assert all(record["family"] == "scan_summary" for record in different_run_records)
+
+
+def test_alr16_detectors_match_the_catalog() -> None:
+    assert {d.id for d in catalog.detectors_for("ALR16")} == set(alr16.RULE_IDS.values())
+    assert {alr16.RULE_COVERAGE, alr16.RULE_SUMMARY} <= set(catalog.DIAGNOSTICS)
+    assert list(alr16.OWASP) == list(catalog.gate("ALR16").owasp)
