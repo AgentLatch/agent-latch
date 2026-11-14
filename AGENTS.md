@@ -38,7 +38,7 @@ AgentLatch is often run on agents someone else wrote, so nothing inside the scan
 
 | ID | Category | Gates | Current rules |
 |---|---|---|---|
-| ASI01 | Agent Goal Hijack | `ALR01`, `ALR04`, `ALR05` | `AG003`, `PRM001`, `PRM002`, `ALR01-S01` |
+| ASI01 | Agent Goal Hijack | `ALR01`, `ALR04`, `ALR05` | `AG003`, `PRM001`, `PRM002`, `ALR01-S01`, `ALR05-R01`, `ALR05-R02`, `ALR05-R03` |
 | ASI02 | Tool Misuse and Exploitation | `ALR02`, `ALR03`, `ALR04`, `ALR06`, `ALR07`, `ALR09`, `ALR12` | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003`, `ALR06-S02`, `ALR12-S01` |
 | ASI03 | Identity and Privilege Abuse | `ALR03`, `ALR07`, `ALR09`, `ALR10` | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003`, `ALR03-S01` |
 | ASI04 | Agentic Supply Chain Vulnerabilities | `ALR02`, `ALR03`, `ALR04`, `ALR10`, `ALR11` | `SEC001`, `DEP001`, `ALR11-S01` |
@@ -88,8 +88,10 @@ src/agent_latch/
   action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
   gates/          # runtime gate plugins discovered by the importer (monitor only, never block)
     __init__.py
+    _text.py      # shared text engine (normalisation, decode layers, phrase families, walk, verdict); not a gate
     alr03.py      # ALR03: endpoint trust from the recorded handshake: identification, identity change, name impersonation (preview; reports findings only)
     alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; reports findings only)
+    alr05.py      # ALR05: instruction-like content in MCP tool results (preview; review signals only)
   runtime/        # MCP traffic recording (preview, monitor only; `[runtime]` extra). Logs go to runtime-logs/, not here.
     events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
     redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file
@@ -122,8 +124,10 @@ tests/store_contract.py        # assert_store_is_append_only: the contract any s
 tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
 tests/test_alr03.py            # ALR03 endpoint-trust gate: identification and identity change
 tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
+tests/test_alr05.py            # ALR05 tool-output checks: positive, benign and coverage cases
+tests/test_alr05_eval.py       # ALR05 held-out detection targets (recall >= 80%, FP <= 10%)
 tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
-tests/runtime_fixtures/        # demo-server wrapper, audit_reader_server (a reader-only MCP tool), plus the ALR04 event dataset and expected outcomes
+tests/runtime_fixtures/        # demo-server wrapper, audit_reader_server (a reader-only MCP tool), the ALR04 event dataset, and the ALR05 labeled output cases
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
@@ -234,7 +238,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 
 ### Runtime gates
 
-Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per gate, `GATE_ID` = the gate ID, `evaluate(event)`), discovered by the importer and run on every normalized event. They report findings and never block. Today two ship: `alr03.py` (endpoint trust from the recorded handshake: server identification `ALR03-001`, identity change `ALR03-002`, name impersonation `ALR03-003` — non-regex string similarity) and `alr04.py` (tool schema injection). Register a runtime gate's detectors in its gate's `detectors` group in `catalog.GATES` (IDs `ALRnn-0nn`), add its coverage/summary IDs to `catalog.DIAGNOSTICS`, and regenerate `docs/GATES.md`.
+Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per gate, `GATE_ID` = the gate ID, `evaluate(event)`), discovered by the importer and run on every normalized event. They report findings and never block. Today three ship: `alr03.py` (endpoint trust from the recorded handshake: server identification `ALR03-001`, identity change `ALR03-002`, name impersonation `ALR03-003` — non-regex string similarity) `alr04.py` (tool schema injection) and `alr05.py` (instruction-like content in tool results). Register a runtime gate's detectors in its gate's `detectors` group in `catalog.GATES` (IDs `ALRnn-0nn`), add its coverage/summary IDs to `catalog.DIAGNOSTICS`, and regenerate `docs/GATES.md`.
 
 ### Adding or changing a rule
 

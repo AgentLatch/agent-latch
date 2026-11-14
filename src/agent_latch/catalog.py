@@ -142,6 +142,13 @@ GATES: tuple[Gate, ...] = (
         detectors=(
             ("AGENTLATCH-AG003", "static",
              "Content from outside reaches the model as if it were instructions, not data"),
+            ("ALR05-R01", "runtime",
+             ("Output that reads as instructions for the model is indistinguishable from data "
+              "unless the host fences it")),
+            ("ALR05-R02", "runtime",
+             "Instructions hidden in invisible characters or encoding still reach the model"),
+            ("ALR05-R03", "runtime",
+             "Output that names the next tool, destination or URL steers the agent's next step"),
         ),
     ),
     Gate(
@@ -306,6 +313,7 @@ DIAGNOSTICS: dict[str, str] = {
     "ALR03-099": "ALR03 per-scan summary",
     "ALR04-090": "ALR04 could not inspect enough of a tool definition (coverage)",
     "ALR04-099": "ALR04 per-scan summary",
+    "ALR05-R90": "ALR05 could not inspect tool output (no payload recorded, or output was cut)",
 }
 
 GATES_BY_ID: dict[str, Gate] = {gate.id: gate for gate in GATES}
