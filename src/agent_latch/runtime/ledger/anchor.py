@@ -35,9 +35,16 @@ class AnchorPoint:
     records: int
     timestamp: str
     ledger: str
+    # Optional fields, written only when set, so a point for a trace ledger is unchanged and an
+    # older reader ignores the extras. ``source`` says which kind of chain the point belongs to
+    # (``None`` is a trace ledger); the schema fields pin the event store's table layout.
+    source: str | None = None
+    schema_sha256: str | None = None
+    schema_version: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        """The JSON form of the point; the optional fields are written only when they are set."""
+        data: dict[str, Any] = {
             "schema": ANCHOR_SCHEMA,
             "seq": self.seq,
             "digest": self.digest,
@@ -45,9 +52,19 @@ class AnchorPoint:
             "timestamp": self.timestamp,
             "ledger": self.ledger,
         }
+        if self.source is not None:
+            data["source"] = self.source
+        if self.schema_sha256 is not None:
+            data["schema_sha256"] = self.schema_sha256
+        if self.schema_version is not None:
+            data["schema_version"] = self.schema_version
+        return data
 
     @classmethod
     def from_dict(cls, data: Any) -> AnchorPoint | None:
+        """A point built from parsed JSON, or ``None`` when the object is not a well-formed
+        point.
+        """
         if not isinstance(data, dict):
             return None
         seq = data.get("seq")
@@ -62,7 +79,25 @@ class AnchorPoint:
             if not isinstance(value, str) or not value:
                 return None
             fields[name] = value
-        return cls(seq=seq, records=records, **fields)
+        source = data.get("source")
+        if source is not None and (not isinstance(source, str) or not source):
+            return None
+        schema_sha256 = data.get("schema_sha256")
+        if schema_sha256 is not None and (not isinstance(schema_sha256, str) or not schema_sha256):
+            return None
+        schema_version = data.get("schema_version")
+        if schema_version is not None and (
+            not isinstance(schema_version, int) or isinstance(schema_version, bool)
+        ):
+            return None
+        return cls(
+            seq=seq,
+            records=records,
+            source=source,
+            schema_sha256=schema_sha256,
+            schema_version=schema_version,
+            **fields,
+        )
 
 
 class Anchor(Protocol):
@@ -87,18 +122,21 @@ class FileAnchor:
         if not self.path.is_file():
             return []
         points: list[AnchorPoint] = []
-        with self.path.open(encoding="utf-8") as stream:
-            for number, line in enumerate(stream, 1):
-                text = line.strip()
-                if not text:
-                    continue
-                try:
-                    point = AnchorPoint.from_dict(json.loads(text))
-                except json.JSONDecodeError as error:
-                    raise AnchorError(f"{self.path}: line {number} is not valid JSON") from error
-                if point is None:
-                    raise AnchorError(f"{self.path}: line {number} is not an anchor point")
-                points.append(point)
+        try:
+            with self.path.open(encoding="utf-8") as stream:
+                for number, line in enumerate(stream, 1):
+                    text = line.strip()
+                    if not text:
+                        continue
+                    try:
+                        point = AnchorPoint.from_dict(json.loads(text))
+                    except json.JSONDecodeError as error:
+                        raise AnchorError(f"{self.path}: line {number} is not valid JSON") from error
+                    if point is None:
+                        raise AnchorError(f"{self.path}: line {number} is not an anchor point")
+                    points.append(point)
+        except UnicodeDecodeError as error:
+            raise AnchorError(f"{self.path}: is not valid UTF-8 text: {error.reason}") from error
         return points
 
     def latest(self) -> AnchorPoint | None:
@@ -106,7 +144,16 @@ class FileAnchor:
         return points[-1] if points else None
 
     def publish(self, point: AnchorPoint) -> AnchorPoint:
+        """Append a point; refuse a lower ``seq``, and a point for another source than the file
+        holds.
+        """
         previous = self.latest()
+        if previous is not None and previous.source != point.source:
+            # Two chains number their records separately, so one file cannot hold both.
+            raise AnchorError(
+                f"{self.path} already holds points for another source; "
+                "use one anchor file per ledger or event store"
+            )
         if previous is not None and point.seq < previous.seq:
             raise AnchorError(
                 f"refusing to anchor #{point.seq}: #{previous.seq} is already anchored"
@@ -132,12 +179,24 @@ def make_anchor(spec: str | Path) -> Anchor:
     return FileAnchor(Path(text).expanduser())
 
 
-def point_for(ledger_path: Path, *, seq: int, digest: str, records: int) -> AnchorPoint:
-    """Build a point for a ledger head."""
+def point_for(
+    ledger_path: Path,
+    *,
+    seq: int,
+    digest: str,
+    records: int,
+    source: str | None = None,
+    schema_sha256: str | None = None,
+    schema_version: int | None = None,
+) -> AnchorPoint:
+    """Build a point for a ledger head (or, with ``source``, for an event store's head)."""
     return AnchorPoint(
         seq=seq,
         digest=digest,
         records=records,
         timestamp=utc_now(),
         ledger=Path(ledger_path).name,
+        source=source,
+        schema_sha256=schema_sha256,
+        schema_version=schema_version,
     )

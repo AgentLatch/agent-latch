@@ -27,6 +27,15 @@ jobs:
           python -m pip install -e ".[dev]"
       - name: Run unit tests
         run: python -m pytest
+      - name: Prove the operating system keeps a second user out of the audit store
+        # Creates a real second user. The test runs as this user's opposite: the store belongs to
+        # the runner, and the other user's open, chmod, delete and anchor-write must all be denied.
+        env:
+          AGENTLATCH_SECOND_USER: agentlatch-agent
+          AGENTLATCH_REQUIRE_SECOND_USER: "1"
+        run: |
+          sudo useradd --create-home --shell /usr/sbin/nologin "$AGENTLATCH_SECOND_USER"
+          python -m pytest tests/test_audit_store.py -k second_os_user -v
       - name: Lint with ruff
         run: ruff check .
 
@@ -48,7 +57,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,runtime]"
       - name: Run runtime tests
-        run: python -m pytest tests/test_runtime.py tests/test_runtime_middleware.py
+        run: python -m pytest tests/test_runtime.py tests/test_runtime_middleware.py tests/test_audit_store.py
 
   action-smoke-test:
     name: GitHub Action smoke test (vulnerable demo)

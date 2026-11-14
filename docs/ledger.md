@@ -2,7 +2,7 @@
 
 The runtime proxy writes a log of what an agent did. That log is the only record you have. If the
 agent — or anyone with its account — can quietly edit it, it is not evidence: it is a story the
-agent tells about itself.
+agent tells about itself .
 
 The audit ledger is a small, local, standard-library layer that makes those edits visible. It does
 **not** move your logs, call a chain, add a dependency, or sit in the request path.
@@ -123,11 +123,78 @@ evidence.
 was recorded". It says nothing about whether what was recorded was safe, whether the agent behaved,
 or whether the tools it called were appropriate. That is the scanner's and the gates' job.
 
+## The event store gets the same protection
+
+`import-logs --database` keeps every normalized event in a local database. That store needs the same
+promise as the trace, and a database can be edited with one SQL statement. So the protection does not
+depend on the database or on SQL. Four layers, each in one place in the code:
+
+1. **Append-only contract.** The store contract splits into a *writer* (`open`, `save`, `close`;
+   saving a key again keeps the first write; only `import-logs` holds it) and a *reader* (no write
+   methods; given to agent-facing tools and dashboards). The SQLite reader also opens the file
+   read-only and refuses every statement that is not a read, so a tool that runs raw SQL still cannot
+   delete, update, drop, alter or attach.
+2. **Seal every event.** Each row carries three plain values, `seal_seq`, `seal_prev` and
+   `seal_digest`: a SHA-256 over the event and its import time, chained to the row before it. AgentLatch
+   computes it; the database never does. Any store that can hold a number and some text can hold it.
+3. **Anchor and fail closed.** The newest seal is published to an anchor file the agent cannot write.
+   `verify --database` recomputes every seal and the table layout and reports the six verdicts above.
+   `import-logs` runs the same check before it adds anything and refuses (exit `1`) a store that
+   fails it. It never repairs or re-seals. `agent-latch --runtime-result --database FILE` puts the
+   same verdict at the top of the runtime report and in SARIF.
+4. **Separation (deployment).** The only thing that *stops* a change is the agent never reaching the
+   store: it belongs to another OS user or container, mode `0600`, and the agent is not given its path
+   or credentials. The operating system answers "permission denied", because one user cannot change
+   another user's file permissions.
+
+**A store that does not seal is never accepted silently.** A store that skips layer 2 (a
+connector written only to the writer contract) still receives events, but `import-logs` warns that
+changes to it cannot be detected, refuses `--anchor` with it, and records `ALR15-R02` *Event store is
+not tamper-evident* in `gate-results.csv`. The runtime report raises the same finding for an older,
+not-yet-sealed database. Both fail the report even with `--fail-on none`.
+
+Layers 2 and 3 *detect*; layer 4 *prevents*. SQLite triggers (migration 4) abort plain `UPDATE` and
+`DELETE` as an extra, but anyone who can write the file can drop them, so nothing relies on them.
+
+| Attack on the store | Caught? | By what |
+|---|---|---|
+| Ask a tool to delete, change or drop events | Refused | The reader's connection, and no tool offers a writer |
+| Save an event again with different content | Ignored | The first write stays |
+| Edit, delete or swap rows directly | Yes | The row no longer matches its seal; `import-logs` refuses the store |
+| Drop the table, or cut the newest rows | Yes, `deleted` | The anchored head is higher than the store |
+| Add a forged row after the newest anchor | At start-up, **if the logs are intact** | `verify` only reports `unanchored` for rows past the anchor: it cannot tell a forgery from an honest row not yet anchored. When `import-logs` starts, it keeps such a row only if the trace and payload files rebuild it exactly, so an attacker who can change the store *and* those logs can get a forged row accepted. **While the importer is running** nothing compares a row appended by someone who can write the store with the logs: the next event chains onto it and is anchored. Keep the store out of the agent's reach, and seal and anchor the trace with `--ledger` |
+| Rewrite every row with fresh seals | Yes, `rewritten`, **only with an anchor** | The newest seal no longer equals the published digest. `verify` holds the store to **every** point ever published, not just the newest, so a rewrite that was later published over (even by a running importer that trusted it) still conflicts with the older points; the importer also re-checks the last point just before it publishes a new one, and re-checks every row it has saved but not yet anchored before it saves or publishes anything newer |
+| Add a column, edit the `event_log` view, drop a trigger | Yes, `tampered` | The table layout no longer matches what AgentLatch creates |
+| Delete the store file | Yes, `deleted` with an anchor; `missing` without | The anchor proves rows existed |
+| Read, write, chmod or delete the store as another OS user | Blocked by the OS | Layer 4 |
+| Change the anchor as well | **No** | Keep the anchor off the machine or in write-once storage |
+
+**A crash between saving and publishing** leaves the store a few rows ahead of the anchor. The next
+`import-logs` rebuilds those rows from the trace and payload files and keeps them only if every one
+matches; otherwise it refuses the store. A crash never locks the store, and a forged row is refused unless
+the same attacker also forged matching trace and payload lines. `--ledger` seals the trace only; the
+payloads file is not sealed, and `import-logs` does not check the trace ledger or compare payload content
+with the trace hashes. Keep both files out of the agent's reach while recovery runs, protect the payloads
+file separately, and verify the trace against a trusted anchor before relying on recovered rows.
+
+**The first anchor.** A new store creates its first point on its first `import-logs --anchor`. A store
+that already has seals but no anchor file is refused, because that is what a deleted anchor looks like.
+Find out which it is: if an anchor existed, restore or investigate it first, because a new point is taken
+from the store as it stands. Only for a store that was never anchored, run `anchor --database` once to
+start anchoring it on purpose. After that, `anchor --database` refuses rows past the newest point that
+the logs have not vouched for (see the importer's check above) unless told `--accept-unchecked-rows`.
+
+**What the seal does not cover.** It cannot show that a row was altered *before* it was sealed, so an
+older database sealed on upgrade is vouched for only from that moment. It does not cover `events.csv`,
+`gate-results.csv` or `normalized.jsonl`. It is a single-writer chain: run one `import-logs` per store.
+
 ## Where it fits
 
 The ledger is a gate in the same catalog as every other check: `ALR15`, *tamper-evident audit
 trail*, mapped to `ASI10` (Rogue Agents) — an agent that covers its tracks is the behaviour this
-outcome addresses. Its detector is `ALR15-R01`, a runtime check. Like every gate, it is
+outcome addresses. Its detectors are runtime checks: `ALR15-R01` (the six verdicts, for the trace
+ledger and the event store) and `ALR15-R02` (an event store that does not seal its rows, so nothing in
+it can be checked). Like every gate, it is
 informational: no compliance claim, no OWASP endorsement. See [GATES.md](GATES.md).
 
 The verifier is deliberately **not** a plugin under `src/agent_latch/gates/`. That package holds

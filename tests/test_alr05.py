@@ -278,19 +278,26 @@ def test_identical_output_is_not_reported_twice() -> None:
     assert alr05.evaluate(_call_event(INJECTION))["findings"] == []
 
 
-def test_context_lowers_severity_for_an_internal_tool() -> None:
-    findings = alr05.evaluate(_call_event(INJECTION, tool="calculate_sum"))["findings"]
+def test_a_server_cannot_lower_severity_by_its_tool_name_or_annotations() -> None:
+    # Name, annotations and hints are declared by the (untrusted) server: they are reported as
+    # context but never downgrade a finding.
+    internal = alr05.evaluate(_call_event(INJECTION, tool="calculate_sum"))["findings"]
+    assert internal and all(finding["severity"] == "high" for finding in internal)
+    assert all(finding["outside_content_context"] is False for finding in internal)
 
-    assert findings and all(finding["severity"] == "medium" for finding in findings)
-    assert all(finding["outside_content_context"] is False for finding in findings)
+    alr05.reset_state()
+    alr05.evaluate(_tools_list(names=("lookup_ticket",), annotations={"openWorldHint": False}))
+    declared = alr05.evaluate(_call_event(INJECTION, tool="lookup_ticket", order=2))["findings"]
+    assert declared and all(finding["severity"] == "high" for finding in declared)
 
 
-def test_open_world_hint_raises_severity() -> None:
+def test_open_world_hint_is_reported_as_context() -> None:
     alr05.evaluate(_tools_list(names=("lookup_ticket",),
                                annotations={"openWorldHint": True}))
     findings = alr05.evaluate(_call_event(INJECTION, tool="lookup_ticket", order=2))["findings"]
 
     assert findings and all(finding["severity"] == "high" for finding in findings)
+    assert all(finding["outside_content_context"] is True for finding in findings)
 
 
 def test_suppression_policy_marks_the_finding() -> None:

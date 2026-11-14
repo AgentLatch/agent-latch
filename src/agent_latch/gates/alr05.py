@@ -12,8 +12,9 @@ agent's behaviour. Three detectors share the text engine in ``agent_latch.gates.
   server, send data somewhere, or open a URL.
 
 Context. Output from tools that fetch outside content (web, email, files, tickets) is the main
-risk, so a finding's severity is raised when the tool declares ``openWorldHint`` or its name
-reads as an outside-content tool, and lowered when it does not. Context never skips the check.
+risk, so a finding records whether the tool declares ``openWorldHint`` or its name reads as an
+outside-content tool (``outside_content_context``). That context is self-declared by the server,
+so it never skips a check and never lowers a finding: severity follows the outcome alone.
 
 Coverage (``ALR05-R90``). Payload records exist only when the proxy runs with ``--payloads``;
 without them there is nothing to scan, and the gate emits one coverage record per run, not per
@@ -311,11 +312,10 @@ def _result(*, category: str, tool: str, server: str, event: Mapping[str, Any],
     rule_id = RULE_IDS[category]
     suppressed_reason = _suppression(policy, rule_id)
     suppressed = suppressed_reason is not None
-    # Context raises or lowers severity; it never skips the check.
-    severity = {
-        "FAIL": "high" if outside else "medium",
-        "INCONCLUSIVE": "medium" if outside else "low",
-    }.get(outcome, "info")
+    # Severity follows the outcome only. The tool's name and annotations come from the server,
+    # which is untrusted, so they are reported as context (outside_content_context) and never
+    # lower a finding.
+    severity = {"FAIL": "high", "INCONCLUSIVE": "medium"}.get(outcome, "info")
     return {
         "gate_id": GATE_ID, "rule_id": rule_id, "family": category,
         "entity": {"server": safe(server), "tool": safe(tool)},
