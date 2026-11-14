@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import copy
 import csv
+import functools
 import importlib
+import inspect
 import json
 import logging
 import os
@@ -138,8 +140,38 @@ class GatePlugin:
     evaluate: Callable[[dict[str, Any]], Mapping[str, Any]]
 
 
-def discover_gates() -> list[GatePlugin]:
-    """Load gate modules from ``agent_latch.gates`` in deterministic order."""
+MAX_POLICY_BYTES = 256 * 1024
+
+
+def load_policy(path: Path) -> dict[str, Any]:
+    """Operator policy from a YAML or JSON file; raises ``ValueError``/``OSError`` when unusable.
+
+    The policy is trusted operator configuration (for example ``allowed_secret_tools`` for ALR10).
+    Never point it at a file from the project being monitored. Loaded with ``yaml.safe_load``.
+    """
+    import yaml
+
+    with path.open("rb") as stream:
+        raw = stream.read(MAX_POLICY_BYTES + 1)
+    if len(raw) > MAX_POLICY_BYTES:
+        raise ValueError(f"policy file {path} is larger than {MAX_POLICY_BYTES} bytes")
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as error:
+        raise ValueError(f"policy file {path} is not valid YAML or JSON") from error
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(f"policy file {path} must hold a mapping at the top level")  # noqa: TRY004 - the CLI reports ValueError as exit 2
+    return data
+
+
+def discover_gates(policy: Mapping[str, Any] | None = None) -> list[GatePlugin]:
+    """Load gate modules from ``agent_latch.gates`` in deterministic order.
+
+    ``policy`` (trusted operator configuration, see ``load_policy``) is handed to every gate whose
+    ``evaluate`` accepts a ``policy`` keyword.
+    """
     package = importlib.import_module("agent_latch.gates")
     package_path = getattr(package, "__path__", None)
     if package_path is None:
@@ -156,6 +188,8 @@ def discover_gates() -> list[GatePlugin]:
             raise ValueError(
                 f"gate module {module.__name__} must define non-empty GATE_ID and evaluate(event)"
             )
+        if policy is not None and "policy" in inspect.signature(evaluate).parameters:
+            evaluate = functools.partial(evaluate, policy=policy)
         plugins.append(GatePlugin(gate_id=gate_id, evaluate=evaluate))
 
     ids = [plugin.gate_id for plugin in plugins]

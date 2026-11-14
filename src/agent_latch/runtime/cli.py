@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from rich_argparse import RawDescriptionRichHelpFormatter
 
 from agent_latch import __version__
-from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
+from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates, load_policy
 from agent_latch.runtime.ledger import (
     Ledger,
     LedgerError,
@@ -178,6 +178,12 @@ def _parser() -> argparse.ArgumentParser:
         " cannot write. A new store creates the first point; a sealed store with no anchor is"
         " refused until `anchor --database` is run once",
     )
+    importer.add_argument(
+        "--policy", type=Path, metavar="FILE",
+        help="operator policy (YAML or JSON) handed to the gates, for example"
+        " allowed_secret_tools for ALR10. Trusted configuration: never a file from the monitored"
+        " project",
+    )
     importer.add_argument("--run-id", help="run id for the events (default: hash of first trace line)")
     importer.add_argument(
         "--once", action="store_true",
@@ -269,9 +275,10 @@ def _parser() -> argparse.ArgumentParser:
         help=f"folder for the demo's files, replaced on each run (default {DEFAULT_LOG_DIR}/demo)",
     )
     demo.add_argument(
-        "--scenario", choices=("default", "poisoned-output"), default="default",
+        "--scenario", choices=("default", "poisoned-output", "secret-leak"), default="default",
         help="default: a mix of ordinary calls; poisoned-output: one web fetch whose result "
-             "carries hidden and visible injection content for ALR05",
+             "carries hidden and visible injection content for ALR05; secret-leak: sends a fake "
+             "credential to a tool and reads one back so the ALR10 checks fire",
     )
     return parser
 
@@ -340,6 +347,7 @@ def _proxy(args: argparse.Namespace) -> int:
             args.trace,
             summary=None if args.quiet else sys.stderr,
             excerpt_chars=args.excerpt_chars,
+            transport="http" if args.upstream_url else "stdio",
             ledger=ledger,
             warn=None if args.quiet else sys.stderr,
         )
@@ -392,7 +400,7 @@ def _import_logs(args: argparse.Namespace) -> int:
         print("agent-latch-runtime: --anchor needs --database", file=sys.stderr)
         return 2
     try:
-        gates = discover_gates()
+        gates = discover_gates(load_policy(args.policy) if args.policy else None)
         store = SQLiteEventStore(args.database) if args.database else None
         importer = RuntimeLogImporter(
             trace,

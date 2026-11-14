@@ -4,8 +4,8 @@ One normal tool, one tool whose output holds a fake credential (to show masking)
 tool, one tool whose output carries a prompt-injection payload, one tool whose output is ordinary
 imperative instructions (a benign contrast for ALR05), one web-fetch tool whose page hides an
 instruction in invisible characters and steers the agent toward a sibling email tool (the
-``--scenario poisoned-output`` demo), and one prompt. Nothing here touches the network or the
-file system.
+``--scenario poisoned-output`` demo), two tools for the secret-leak demo scenario, and one prompt.
+Nothing here touches the network or the file system.
 
 Run directly (stdio): python -m agent_latch.runtime.demo_server
 """
@@ -73,6 +73,19 @@ def fetch_page(url: str) -> str:
 def send_email(to: str, subject: str) -> str:
     """Pretend to queue an email; nothing is sent."""
     return f"email to {to} queued: {subject}"
+
+
+@server.tool(annotations={"readOnlyHint": True})
+def search_issues(query: str, token: str = "") -> str:
+    """Search issues; the secret-leak demo passes a fake credential in ``token``."""
+    return f"2 issues match {query!r}."
+
+
+@server.tool(annotations={"readOnlyHint": True})
+def read_config(section: str = "default") -> str:
+    """Return a config block that contains a fake AWS key, to test output redaction."""
+    key = "AKIA" + "FAKEFAKEFAKEFAKE"
+    return f"[{section}]\nregion = eu-west-1\naws_access_key_id = {key}\n"
 
 
 @server.prompt

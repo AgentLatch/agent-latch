@@ -40,7 +40,7 @@ AgentLatch is often run on agents someone else wrote, so nothing inside the scan
 |---|---|---|---|
 | ASI01 | Agent Goal Hijack | `ALR01`, `ALR04`, `ALR05` | `AG003`, `PRM001`, `PRM002`, `ALR01-S01`, `ALR05-R01`, `ALR05-R02`, `ALR05-R03` |
 | ASI02 | Tool Misuse and Exploitation | `ALR02`, `ALR03`, `ALR04`, `ALR06`, `ALR07`, `ALR09`, `ALR12` | `PY001`, `PY002`, `PY003`, `AG001`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `MAN002`, `MAN003`, `ALR06-S02`, `ALR12-S01` |
-| ASI03 | Identity and Privilege Abuse | `ALR03`, `ALR07`, `ALR09`, `ALR10` | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003`, `ALR03-S01` |
+| ASI03 | Identity and Privilege Abuse | `ALR03`, `ALR07`, `ALR09`, `ALR10` | `AG001`, `AG004`, `AG005`, `SEC001`, `MAN001`, `MAN002`, `MAN003`, `ALR03-S01`, `ALR10-R01`, `ALR10-R02` |
 | ASI04 | Agentic Supply Chain Vulnerabilities | `ALR02`, `ALR03`, `ALR04`, `ALR10`, `ALR11` | `SEC001`, `DEP001`, `ALR11-S01` |
 | ASI05 | Unexpected Code Execution (RCE) | `ALR06`, `ALR07`, `ALR09` | `PY001`, `PY002`, `AG002`, `AG004`, `AG005`, `AG006`, `MAN001`, `ALR06-S01`, `ALR06-S02` |
 | ASI06 | Memory & Context Poisoning | `ALR13` | `ALR13-S01`, `ALR13-S02` (partial) |
@@ -92,9 +92,10 @@ src/agent_latch/
     alr03.py      # ALR03: endpoint trust from the recorded handshake: identification, identity change, name impersonation (preview; reports findings only)
     alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; reports findings only)
     alr05.py      # ALR05: instruction-like content in MCP tool results (preview; review signals only)
+    alr10.py      # ALR10: secret-like values crossing the tool boundary (preview; reads masked payloads only)
   runtime/        # MCP traffic recording (preview, monitor only; `[runtime]` extra). Logs go to runtime-logs/, not here.
     events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
-    redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file
+    redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file; masked-location (path+kind) metadata
     trace.py      # TraceLog: one redacted JSONL record per MCP message (agentlatch.runtime.trace/1)
     payloads.py   # PayloadTap: full-payload records to sinks; PayloadFile (opt-in --payloads, masked)
     normalizer.py # MCPEventNormalizer: joins a trace record and its payload record into one event
@@ -112,7 +113,7 @@ src/agent_latch/
     middleware.py # AgentLatchMiddleware: FastMCP middleware that records traffic [needs fastmcp]
     proxy.py      # build_proxy: one MCP server (stdio command or URL) behind it [needs fastmcp]
     demo_server.py # synthetic MCP server for `demo` and the runtime tests [needs fastmcp]
-    demo.py       # `demo`: drives demo_server through the proxy, then imports the logs [needs fastmcp]
+    demo.py       # `demo`: drives demo_server through the proxy (`--scenario poisoned-output` for ALR05, `--scenario secret-leak` for ALR10), then imports the logs [needs fastmcp]
     audit_tool.py # `audit-tool`: MCP server with read-only query_audit_log and recent_events, holds only an EventReader [needs fastmcp]
     cli.py        # agent-latch-runtime console script (`proxy`, `import-logs`, `anchor`, `verify`, `audit-tool`, `demo`)
 tests/test_scanner.py          # scanner unit tests (synthetic fixtures via tmp_path)
@@ -126,8 +127,10 @@ tests/test_alr03.py            # ALR03 endpoint-trust gate: identification and i
 tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
 tests/test_alr05.py            # ALR05 tool-output checks: positive, benign and coverage cases
 tests/test_alr05_eval.py       # ALR05 held-out detection targets (recall >= 80%, FP <= 10%)
+tests/test_alr10.py            # ALR10: masking metadata, severity, policy, leak-proofing (SQLite, SARIF) and the inline labeled corpus
+tests/test_alr10_heldout.py    # ALR10 validation on runtime_fixtures/alr10_heldout.json: request and response rates, known misses
 tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
-tests/runtime_fixtures/        # demo-server wrapper, audit_reader_server (a reader-only MCP tool), the ALR04 event dataset, and the ALR05 labeled output cases
+tests/runtime_fixtures/        # demo-server wrapper, audit_reader_server (a reader-only MCP tool), the ALR04 event dataset, the ALR05 labeled output cases, and the ALR10 validation set
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
 docs/                          # getting-started, agent-manifest, ci, RULES, release notes, brand assets
@@ -182,14 +185,14 @@ agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
             [--http HOST:PORT] (--upstream-url URL | -- SERVER COMMAND...)
 agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
             [--events-csv FILE] [--output-csv FILE] [--normalized-out FILE]
-            [--database FILE [--anchor PATH]] [--run-id ID] [--once] [--quiet]
+            [--database FILE [--anchor PATH]] [--policy FILE] [--run-id ID] [--once] [--quiet]
 agent-latch-runtime anchor (--ledger FILE | --database FILE [--accept-unchecked-rows]) --to PATH [--quiet]
 agent-latch-runtime verify [PATH | --ledger FILE | --database FILE] [--all] [--trace FILE] [--anchor PATH]
 agent-latch-runtime audit-tool --database FILE [--name NAME]
-agent-latch-runtime demo [--dir DIR]
+agent-latch-runtime demo [--dir DIR] [--scenario default|poisoned-output|secret-leak]
 ```
 
-`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR04 is installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. ALR04 reports findings only; the runtime report does not clear a tool. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command.
+`agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR03, ALR04 and ALR10 are installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. The gates report findings only; the runtime report does not clear a tool. ALR10 reads only masked payloads: its evidence is the masked-location metadata (`payloads.masked_record`), so it never sees or writes a raw secret. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command; `--scenario secret-leak` sends and receives fake credentials so the ALR10 checks fire. `--policy FILE` (YAML or JSON, trusted operator configuration, never from the monitored project) is passed to every gate whose `evaluate` accepts `policy`: the ALR10 allowlist `allowed_secret_tools` and the ALR03 suppressions. `importer.load_policy` reads it with `yaml.safe_load`; a bad file exits `2`. Stored payload metadata is untrusted: ALR10 reports any masking kind outside `alr10.APPROVED_KINDS` as `unknown`.
 
 `--database FILE` is the operator's choice of a local store. It saves each normalized event in a SQLite file (`SQLiteEventStore`) and is off when omitted. The importer talks to that file only through the `EventWriter` contract in `importer.py` (`open`, `save`, `close`; `EventStore` is its old name), and anything that shows events to an agent or a dashboard gets an `EventReader` (`SQLiteEventReader`: read-only connection that refuses every statement but a read), never the writer. SQLite is the first implementation, using the standard-library `sqlite3` module, so it adds no dependency and makes no network request. A later destination (a warehouse or an opt-in trace exporter) implements the same contract and is selected the same way: by a flag on `import-logs`, not by a default. The database can hold payload data, so a new file is created with mode `0600` where the platform supports it. Keep it local. Do not add a vendor client as a required dependency.
 
@@ -238,7 +241,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 
 ### Runtime gates
 
-Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per gate, `GATE_ID` = the gate ID, `evaluate(event)`), discovered by the importer and run on every normalized event. They report findings and never block. Today three ship: `alr03.py` (endpoint trust from the recorded handshake: server identification `ALR03-001`, identity change `ALR03-002`, name impersonation `ALR03-003` — non-regex string similarity) `alr04.py` (tool schema injection) and `alr05.py` (instruction-like content in tool results). Register a runtime gate's detectors in its gate's `detectors` group in `catalog.GATES` (IDs `ALRnn-0nn`), add its coverage/summary IDs to `catalog.DIAGNOSTICS`, and regenerate `docs/GATES.md`.
+Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per gate, `GATE_ID` = the gate ID, `evaluate(event)`), discovered by the importer and run on every normalized event. They report findings and never block. Today four ship: `alr03.py` (endpoint trust from the recorded handshake: server identification `ALR03-001`, identity change `ALR03-002`, name impersonation `ALR03-003` — non-regex string similarity) `alr04.py` (tool schema injection), `alr05.py` (instruction-like content in tool results) and `alr10.py` (secret-like values crossing the tool boundary, from masked payloads only). Register a runtime gate's detectors in its gate's `detectors` group in `catalog.GATES` (IDs `ALRnn-0nn`), add its coverage/summary IDs to `catalog.DIAGNOSTICS`, and regenerate `docs/GATES.md`.
 
 ### Adding or changing a rule
 

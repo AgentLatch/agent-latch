@@ -2,7 +2,9 @@
 
 It starts the bundled demo server (``demo_server``) behind the real proxy with ``--trace`` and
 ``--payloads``, makes a few calls through it as an MCP client would, then imports the logs once.
-Nothing leaves the machine: the server is local and synthetic, and its fake credential is masked.
+The ``secret-leak`` scenario instead sends a GitHub-token-shaped fake value to ``search_issues``
+and reads a fake AWS key back from ``read_config``, so ALR10-R01 and ALR10-R02 fire. Nothing
+leaves the machine: the server is local and synthetic, and every fake credential is masked.
 """
 
 from __future__ import annotations
@@ -16,14 +18,14 @@ from typing import TextIO
 from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
 
 DEMO_SERVER = "demo-server"
+SCENARIOS = ("default", "poisoned-output", "secret-leak")
+# A fake, token-shaped value (built by concatenation so secret scanners do not flag the source).
+FAKE_GITHUB_TOKEN = "ghp_" + "DEMOFAKE" * 3
 # The only files the demo writes; a rerun removes just these, so the demo starts clean.
 DEMO_FILES = (
     "trace.jsonl", "payloads.jsonl", "events.csv", "gate-results.csv", "normalized.jsonl",
     "proxy.log",
 )
-
-
-SCENARIOS = ("default", "poisoned-output")
 
 
 async def _drive(directory: Path, log_file: TextIO, scenario: str) -> None:
@@ -44,6 +46,12 @@ async def _drive(directory: Path, log_file: TextIO, scenario: str) -> None:
     )
     async with Client(transport) as client:
         await client.list_tools()
+        if scenario == "secret-leak":
+            await client.call_tool(
+                "search_issues", {"query": "is:open label:bug", "token": FAKE_GITHUB_TOKEN}
+            )
+            await client.call_tool("read_config", {"section": "aws"})
+            return
         if scenario == "poisoned-output":
             # One fetch whose page hides an instruction in invisible characters and visibly
             # steers the agent toward the sibling send_email tool (ALR05-R02 and ALR05-R03).
@@ -70,7 +78,8 @@ def run_demo(directory: Path, *, out: TextIO | None = None, scenario: str = "def
     for name in DEMO_FILES:
         (directory / name).unlink(missing_ok=True)
     out.write(
-        f"agent-latch-runtime: demo: calling the synthetic {DEMO_SERVER} through the proxy\n"
+        f"agent-latch-runtime: demo: calling the synthetic {DEMO_SERVER} through the proxy"
+        f" (scenario: {scenario})\n"
     )
     out.flush()
     # The proxy's own stderr (startup message, warnings) goes to proxy.log in the demo folder.
