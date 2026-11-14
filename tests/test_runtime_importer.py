@@ -478,6 +478,7 @@ def test_failed_save_in_one_shot_mode_is_an_error(tmp_path: Path) -> None:
 
 
 def test_migrations_create_and_keep_the_schema(tmp_path: Path) -> None:
+    """The schema is created once, survives reopening, and has the event and seal columns."""
     database = tmp_path / "runtime.db"
     _stored(database)
     _stored(database)  # opening again is safe
@@ -485,7 +486,7 @@ def test_migrations_create_and_keep_the_schema(tmp_path: Path) -> None:
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == len(sqlite_store.MIGRATIONS)
         columns = [row[1] for row in conn.execute("PRAGMA table_info(events)")]
-        assert columns == list(sqlite_store.COLUMNS)
+        assert columns == [*sqlite_store.COLUMNS, *sqlite_store.SEAL_COLUMNS]
     finally:
         conn.close()
 

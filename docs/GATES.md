@@ -26,7 +26,7 @@ A gate is a security outcome AgentLatch checks for, such as "destructive actions
 | `ALR12` | Secure transport | TLS is verified and agent or tool traffic does not use plain HTTP | `PY003`, `ALR12-S01` | `ASI02`, `ASI07` | Art. 15 | partial |
 | `ALR13` | Memory and context integrity | Untrusted content is not written to agent memory or vector stores | `ALR13-S01`, `ALR13-S02` | `ASI06` | Art. 15 | partial |
 | `ALR14` | Rogue agent containment | Agents cannot modify their own prompts or config, or spawn agents without limits | `ALR14-S01`, `ALR14-S02`, `ALR14-S03` | `ASI10` | Art. 14, Art. 15 | partial |
-| `ALR15` | Tamper-evident audit trail | The record of what the agent did cannot be altered, deleted or rebuilt unnoticed | `ALR15-R01` | `ASI10` | Art. 12, Art. 15 | preview (runtime) |
+| `ALR15` | Tamper-evident audit trail | The record of what the agent did cannot be altered, deleted or rebuilt unnoticed | `ALR15-R01`, `ALR15-R02` | `ASI10` | Art. 12, Art. 15 | preview (runtime) |
 
 ## Detectors
 
@@ -77,6 +77,7 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `ALR14-S02` | `ALR14` | static | Persistence brings the agent back after it is stopped, outside a user's view | `ASI10` |
 | `ALR14-S03` | `ALR14` | static | Installing packages at runtime pulls unreviewed code into the agent process | `ASI10` |
 | `ALR15-R01` | `ALR15` | runtime | An agent, or whoever holds its account, can hide what it did by editing or rebuilding its own audit log | `ASI10` |
+| `ALR15-R02` | `ALR15` | runtime | An event store that does not seal its rows can be changed without a trace, so its record cannot be checked at all | `ASI10` |
 
 Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR03-090` alr03 could not fully identify an endpoint from its handshake (coverage); `ALR03-099` alr03 per-scan summary; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary.
 

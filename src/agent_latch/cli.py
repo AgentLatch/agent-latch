@@ -141,6 +141,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     output.add_argument(
+        "--database",
+        metavar="FILE",
+        help=(
+            "With --runtime-result: check the event store written by `agent-latch-runtime"
+            " import-logs --database` (its seals and layout) and print its verdict above the"
+            " findings. A store that does not seal its rows is reported as ALR15-R02"
+        ),
+    )
+    output.add_argument(
+        "--database-anchor",
+        metavar="PATH",
+        help=(
+            "With --database: also compare the store with every point in this anchor file, so a"
+            " rebuilt store is caught and not only an edited one"
+        ),
+    )
+    output.add_argument(
         "--ledger-rows",
         metavar="N",
         type=int,
@@ -416,6 +433,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.anchor is not None and args.ledger is None:
         print("Error: --anchor needs --ledger", file=sys.stderr)
         return 2
+    if args.database_anchor is not None and args.database is None:
+        print("Error: --database-anchor needs --database", file=sys.stderr)
+        return 2
+    if args.database is not None and args.runtime_result is None:
+        print("Error: --database needs --runtime-result", file=sys.stderr)
+        return 2
     if args.runtime_result is not None:
         if args.format == "json":
             print("Error: --runtime-result supports --format text or sarif", file=sys.stderr)
@@ -431,6 +454,10 @@ def main(argv: list[str] | None = None) -> int:
             fail_on=args.fail_on,
             ledger=Path(args.ledger).expanduser() if args.ledger else None,
             anchor=Path(args.anchor).expanduser() if args.anchor else None,
+            database=Path(args.database).expanduser() if args.database else None,
+            database_anchor=(
+                Path(args.database_anchor).expanduser() if args.database_anchor else None
+            ),
             output_format=args.format,
             output=Path(args.output).expanduser() if args.output else None,
             ledger_rows_limit=args.ledger_rows,
