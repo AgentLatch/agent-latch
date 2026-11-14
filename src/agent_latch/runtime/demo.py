@@ -18,7 +18,7 @@ from typing import TextIO
 from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
 
 DEMO_SERVER = "demo-server"
-SCENARIOS = ("default", "secret-leak")
+SCENARIOS = ("default", "poisoned-output", "secret-leak")
 # A fake, token-shaped value (built by concatenation so secret scanners do not flag the source).
 FAKE_GITHUB_TOKEN = "ghp_" + "DEMOFAKE" * 3
 # The only files the demo writes; a rerun removes just these, so the demo starts clean.
@@ -52,20 +52,28 @@ async def _drive(directory: Path, log_file: TextIO, scenario: str) -> None:
             )
             await client.call_tool("read_config", {"section": "aws"})
             return
+        if scenario == "poisoned-output":
+            # One fetch whose page hides an instruction in invisible characters and visibly
+            # steers the agent toward the sibling send_email tool (ALR05-R02 and ALR05-R03).
+            await client.call_tool("fetch_page", {"url": "https://example.com/news"})
+            return
         await client.call_tool("get_weather", {"city": "London"})
         await client.call_tool("leaky_lookup", {"user": "alice"})
         await client.call_tool("broken_tool", {"reason": "demo"}, raise_on_error=False)
+        # ALR05 contrast: instruction-like output (finding) vs ordinary instructions (none).
+        await client.call_tool("echo_injection", {"city": "London"})
+        await client.call_tool("recipe_steps", {"dish": "pancakes"})
         await client.list_prompts()
         await client.get_prompt("summarize", {"topic": "Mars"})
 
 
-def run_demo(directory: Path, *, scenario: str = "default", out: TextIO | None = None) -> None:
+def run_demo(directory: Path, *, out: TextIO | None = None, scenario: str = "default") -> None:
     """Record a demo session into ``directory`` and import it; raises on failure."""
-    # Resolved at call time: binding sys.stderr as the default would keep whatever stream was
-    # installed when this module was first imported (for example a test capture, later closed).
+    # Resolve sys.stderr at call time: a default bound at import time can point at a stream
+    # that has since been closed (for example a test harness's capture buffer).
     out = out if out is not None else sys.stderr
     if scenario not in SCENARIOS:
-        raise ValueError(f"unknown demo scenario {scenario!r}; expected one of {SCENARIOS}")
+        raise ValueError(f"unknown demo scenario {scenario!r}; choose from {', '.join(SCENARIOS)}")
     directory.mkdir(parents=True, exist_ok=True)
     for name in DEMO_FILES:
         (directory / name).unlink(missing_ok=True)

@@ -9,9 +9,16 @@ It reads only files the proxy has already written, so it runs in parallel with t
 can neither delay nor change it. A gate that raises is recorded as an error result and the
 remaining gates still run. Restarting is safe: results already in the CSV are not repeated.
 
-With an ``EventStore`` (for example ``SQLiteEventStore``), every normalized event is also saved
+With an ``EventWriter`` (for example ``SQLiteEventStore``), every normalized event is also saved
 there, one transaction per pass. A save that fails while following is retried on the next pass,
 so the store catches up once it is reachable again; a restart catches up from the files.
+
+A store that seals its rows (``ledger/event_seal.py``) is checked before anything is added: a
+store that no longer matches its seals or its schema is refused (``StoreTampered``), and nothing is
+repaired or re-sealed. With an ``anchor`` the newest seal is also published after saves, and the
+store must still match the newest published point. A store found *ahead* of its anchor (a crash
+between saving and publishing) is accepted only if every extra row equals the event rebuilt from
+the trace and payload files; otherwise it is refused.
 """
 
 from __future__ import annotations
@@ -28,11 +35,26 @@ import pkgutil
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
+from agent_latch.runtime.ledger.anchor import Anchor, AnchorError, point_for
+from agent_latch.runtime.ledger.canonical import dumps
+from agent_latch.runtime.ledger.event_seal import (
+    SOURCE,
+    SealedSource,
+    StoreIntegrityError,
+    StoreRefused,
+    StoreTampered,
+    anchor_history_issues,
+    changed_message,
+    downgrade_issues,
+    schema_issues,
+    walk_chain,
+)
+from agent_latch.runtime.ledger.verify import Issue
 from agent_latch.runtime.normalizer import (
     PAYLOAD_METHODS,
     EventKey,
@@ -43,6 +65,7 @@ from agent_latch.runtime.normalizer import (
     run_id_for,
     trace_key,
 )
+from agent_latch.runtime.store_check import STORE_ORDER, UNSEALED_GATE_ID, unsealed_result
 from agent_latch.runtime.trace import summarize_record
 
 log = logging.getLogger("agent_latch.runtime")
@@ -55,6 +78,8 @@ EVENT_COLUMNS = (
 # A spreadsheet runs a cell that starts with one of these as a formula.
 _FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
 POLL_INTERVAL_SECONDS = 0.1
+# With --anchor, new seals are published at most this often while following, and once at the end.
+ANCHOR_INTERVAL_SECONDS = 5.0
 # How long a trace record waits for its payload record before moving on without it (follow mode).
 PAYLOAD_GRACE_SECONDS = 2.0
 _BATCH_LINES = 1000
@@ -68,11 +93,15 @@ class Gate(Protocol):
     def evaluate(self, event: dict[str, Any], /) -> Mapping[str, Any]: ...
 
 
-class EventStore(Protocol):
+class EventWriter(Protocol):
     """Where normalized events are kept. ``SQLiteEventStore`` is the local one.
 
     Another destination (a warehouse, or an opt-in trace exporter) implements this same contract.
-    ``save`` returns how many events were new and raises ``OSError`` when the batch was not stored.
+    ``save`` adds only events whose key is new (saving a key again keeps the first write) and
+    returns how many were new; it raises ``OSError`` when the batch was not stored. Only
+    ``import-logs`` holds a writer. A store that also seals its rows provides what
+    ``event_seal.SealedSource`` asks for, plus ``head()`` and ``as_stored()``, and gets the
+    pre-save check and the anchor.
     """
 
     path: Path | None
@@ -82,6 +111,27 @@ class EventStore(Protocol):
     def save(self, events: list[dict[str, Any]], /) -> int: ...
 
     def close(self) -> None: ...
+
+
+class EventReader(Protocol):
+    """Read-only view of a store, for agent-facing tools and dashboards. No write methods.
+
+    ``SQLiteEventReader`` opens the file read-only and refuses every statement that is not a read.
+    """
+
+    path: Path | None
+
+    def open(self) -> None: ...
+
+    def events(self) -> Iterator[dict[str, Any]]: ...
+
+    def head(self) -> Any: ...
+
+    def close(self) -> None: ...
+
+
+# The name this contract had before the writer and reader were split.
+EventStore = EventWriter
 
 
 @dataclass(frozen=True)
@@ -232,18 +282,31 @@ class RuntimeLogImporter:
         events_csv: Path | None = None,
         normalized_path: Path | None = None,
         summary: TextIO | None = None,
-        store: EventStore | None = None,
+        store: EventWriter | None = None,
+        anchor: Anchor | None = None,
         run_id: str | None = None,
         follow: bool = True,
         poll_interval: float = POLL_INTERVAL_SECONDS,
         payload_grace: float = PAYLOAD_GRACE_SECONDS,
     ) -> None:
+        """Set up the importer. ``store`` and ``anchor`` are optional, and an anchor needs a
+        store.
+        """
         if poll_interval <= 0:
             raise ValueError("poll_interval must be greater than zero")
+        if anchor is not None and store is None:
+            raise ValueError("an anchor needs a store: give --database with --anchor")
+        if anchor is not None and not isinstance(store, SealedSource):
+            raise ValueError(
+                f"{type(store).__name__} does not seal its rows, so it has no seal to anchor;"
+                " use a sealed store or leave out --anchor"
+            )
         store_path = store.path if store is not None else None
+        anchor_path = anchor.path if anchor is not None else None
         paths = [
             p for p in (
                 trace_path, payloads_path, output_csv, events_csv, normalized_path, store_path,
+                anchor_path,
             ) if p
         ]
         if len({p.resolve() for p in paths}) != len(paths):
@@ -255,6 +318,7 @@ class RuntimeLogImporter:
         self.normalized_path = normalized_path
         self.summary = summary
         self.store = store
+        self.anchor = anchor
         self.gates = list(gates)
         self.follow = follow
         self.poll_interval = poll_interval
@@ -274,14 +338,31 @@ class RuntimeLogImporter:
         self._done: set[tuple[str, ...]] = set()
         self._events_done: set[tuple[str, ...]] = set()
         self._normalized_done: set[tuple[str, str]] = set()
+        # Set when the store does not seal its rows: reported once per run as ALR15-R02.
+        self._unsealed_store: str | None = None
         self._unsaved: list[dict[str, Any]] = []  # events waiting for the store
         self._store_failing = False
+        # Rows found past the newest anchor, by (run_id, order): each must equal the event rebuilt
+        # from the logs before the store is extended or anchored again.
+        self._tail: dict[tuple[str, int], dict[str, Any]] = {}
+        self._dirty = False  # new seals not yet published
+        self._last_publish = 0.0
+        # The seal of every row this importer saved since it last published, by number. A row
+        # saved but not yet anchored is covered by no anchor point, so the importer itself
+        # remembers it and checks it again before it saves or publishes anything newer.
+        self._saved_seals: dict[int, str] = {}
+        # True once this run has seen or published an anchor point: from then on a missing or
+        # empty anchor file is a deleted anchor, never a store that has not been anchored yet.
+        self._anchor_seen = False
 
     def stop(self) -> None:
         """Ask a following importer to finish its current pass and return."""
         self._stop.set()
 
     def run(self) -> None:
+        """Follow or process the logs, saving events and publishing anchors, and always close the
+        outputs.
+        """
         try:
             self._open_outputs()
             if not (
@@ -296,6 +377,9 @@ class RuntimeLogImporter:
                     continue
                 if not self.follow:
                     break
+                if not self._pending and not self._unsaved:
+                    self._require_tail_matched()  # every log line has been read by now
+                    self._publish(force=False)  # retry a publish the interval skipped
                 self._stop.wait(self.poll_interval)
             if self.follow:
                 self._ingest()
@@ -307,12 +391,18 @@ class RuntimeLogImporter:
                         " saved on the next run",
                         len(self._unsaved),
                     )
+                self._publish(force=True)
             else:
                 self._finish()
+                self._publish(force=True)
+        except KeyboardInterrupt:
+            self._publish_after_interrupt()
+            raise
         finally:
             self._close()
 
     def _finish(self) -> None:
+        """Read what is left in the files, then do the last drain and the last store save."""
         self._trace.finish()
         if self._payloads is not None:
             self._payloads.finish()
@@ -320,13 +410,17 @@ class RuntimeLogImporter:
             pass
         self._drain(final=True)
         self._save_events(final=True)
+        self._require_tail_matched()
         unmatched = sum(len(queue) for queue in self._queues.values())
         if unmatched:
             log.warning("agent-latch-runtime: %d payload record(s) had no trace record", unmatched)
 
     def _open_outputs(self) -> None:
+        """Open the store first (refusing a changed one), then the CSV and JSONL outputs."""
         if self.store is not None:
+            self._refuse_lowered_version()  # before open: opening an old file migrates it
             self.store.open()  # first, so a bad database leaves no other file open
+            self._audit_store()
         if self.events_csv is not None:
             self._events = _open_private(self.events_csv)
             self._events_writer, self._events_done = _csv_writer(
@@ -357,8 +451,12 @@ class RuntimeLogImporter:
         """Save waiting events in one store transaction; keep them for a retry if that fails."""
         if self.store is None or not self._unsaved:
             return
+        self._match_tail(self._unsaved)
+        self._refuse_if_saved_rows_changed()  # before the next save chains onto them
+        self._refuse_if_rewritten_since_last_point()  # and before it extends a changed or lost anchor
+        before = self._head_seq()
         try:
-            self.store.save(self._unsaved)
+            inserted = self.store.save(self._unsaved)
         except OSError as error:
             if final:
                 raise
@@ -366,6 +464,9 @@ class RuntimeLogImporter:
                 log.warning("agent-latch-runtime: %s; retrying", error)
                 self._store_failing = True
             return
+        if inserted:
+            self._dirty = True
+            self._remember_saved_seals(before)
         if self._store_failing:
             log.warning(
                 "agent-latch-runtime: database reachable again; saved %d waiting event(s)",
@@ -373,6 +474,222 @@ class RuntimeLogImporter:
             )
             self._store_failing = False
         self._unsaved = []
+        self._publish(force=False)
+
+    def _refuse_lowered_version(self) -> None:
+        """Refuse before the store is opened when its anchor is unreadable or its version was lowered.
+
+        Opening an older file runs the migrations, and migration 3 would seal every row it finds,
+        including rows an attacker changed after lowering the version. So these checks come first,
+        and an anchor that cannot be read stops the import before the file is touched at all.
+        """
+        store, anchor = self.store, self.anchor
+        if store is None or anchor is None:
+            return
+        try:
+            point = anchor.latest()
+        except (AnchorError, OSError) as error:
+            raise StoreRefused(f"the anchor {anchor.path} cannot be read: {error}") from error
+        stored_version = getattr(store, "stored_version", None)
+        if stored_version is None:
+            return
+        issues = downgrade_issues(stored_version(), point)
+        if issues:
+            raise StoreTampered(changed_message(issues))
+
+    def _audit_store(self) -> None:
+        """Refuse a store that no longer matches its seals, schema or anchor. Writes nothing."""
+        store = self.store
+        if store is None:
+            return
+        if not isinstance(store, SealedSource):
+            # Nothing to check, but say so: an unsealed store can be changed without a trace.
+            log.warning(
+                "agent-latch-runtime: %s does not seal its rows; changes to it cannot be"
+                " detected (only a sealed store is tamper-evident)",
+                type(store).__name__,
+            )
+            self._unsealed_store = type(store).__name__
+            return
+        points: list[Any] = []
+        if self.anchor is not None:
+            try:
+                every = getattr(self.anchor, "points", None)
+                latest = self.anchor.latest()
+                points = list(every()) if every is not None else ([latest] if latest else [])
+            except (AnchorError, OSError) as error:
+                raise StoreRefused(f"the anchor {self.anchor.path} cannot be read: {error}") from error
+            if any(each.source != SOURCE for each in points):
+                raise StoreRefused(
+                    f"the anchor {self.anchor.path} belongs to a trace ledger; use a separate"
+                    " anchor file for the event store"
+                )
+        point = points[-1] if points else None
+        self._anchor_seen = self._anchor_seen or point is not None
+        chain = walk_chain(store.sealed_rows(), track_seqs=[each.seq for each in points])
+        issues = [*chain.issues, *schema_issues(store, point)]
+        issues += anchor_history_issues(points, chain)  # every point ever published, not just the last
+        if issues:
+            raise StoreTampered(changed_message(issues))
+        if self.anchor is not None and chain.head is not None and point is None:
+            raise StoreRefused(
+                f"the anchor {self.anchor.path} is missing or empty, but the event store already"
+                " holds sealed rows, which looks the same as a deleted anchor. Nothing was added."
+                " If an anchor existed, restore it or investigate before anything else. Only if"
+                " this store was never anchored, run"
+                " `agent-latch-runtime anchor --database FILE --to PATH` once"
+            )
+        if point is not None and chain.head is not None and chain.head.seq > point.seq:
+            # A crash between saving and publishing leaves rows past the anchor. They are kept
+            # only if the logs rebuild exactly the same events.
+            for row in store.sealed_rows():
+                if row.seal is not None and row.seal.seq > point.seq:
+                    key = (str(row.event["run_id"]), int(row.event["order"]))
+                    self._tail[key] = row.event
+                    # Not covered by any anchor point yet, so re-check it before anything newer
+                    # chains onto it or a point is published over it.
+                    self._saved_seals[row.seal.seq] = row.seal.digest
+
+    def _match_tail(self, events: list[dict[str, Any]]) -> None:
+        """Check events against the rows found past the anchor; a difference means tampering."""
+        if not self._tail or self.store is None:
+            return
+        as_stored = self.store.as_stored  # type: ignore[attr-defined]
+        for event in events:
+            key = (str(event["run_id"]), int(event["order"]))
+            stored = self._tail.get(key)
+            if stored is None:
+                continue
+            if dumps(as_stored(event)) != dumps(stored):
+                raise StoreTampered(
+                    changed_message([])
+                    + f" (the row for run {key[0]} event {key[1]} past the anchor differs from"
+                    " what the trace and payload files rebuild)"
+                )
+            del self._tail[key]
+            if not self._tail:
+                self._dirty = True  # the extra rows are now vouched for; anchor them
+
+    def _require_tail_matched(self) -> None:
+        """Raise when rows past the anchor have no matching trace record after every log line was
+        read.
+        """
+        if self._tail:
+            raise StoreTampered(
+                changed_message([])
+                + f" ({len(self._tail)} row(s) past the anchor have no matching trace record)"
+            )
+
+    def _publish(self, *, force: bool) -> None:
+        """Publish the newest seal when there are new ones, at most every few seconds."""
+        if self.anchor is None or self.store is None or not self._dirty or self._tail:
+            return
+        if not force and time.monotonic() - self._last_publish < ANCHOR_INTERVAL_SECONDS:
+            return
+        store = self.store
+        head = store.head()  # type: ignore[attr-defined]
+        if head is None:
+            return
+        self._refuse_if_saved_rows_changed()
+        self._refuse_if_rewritten_since_last_point()
+        point = point_for(
+            store.path or Path("events"),
+            seq=head.seq,
+            digest=head.digest,
+            records=head.seq,
+            source=SOURCE,
+            schema_sha256=store.schema_sha256(),  # type: ignore[attr-defined]
+            schema_version=store.schema_version(),  # type: ignore[attr-defined]
+        )
+        self.anchor.publish(point)
+        self._saved_seals.clear()  # every row saved so far is now covered by an anchor point
+        self._dirty = False
+        self._last_publish = time.monotonic()
+        self._anchor_seen = True
+
+    def _head_seq(self) -> int:
+        """The newest seal number in the store, or 0 (a store that does not seal has none)."""
+        head = getattr(self.store, "head", None)
+        seal = head() if head is not None else None
+        return 0 if seal is None else int(seal.seq)
+
+    def _remember_saved_seals(self, before: int) -> None:
+        """Record the seals the save just added, so they can be checked again before publishing."""
+        seals_after = getattr(self.store, "seals_after", None)
+        if self.anchor is not None and seals_after is not None:  # no anchor: nothing to protect
+            self._saved_seals.update(seals_after(before))
+
+    def _refuse_if_saved_rows_changed(self) -> None:
+        """Refuse when a row this importer saved, and has not published yet, has been changed.
+
+        These rows sit after the newest anchor point, so no point covers them. Without this check,
+        someone could rewrite and reseal one of them from the genuine digest before it, and the next
+        genuine event would chain onto the forgery and be published.
+        """
+        digest_at = getattr(self.store, "seal_digest_at", None)
+        if digest_at is None:
+            return
+        for seq, digest in self._saved_seals.items():
+            if digest_at(seq) != digest:
+                raise StoreTampered(
+                    changed_message(
+                        [
+                            Issue(
+                                "edited",
+                                seq,
+                                "this row was saved by this run and changed before it was anchored",
+                            )
+                        ]
+                    )
+                )
+
+    def _refuse_if_rewritten_since_last_point(self) -> None:
+        """Never publish a head that sits on a chain which no longer matches the newest point.
+
+        The store is audited when the importer starts. If an anchored row is rewritten and resealed
+        while it runs, the next genuine event would chain onto the forgery, and publishing that
+        head would make the forgery the newest anchor. So the point published last is checked
+        against the store again, just before a new one is written. (A rewrite after this check is
+        still caught later, because ``verify`` holds the store to every point, not only the last.)
+        """
+        digest_at = getattr(self.store, "seal_digest_at", None)
+        if self.anchor is None or digest_at is None:
+            return
+        try:
+            latest = self.anchor.latest()
+        except (AnchorError, OSError) as error:
+            raise StoreRefused(f"the anchor {self.anchor.path} cannot be read: {error}") from error
+        if latest is None and self._anchor_seen:
+            raise StoreRefused(
+                f"the anchor {self.anchor.path} was there earlier in this run but is now missing"
+                " or empty; nothing newer was published. Restore it or investigate before anything"
+                " else"
+            )
+        if latest is None or latest.source != SOURCE:
+            return
+        if digest_at(latest.seq) != latest.digest:
+            raise StoreTampered(
+                changed_message(
+                    [
+                        Issue(
+                            "rewritten",
+                            latest.seq,
+                            f"record #{latest.seq} no longer matches the anchor point published"
+                            f" at {latest.timestamp}; nothing newer was published",
+                        )
+                    ]
+                )
+            )
+
+    def _publish_after_interrupt(self) -> None:
+        """Ctrl+C while following: save what is waiting and publish, so a restart starts clean."""
+        try:
+            self._save_events(final=False)
+            self._publish(force=True)
+        except StoreIntegrityError:
+            raise  # a changed store is never a clean exit: the CLI reports it with exit 1
+        except (OSError, RuntimeError) as error:
+            log.warning("agent-latch-runtime: could not publish the anchor on exit: %s", error)
 
     def _ingest(self) -> bool:
         progressed = False
@@ -455,6 +772,7 @@ class RuntimeLogImporter:
             self._unsaved.append(copy.deepcopy(event))  # saved at the end of this pass
         findings = errors = 0
         if self._csv is not None and self._writer is not None:
+            findings += self._record_unsealed_store(run_id)
             for gate in self.gates:
                 if (run_id, order, gate.gate_id) in self._done:
                     continue
@@ -480,6 +798,24 @@ class RuntimeLogImporter:
             self.summary.write(f"agent-latch-runtime: {line}\n")
             self.summary.flush()
 
+
+    def _record_unsealed_store(self, run_id: str) -> int:
+        """Write the ALR15-R02 row for an unsealed store once per run; return findings written."""
+        key = (run_id, STORE_ORDER, UNSEALED_GATE_ID)
+        if self._unsealed_store is None or self._writer is None or key in self._done:
+            return 0
+        assert self._csv is not None
+        where = str(self.store.path) if self.store and self.store.path else self._unsealed_store
+        result = unsealed_result(where, f"{self._unsealed_store} does not seal its rows")
+        self._writer.writerow({
+            "run_id": run_id,
+            "order": STORE_ORDER,
+            "gate_id": UNSEALED_GATE_ID,
+            "result_json": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+        })
+        self._csv.flush()
+        self._done.add(key)
+        return 1
 
 def _csv_writer(
     output: TextIO, columns: tuple[str, ...], key: tuple[str, ...]

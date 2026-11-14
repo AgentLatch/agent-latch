@@ -19,7 +19,7 @@
 
 ![Example AgentLatch scan showing detected security findings](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/gent-latch-scan-example.png)
 
-> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs three preview gates: ALR03 on the connection handshake, ALR04 on MCP tool definitions, and ALR10 on secret-like values crossing the tool boundary. It reports findings and does not block calls.
+> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs four preview gates: ALR03 on the connection handshake, ALR04 on MCP tool definitions, ALR05 on MCP tool results and ALR10 on secret-like values crossing the tool boundary. They report findings and do not block calls.
 
 ## What AgentLatch does so far
 
@@ -248,10 +248,12 @@ Run both from the same folder, in the environment where AgentLatch is installed.
 agent-latch . --runtime-result runtime-logs/gate-results.csv
 ```
 
-This prints the gate findings in the same table as a scan, with the local tool's file and line when the project defines it (add `--plain` for text). Real output, shortened:
+This prints the gate findings grouped by gate, with the local tool's file and line when the project defines it (add `--plain` for text). Real output, shortened:
 
 ```text
 Runtime findings · 3
+
+== ALR04 Tool schema injection ==
 
 HIGH     ALR04-003  mcp-server/tools/alr04_fixture_tools.py:14
   concealment
@@ -335,6 +337,8 @@ agent-latch . --runtime-result runtime-logs/gate-results.csv \
 ```
 
 A failed trail exits `1` even with `--fail-on none`, because log integrity is not a severity threshold.
+
+**The event store gets the same protection.** `import-logs --database` seals every stored event (a hash chain computed by AgentLatch, not by the database), `--anchor PATH` publishes the newest seal, and `verify --database FILE --anchor PATH` reports the same six verdicts; `agent-latch . --runtime-result … --database FILE --database-anchor PATH` puts that verdict in the report and in SARIF. A store that fails its check is refused (exit `1`) and never repaired, and a store that does not seal its rows is reported as `ALR15-R02` instead of being accepted silently. Keeping the store and the anchor in another OS user or container is what prevents a change; the seals detect one. See [the event store in the ledger guide](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger.md#the-event-store-gets-the-same-protection).
 
 **What to expect:** without an anchor the best verdict is `unanchored`: the chain is consistent, but nothing outside the machine proves the file was not rebuilt. The ledger makes tampering visible; it does not prevent it, and it cannot show a change made before a record was sealed. Check live sessions with `verify runtime-logs` (the folder, without `--all`) and use `--all` to audit archived sessions on purpose. What an agent with write access can still do, and how to narrow it: [the ledger operations guide](https://github.com/AgentLatch/agent-latch/blob/main/docs/ledger-operations.md#what-an-agent-can-still-do).
 
@@ -493,7 +497,7 @@ The goal is to grow in layers:
 
 1. **Now: local scanner.** Focused checks of Python source, agent manifests, and prompt templates; optional Python dependency advisories; portable reports; and pre-commit and GitHub Action integrations.
 2. **Now, preview: runtime recording for MCP.** A proxy records live MCP tool traffic with secrets masked, and an importer turns it into reviewable events. `--database FILE` optionally keeps those events in a local SQLite file. It never blocks, and it does not upload them.
-3. **Now, preview: three runtime gates.** ALR03 reports a finding when an MCP server does not identify itself, its identity changes, or its declared name impersonates a known server, and ALR04 reports a finding when a MCP tool definition (name, description, or schema) contains instruction-like content. ALR10 reports a secret-like value sent to a tool or returned in its output, and maps that finding to ASI03. Calls are not blocked. The report lists findings only.
+3. **Now, preview: four runtime gates.** ALR03 reports a finding when an MCP server does not identify itself, its identity changes, or its declared name impersonates a known server. ALR04 reports a finding when a MCP tool definition (name, description, or schema) contains instruction-like content, and maps that finding to ASI01, ASI02, and ASI04. ALR05 reports a finding when a tool result contains instruction-like content (ASI01); the proxy cannot show whether that result reached a model, so it is a review signal, not an injection claim. ALR10 reports a secret-like value sent to a tool or returned in its output, and maps that finding to ASI03. Calls are not blocked. The report lists findings only.
 4. **Planned: enforcement and adapters.** Blocking only when the operator turns it on in their own policy; framework adapters and broader evaluation checks after that.
 
 These layers will remain clearly distinguished: detecting a risky pattern is not the same as testing agent behavior, and neither alone guarantees runtime enforcement.
@@ -514,7 +518,7 @@ These layers will remain clearly distinguished: detecting a risky pattern is not
 - Manifest checks read what the manifest declares; they do not verify that your code enforces it. Source checks always run, and a manifest can only add findings.
 - By default, nothing in the scanned project can hide a finding: its `.agent-latch-ignore`, `pyproject.toml` excludes, and inline ignore comments are not applied. Add `--project-ignores` for your own repositories.
 - OWASP category IDs help organize selected findings; the mapping is not a compliance assessment, OWASP affiliation, or certification.
-- The runtime proxy is a preview. It records only MCP traffic routed through it, does not record every MCP message type yet ([see above](#what-the-proxy-records)), and never blocks or changes a call. ALR03 reports on the handshake and ALR04 on tool definitions only, and ALR10 only on secret-like values that the masking recognizes.
+- The runtime proxy is a preview. It records only MCP traffic routed through it, does not record every MCP message type yet ([see above](#what-the-proxy-records)), and never blocks or changes a call. ALR04 reports findings on tool definitions, ALR05 on tool results, and ALR10 only on secret-like values that the masking recognizes; none of them can see what the agent's model actually received.
 
 ## FAQ
 
@@ -528,7 +532,7 @@ Put `agent-latch-runtime proxy` in front of the MCP server, either in your app's
 
 ### Can AgentLatch block a dangerous MCP tool call?
 
-No. The runtime proxy is monitor only: it passes every message through unchanged. ALR04 records a finding when a tool definition looks hostile. Blocking is planned only as an opt-in the operator turns on in their own policy.
+No. The runtime proxy is monitor only: it passes every message through unchanged. ALR04 records a finding when a tool definition looks hostile, and ALR05 when a tool result does. Blocking is planned only as an opt-in the operator turns on in their own policy.
 
 ### Can AgentLatch detect prompt injection?
 

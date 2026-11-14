@@ -255,7 +255,7 @@ def test_handshake_is_recorded_and_alr03_identifies_the_server(tmp_path: Path) -
     ).run()
     with out_csv.open(encoding="utf-8", newline="") as stream:
         rows = list(csv.DictReader(stream))
-    assert {row["gate_id"] for row in rows} == {"ALR03", "ALR04", "ALR10"}
+    assert {row["gate_id"] for row in rows} == {"ALR03", "ALR04", "ALR05", "ALR10"}
 
     alr03_rows = [r for r in rows if r["gate_id"] == "ALR03"]
     handshake_rows = [
@@ -313,6 +313,31 @@ def test_demo_secret_leak_scenario_fires_alr10(
         text = (tmp_path / name).read_text(encoding="utf-8")
         assert FAKE_GITHUB_TOKEN not in text and "AKIA" + "FAKEFAKEFAKEFAKE" not in text
     assert FAKE_GITHUB_TOKEN not in err
+
+
+def test_demo_poisoned_output_scenario_fires_alr05(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent_latch.runtime import cli
+
+    assert cli.main(["demo", "--dir", str(tmp_path), "--scenario", "poisoned-output"]) == 0
+    err = capsys.readouterr().err
+    assert "tools/call fetch_page -> ok" in err
+    with (tmp_path / "gate-results.csv").open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    findings = [
+        finding
+        for row in rows
+        for finding in json.loads(row["result_json"])["findings"]
+        if finding.get("is_finding")
+    ]
+    fired = {finding["rule_id"] for finding in findings}
+    assert {"ALR05-R02", "ALR05-R03"} <= fired
+    r03 = next(finding for finding in findings if finding["rule_id"] == "ALR05-R03")
+    assert r03["outcome"] == "FAIL" and r03["severity"] == "high"
+    assert r03["entity"]["tool"] == "fetch_page"
+    # The hidden instruction and the attacker's address never reach the findings.
+    assert "attacker@example.com" not in json.dumps(findings)
 
 
 def test_hostile_handshake_strings_do_not_reach_trace_or_terminal(tmp_path: Path) -> None:

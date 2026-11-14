@@ -142,6 +142,13 @@ GATES: tuple[Gate, ...] = (
         detectors=(
             ("AGENTLATCH-AG003", "static",
              "Content from outside reaches the model as if it were instructions, not data"),
+            ("ALR05-R01", "runtime",
+             ("Output that reads as instructions for the model is indistinguishable from data "
+              "unless the host fences it")),
+            ("ALR05-R02", "runtime",
+             "Instructions hidden in invisible characters or encoding still reach the model"),
+            ("ALR05-R03", "runtime",
+             "Output that names the next tool, destination or URL steers the agent's next step"),
         ),
     ),
     Gate(
@@ -289,6 +296,9 @@ GATES: tuple[Gate, ...] = (
             ("ALR15-R01", "runtime",
              ("An agent, or whoever holds its account, can hide what it did by editing or "
               "rebuilding its own audit log")),
+            ("ALR15-R02", "runtime",
+             ("An event store that does not seal its rows can be changed without a trace, so "
+              "its record cannot be checked at all")),
         ),
     ),
 )
@@ -307,6 +317,7 @@ DIAGNOSTICS: dict[str, str] = {
     "ALR03-099": "ALR03 per-scan summary",
     "ALR04-090": "ALR04 could not inspect enough of a tool definition (coverage)",
     "ALR04-099": "ALR04 per-scan summary",
+    "ALR05-R90": "ALR05 could not inspect tool output (no payload recorded, or output was cut)",
     "ALR10-R90": "ALR10 saw a tool call but no payload record (coverage)",
 }
 

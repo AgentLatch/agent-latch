@@ -13,15 +13,19 @@ markers, and to re-running the token-shape patterns over the stored strings (any
 is reported by kind only, never quoted).
 
 Severity: ``high`` for a token-shaped secret in an argument or in tool output, or for any secret
-sent to a remote (HTTP upstream) server (requests only; a response is not escalated by transport); ``medium`` for a secret under a key name sent to a local server; a tool
-whose purpose is authentication (named ``login``/``auth``, or with a password parameter in its
-schema) is ``INCONCLUSIVE`` at ``low`` severity - still reported, never dropped. The operator
-allowlist ``policy.allowed_secret_tools: [{server, tool}]`` turns an expected case into ``PASS``
-with a note; ``policy`` must be trusted operator configuration, never the scanned project's.
+sent to a remote (HTTP upstream) server (requests only; a response is not escalated by transport);
+``medium`` for a secret under a key name sent to a local server. A tool that looks like an
+authentication tool (named ``login``/``auth``, or with a password parameter in its schema) is noted
+in the finding but never downgraded, because a server declares its own tool names and schemas. The
+operator allowlist ``policy.allowed_secret_tools: [{server, tool}]`` turns an expected case into
+``PASS`` with a note; ``policy`` must be trusted operator configuration, never the scanned
+project's. A bare ``[REDACTED]`` marker that no masked-location metadata backs is ``INCONCLUSIVE``
+at ``low`` severity (it may be ordinary text): reported, never dropped, never a FAIL.
 
 Known blind spots: secrets the masking patterns do not recognize (the same limit as the proxy's
 masking), secrets split across fields, encoded secrets, and a literal ``[REDACTED]`` in honest
-tool output (reported as if masked). The gate reports findings only; it never clears a tool.
+tool output (reported as ``INCONCLUSIVE`` at ``low``, not as a secret). The gate reports findings
+only; it never clears a tool.
 """
 
 from __future__ import annotations
@@ -239,19 +243,28 @@ def evaluate(event: dict[str, Any], *, policy: Mapping[str, Any] | None = None) 
                     " list, so it is recorded as expected.",
             evidence=evidence,
         )]}
-    if _is_auth_tool(tool, payload.get("tool_definition")):
+    if not any(item["source"] != "marker" for item in evidence):
+        # Only a bare [REDACTED] marker: the proxy may have masked a secret here, or an honest tool
+        # may have printed that word (a redacted legal text, a log). Reported, never a FAIL.
         return {"findings": [_record(
             rule_id=rule_id, family=family, event=event, tool=tool, server=server,
             outcome="INCONCLUSIVE", severity="low", is_finding=True,
-            note="tool looks like an authentication tool",
-            message=base + " The tool looks like an authentication tool, where sending a"
-                    " credential can be legitimate; review it.",
+            note="only a literal [REDACTED] marker; no masking metadata backs it",
+            message=base + " Only a bare [REDACTED] marker was found and no masked-location"
+                    " metadata backs it, so it may be ordinary text; review it.",
             evidence=evidence,
         )]}
+    # A tool that looks like an authentication tool is noted, never downgraded: its name and
+    # schema are declared by the server. Only the operator's allowed_secret_tools clears it.
+    note = (
+        "tool looks like an authentication tool; add it to policy.allowed_secret_tools if the"
+        " credential is expected"
+        if _is_auth_tool(tool, payload.get("tool_definition")) else None
+    )
     # Remote escalation is about sending a secret to a remote server, so it applies to requests.
     severity = "high" if _token_shaped(evidence) or (sent and remote) else "medium"
     return {"findings": [_record(
         rule_id=rule_id, family=family, event=event, tool=tool, server=server,
         outcome="FAIL", severity=severity, is_finding=True,
-        message=base, evidence=evidence,
+        message=base, evidence=evidence, note=note,
     )]}

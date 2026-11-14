@@ -201,15 +201,28 @@ def test_tool_output_with_a_secret_is_reported() -> None:
     assert structured[0]["evidence"][0]["field"] == "$/structured/password"
 
 
-def test_old_records_without_masked_metadata_still_fire_on_the_marker() -> None:
+def test_old_records_without_masked_metadata_report_the_marker_as_inconclusive() -> None:
     body = {"tool": "search_records", "arguments": {"api_key": MASK}, "tool_definition": None}
     found = _findings(_event("request", body))
-    assert [(f["rule_id"], f["outcome"], f["severity"]) for f in found] == [
-        ("ALR10-R01", "FAIL", "medium")
+    assert [(f["rule_id"], f["outcome"], f["severity"], f["is_finding"]) for f in found] == [
+        ("ALR10-R01", "INCONCLUSIVE", "low", True)
     ]
     assert found[0]["evidence"] == [
         {"signal": "redacted_marker", "field": "$/arguments/api_key", "source": "marker"}
     ]
+
+
+def test_a_literal_redacted_word_in_honest_output_is_never_a_fail() -> None:
+    found = _findings(_response(("Section 4 is [REDACTED] pursuant to the court order.",)))
+    assert [(f["rule_id"], f["outcome"], f["severity"]) for f in found] == [
+        ("ALR10-R02", "INCONCLUSIVE", "low")
+    ]
+
+
+def test_a_real_secret_still_fails_when_a_literal_marker_is_also_present() -> None:
+    aws = "AKIA" + "ABCDEFGHIJKLMNOP"
+    found = _findings(_response((f"aws_access_key_id = {aws}", "Section 4 is [REDACTED].")))
+    assert [(f["outcome"], f["severity"]) for f in found] == [("FAIL", "high")]
 
 
 def test_unmasked_token_in_a_foreign_record_is_reported_by_kind_only() -> None:
@@ -240,15 +253,30 @@ def test_token_shaped_key_in_old_records_is_masked_in_fallback_evidence() -> Non
         assert found and _KEY_TOKEN not in json.dumps(found)
 
 
-def test_auth_purpose_tools_are_inconclusive_low_but_still_reported() -> None:
+def test_a_server_cannot_lower_a_finding_by_naming_its_tool_like_an_auth_tool() -> None:
+    # Tool names and schemas are declared by the (untrusted) server: they add a note, never
+    # change the outcome or the severity.
+    plain = _findings(_request({"password": "hunter2hunter2"}, tool="search_records"))
     by_name = _findings(_request({"password": "hunter2hunter2"}, tool="user_login"))
-    assert [(f["outcome"], f["severity"], f["is_finding"]) for f in by_name] == [
-        ("INCONCLUSIVE", "low", True)
-    ]
+    assert [(f["outcome"], f["severity"]) for f in by_name] == [
+        (f["outcome"], f["severity"]) for f in plain
+    ] == [("FAIL", "medium")]
+    assert "authentication tool" in by_name[0]["note"]
     definition = {"input_schema": {"properties": {"password": {}, "user": {}}}}
     by_schema = _findings(_request({"password": "hunter2hunter2"}, definition=definition,
                                    tool="create_session"))
-    assert by_schema[0]["outcome"] == "INCONCLUSIVE" and by_schema[0]["severity"] == "low"
+    assert (by_schema[0]["outcome"], by_schema[0]["severity"]) == ("FAIL", "medium")
+    token = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2"
+    spoofed = _findings(_request({"note": token}, tool="auth_helper"))
+    assert (spoofed[0]["outcome"], spoofed[0]["severity"]) == ("FAIL", "high")
+    output = _findings(_response((f"token: {token}",), tool="login"))
+    assert (output[0]["outcome"], output[0]["severity"]) == ("FAIL", "high")
+
+
+def test_the_operator_allowlist_is_the_only_way_to_expect_a_login_tool() -> None:
+    policy = {"allowed_secret_tools": [{"server": "demo", "tool": "user_login"}]}
+    found = _findings(_request({"password": "hunter2hunter2"}, tool="user_login"), policy=policy)
+    assert [(f["outcome"], f["is_finding"]) for f in found] == [("PASS", False)]
 
 
 def test_operator_allowlist_turns_an_expected_case_into_pass_with_a_note() -> None:

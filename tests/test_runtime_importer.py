@@ -237,9 +237,10 @@ def test_importer_rejects_bad_setup(tmp_path: Path) -> None:
         RuntimeLogImporter(trace_path, None, [], events_csv=out, follow=False).run()
 
 
-def test_run_id_is_stable_and_gate_discovery_finds_the_installed_gates() -> None:
+def test_run_id_is_stable_and_gate_discovery_finds_the_shipped_gates() -> None:
     assert run_id_for("abc\n") == run_id_for("abc") and len(run_id_for("abc")) == 16
-    assert [plugin.gate_id for plugin in discover_gates()] == ["ALR03", "ALR04", "ALR10"]
+    assert [plugin.gate_id for plugin in discover_gates()] == [
+        "ALR03", "ALR04", "ALR05", "ALR10"]
 
 
 def test_events_are_visible_without_any_gate(tmp_path: Path) -> None:
@@ -294,8 +295,8 @@ def test_import_logs_cli_uses_the_log_folder_by_default(
     events = (tmp_path / "normalized.jsonl").read_text(encoding="utf-8").splitlines()
     assert json.loads(events[2])["payload"]["arguments"] == {"command": "rm -rf /"}
     gate_rows = _rows(tmp_path / "gate-results.csv")
-    assert len(gate_rows) == 12
-    assert {row["gate_id"] for row in gate_rows} == {"ALR03", "ALR04", "ALR10"}
+    assert len(gate_rows) == 16
+    assert {row["gate_id"] for row in gate_rows} == {"ALR03", "ALR04", "ALR05", "ALR10"}
     findings = [
         finding
         for row in gate_rows
@@ -303,7 +304,7 @@ def test_import_logs_cli_uses_the_log_folder_by_default(
     ]
     assert findings and not any(finding.get("outcome") == "FAIL" for finding in findings)
     err = capsys.readouterr().err
-    assert "with 3 gate(s)" in err and "#4 demo: tools/call run_command -> ok" in err
+    assert "with 4 gate(s)" in err and "#4 demo: tools/call run_command -> ok" in err
 
     (tmp_path / "events.csv").write_text("wrong,header\n", encoding="utf-8")
     assert cli.main(["import-logs", "--dir", str(tmp_path), "--once"]) == 2
@@ -479,6 +480,7 @@ def test_failed_save_in_one_shot_mode_is_an_error(tmp_path: Path) -> None:
 
 
 def test_migrations_create_and_keep_the_schema(tmp_path: Path) -> None:
+    """The schema is created once, survives reopening, and has the event and seal columns."""
     database = tmp_path / "runtime.db"
     _stored(database)
     _stored(database)  # opening again is safe
@@ -486,7 +488,7 @@ def test_migrations_create_and_keep_the_schema(tmp_path: Path) -> None:
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == len(sqlite_store.MIGRATIONS)
         columns = [row[1] for row in conn.execute("PRAGMA table_info(events)")]
-        assert columns == list(sqlite_store.COLUMNS)
+        assert columns == [*sqlite_store.COLUMNS, *sqlite_store.SEAL_COLUMNS]
     finally:
         conn.close()
 
