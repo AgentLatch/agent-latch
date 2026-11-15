@@ -1,0 +1,51 @@
+# CodeRabbit review settings. Schema: https://docs.coderabbit.ai/reference/yaml-template
+# Reviews are advisory; they do not block merges.
+language: en-US
+reviews:
+  profile: chill
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+    ignore_usernames:
+      - dependabot[bot]
+  # Generated or machine-pinned files: reviewing them adds noise.
+  path_filters:
+    - "!docker/requirements-*.txt"
+    - "!docs/GATES.md"
+    - "!web/package-lock.json"
+    - "!**/*.svg"
+    - "!runtime-logs/**"
+    - "!examples/vulnerable-agent/agent-latch.sarif"
+  path_instructions:
+    - path: "src/agent_latch/**/*.py"
+      instructions: |
+        AgentLatch is a local-first static scanner for AI-agent projects. The scanned project
+        is untrusted: nothing inside it may weaken a scan. Flag any change where a manifest,
+        ignore file or inline comment suppresses or downgrades a finding without
+        --project-ignores. Rules must parse with ast and never import or execute scanned code.
+        Never put secret values in evidence, messages or reports. No network calls, telemetry
+        or uploads except the opt-in --dependencies audit. Every new rule needs an entry in
+        owasp.RULE_CATEGORIES and catalog.DETECTORS, a test, and docs. Do not rename or
+        reuse rule IDs. Exit codes 0, 1 and 2 must not change.
+    - path: "tests/**/*.py"
+      instructions: |
+        Tests must make no network calls and use synthetic fixtures only, never real secrets.
+        Mock subprocess for pip-audit.
+    - path: ".github/workflows/**"
+      instructions: |
+        Actions must stay pinned to commit SHAs. Keep permissions minimal and scoped per job.
+        Never interpolate untrusted input (PR titles, branch names, scanned file text) directly
+        into run: scripts; pass it through env:. The Action runs Python on untrusted repos with -I.
+    - path: "Dockerfile"
+      instructions: |
+        Images must hold no Node.js, compiler or source tree, run as user 10001, pin the base
+        image by digest in each FROM line, and install dependencies from the hash-pinned locks
+        with --only-binary=:all:.
+    - path: "docs/**"
+      instructions: |
+        Docs must not overstate coverage: a clean scan is not a security guarantee, and OWASP,
+        EU AI Act and ISO mappings are informational, never a compliance claim.
+chat:
+  auto_reply: true

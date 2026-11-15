@@ -36,6 +36,51 @@ STATUS_MISSING = "missing"
 
 FAILED_STATUSES = frozenset({STATUS_TAMPERED, STATUS_DELETED, STATUS_REWRITTEN})
 
+# Issue kinds that mean content was changed. ``added`` (a row with no seal) and ``schema`` (the
+# table layout changed) only come from an event store.
+EDIT_KINDS = frozenset({"edited", "malformed", "added", "schema"})
+
+
+def status_for(kinds: set[str] | frozenset[str], *, anchored: bool) -> str:
+    """The one verdict for a set of issue kinds. Shared by the trace ledger and the event store.
+
+    A gap also breaks the next link, and an attacker who deletes a row from a store must first
+    drop its triggers, so a deletion must not be read as an edit or as a schema change: it is
+    reported as deleted, and the other findings still appear in the issue list.
+    """
+    if kinds & {"edited", "malformed", "added"}:
+        return STATUS_TAMPERED
+    if "deleted" in kinds:
+        return STATUS_DELETED
+    if kinds & {"reordered", "schema"}:
+        return STATUS_TAMPERED
+    if "rewritten" in kinds:
+        return STATUS_REWRITTEN
+    if not anchored or "unanchored" in kinds:
+        return STATUS_UNANCHORED
+    return STATUS_INTACT
+
+
+def anchor_point_issues(
+    seq: int, digest: str, *, head_seq: int, digest_at_seq: str | None
+) -> list[Issue]:
+    """Compare a published point with a chain's head and its digest at the anchored number."""
+    if seq > head_seq:
+        return [
+            Issue("deleted", head_seq + 1, f"the log ends at #{head_seq}, but #{seq} was anchored")
+        ]
+    if digest_at_seq is None:
+        return [Issue("deleted", seq, f"record #{seq} was anchored and is now missing")]
+    if digest_at_seq != digest:
+        return [
+            Issue(
+                "rewritten",
+                seq,
+                f"record #{seq} now hashes to {digest_at_seq[:12]}…, the anchor says {digest[:12]}…",
+            )
+        ]
+    return []
+
 
 @dataclass(frozen=True)
 class Issue:
@@ -77,7 +122,7 @@ class Verification:
     @property
     def edited(self) -> bool:
         """A block's content no longer matches what was sealed."""
-        return any(issue.kind in {"edited", "malformed"} for issue in self.issues)
+        return any(issue.kind in EDIT_KINDS for issue in self.issues)
 
     @property
     def reordered(self) -> bool:
@@ -283,6 +328,11 @@ def verify_ledger(
             anchor_issues.append(
                 Issue("unanchored", 0, f"no anchor point at {anchor_path}")
             )
+        elif point.source is not None:
+            anchor_issues.append(
+                Issue("malformed", 0, "the anchor point belongs to an event store, not a ledger")
+            )
+            point = None
 
     trace_checked = trace_path is not None
     if trace_path is not None:
@@ -299,20 +349,7 @@ def verify_ledger(
         anchor_seq, anchor_digest, anchor_time = point.seq, point.digest, point.timestamp
         issues.extend(_anchor_issues(point.seq, point.digest, blocks))
 
-    kinds = {issue.kind for issue in issues}
-    if kinds & {"edited", "malformed"}:
-        status = STATUS_TAMPERED
-    elif "deleted" in kinds:
-        # A gap also breaks the next link, so a deletion must not be read as an edit.
-        status = STATUS_DELETED
-    elif "reordered" in kinds:
-        status = STATUS_TAMPERED
-    elif "rewritten" in kinds:
-        status = STATUS_REWRITTEN
-    elif not anchored:
-        status = STATUS_UNANCHORED
-    else:
-        status = STATUS_INTACT
+    status = status_for({issue.kind for issue in issues}, anchored=anchored)
 
     head = blocks[-1]
     return Verification(
@@ -406,27 +443,13 @@ def _trace_issues(
 
 def _anchor_issues(seq: int, digest: str, blocks: list[Block]) -> list[Issue]:
     """Compare the published point with the chain as it stands now."""
-    head = blocks[-1]
-    if seq > head.seq:
-        return [
-            Issue(
-                "deleted",
-                head.seq + 1,
-                f"the log ends at #{head.seq}, but #{seq} was anchored",
-            )
-        ]
     target = next((block for block in blocks if block.seq == seq), None)
-    if target is None:
-        return [Issue("deleted", seq, f"record #{seq} was anchored and is now missing")]
-    if target.digest != digest:
-        return [
-            Issue(
-                "rewritten",
-                seq,
-                f"record #{seq} now hashes to {target.digest[:12]}…, the anchor says {digest[:12]}…",
-            )
-        ]
-    return []
+    return anchor_point_issues(
+        seq,
+        digest,
+        head_seq=blocks[-1].seq,
+        digest_at_seq=None if target is None else target.digest,
+    )
 
 
 def describe(verification: Verification, *, limit: int = 5) -> list[str]:

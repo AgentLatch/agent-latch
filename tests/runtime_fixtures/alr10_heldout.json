@@ -1,0 +1,567 @@
+{
+ "_comment": "ALR10 validation cases kept apart from the inline corpus in tests/test_alr10.py and not used to tune the masking patterns. Secrets are stored as {\"parts\": [...]} and joined at load time so no token-shaped string sits in the repository. All values are synthetic.",
+ "cases": [
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "command": {
+     "parts": [
+      "curl -H 'Authorization: Bearer ",
+      "Zm9vYmFyYmF6cXV4MTIzNDU2",
+      "' https://api.internal/v1"
+     ]
+    }
+   },
+   "expect": "secret",
+   "note": "bearer in a shell command"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "env": {
+     "parts": [
+      "AWS_SECRET_ACCESS_KEY=",
+      "wJalrXUtnFEMIK7MDENGbPxRfiCYzzzzzzzzzzzz"
+     ]
+    }
+   },
+   "expect": "secret",
+   "note": "AWS secret in an env assignment"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "dsn": {
+     "parts": [
+      "postgres://admin:",
+      "hunter2pass",
+      "@db.internal:5432/app"
+     ]
+    }
+   },
+   "expect": "secret",
+   "note": "credentials inside a URL"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "headers": {
+     "X-Api-Key": "abc123def456ghi"
+    }
+   },
+   "expect": "secret",
+   "note": "key name inside nested headers"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "slack": {
+     "parts": [
+      "xoxp-",
+      "1234567890-0987654321-abcdefghijkl"
+     ]
+    }
+   },
+   "expect": "secret",
+   "note": "Slack user token"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "model_key": {
+     "parts": [
+      "sk-ant-",
+      "api03-AbCdEfGhIjKlMnOpQrStUv"
+     ]
+    }
+   },
+   "expect": "secret",
+   "note": "Anthropic-style key"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "gitlab": {
+     "parts": [
+      "glpat-",
+      "xxxxxxxxxxxxxxxxxxxx"
+     ]
+    }
+   },
+   "expect": "secret",
+   "note": "GitLab personal access token"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "payments": {
+     "parts": [
+      "sk_live_",
+      "51Habcdefghijklmnopqrstuv"
+     ]
+    }
+   },
+   "expect": "secret",
+   "note": "Stripe-style live key"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "maps": {
+     "parts": [
+      "AIza",
+      "SyD-abcdefghijklmnopqrstuvwxyz0123456"
+     ]
+    }
+   },
+   "expect": "secret",
+   "note": "Google API key"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "ci": {
+     "parts": [
+      "ghs_",
+      "abcdefghijklmnopqrstuvwxyz0123"
+     ]
+    }
+   },
+   "expect": "secret",
+   "note": "GitHub app installation token"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "notes": [
+     {
+      "parts": [
+       "remember: password: ",
+       "Tr0ub4dor&3xyz"
+      ]
+     }
+    ]
+   },
+   "expect": "secret",
+   "note": "password in free text inside a list"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "ssh": {
+     "parts": [
+      "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----"
+     ]
+    }
+   },
+   "expect": "secret",
+   "note": "OpenSSH private key"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    {
+     "parts": [
+      "Here is the key you asked for: ",
+      "ghp_",
+      "Qw3rTy7UiOp9AsDfGh1JkLz"
+     ]
+    }
+   ],
+   "expect": "secret",
+   "note": "GitHub token in text"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    {
+     "parts": [
+      "Authorization: Bearer ",
+      "eyJhbGciOiJIUzI1NiJ9",
+      ".",
+      "eyJzdWIiOiJhYmMifQ",
+      ".",
+      "c2lnbmF0dXJlMTIz"
+     ]
+    }
+   ],
+   "expect": "secret",
+   "note": "JWT bearer in text"
+  },
+  {
+   "direction": "response",
+   "section": "structured",
+   "value": {
+    "credentials": {
+     "secret": "s3cr3t-value-0042"
+    }
+   },
+   "expect": "secret",
+   "note": "secret under a key name"
+  },
+  {
+   "direction": "response",
+   "section": "structured",
+   "value": {
+    "aws": {
+     "id": {
+      "parts": [
+       "AKIA",
+       "IOSFODNN7EXAMPLE"
+      ]
+     }
+    }
+   },
+   "expect": "secret",
+   "note": "AWS key id in structured output"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    {
+     "parts": [
+      "config dump: api_key=",
+      "k9x2m4n6p8q1"
+     ]
+    }
+   ],
+   "expect": "secret",
+   "note": "assignment in a config dump"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    {
+     "parts": [
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----"
+     ]
+    }
+   ],
+   "expect": "secret",
+   "note": "PEM key in text"
+  },
+  {
+   "direction": "response",
+   "section": "structured",
+   "value": {
+    "results": [
+     {
+      "name": "db",
+      "password": "correct-horse-9"
+     }
+    ]
+   },
+   "expect": "secret",
+   "note": "password inside a result list"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    {
+     "parts": [
+      "npm token: ",
+      "npm_",
+      "abcdefghijklmnopqrstuvwxyz0123456789"
+     ]
+    }
+   ],
+   "expect": "secret",
+   "note": "npm token (shape not covered)"
+  },
+  {
+   "direction": "response",
+   "section": "error_message",
+   "value": {
+    "parts": [
+     "401: invalid token ",
+     "sk-",
+     "proj-AbCdEfGhIjKlMnOpQrSt"
+    ]
+   },
+   "expect": "secret",
+   "note": "token echoed in an error"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    {
+     "parts": [
+      "DB_PASSWORD=",
+      "hunter2hunter2"
+     ]
+    }
+   ],
+   "expect": "secret",
+   "note": "env-style password line"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "id": "550e8400-e29b-41d4-a716-446655440000"
+   },
+   "expect": "benign",
+   "note": "uuid"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "sha": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "expect": "benign",
+   "note": "sha-256"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "commit": "9fceb02d0ae598e95dc970b74767f19372d61af8"
+   },
+   "expect": "benign",
+   "note": "git sha-1"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "query": "how do I reset my password"
+   },
+   "expect": "benign",
+   "note": "prose about passwords"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "query": "is bearer authentication supported by this API?"
+   },
+   "expect": "benign",
+   "note": "prose about bearer authentication"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "limit": 50,
+    "token_budget": 2000
+   },
+   "expect": "benign",
+   "note": "numeric token settings"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "url": "https://docs.example.com/guides/api-keys?lang=en"
+   },
+   "expect": "benign",
+   "note": "docs url mentioning api keys"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "path": "/var/log/app/2026-11-05.log"
+   },
+   "expect": "benign",
+   "note": "file path"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "image": "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+   },
+   "expect": "benign",
+   "note": "tiny inline gif"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "text": "Set the API key in your environment before running the tool."
+   },
+   "expect": "benign",
+   "note": "instruction prose"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "build": "build-20261105-7f3a9c1d"
+   },
+   "expect": "benign",
+   "note": "build id"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "order": "ORD-2026-000184",
+    "note": "ship by friday"
+   },
+   "expect": "benign",
+   "note": "order reference"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "sql": "SELECT id, name FROM users WHERE created_at > '2026-01-01'"
+   },
+   "expect": "benign",
+   "note": "sql query"
+  },
+  {
+   "direction": "request",
+   "section": "arguments",
+   "value": {
+    "semver": "1.14.2",
+    "tag": "v1.14.2-rc.1"
+   },
+   "expect": "benign",
+   "note": "versions"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    "Found 3 issues labelled bug."
+   ],
+   "expect": "benign",
+   "note": "search summary"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    "Commit 9fceb02d0ae598e95dc970b74767f19372d61af8 was merged."
+   ],
+   "expect": "benign",
+   "note": "git sha in text"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    "Your password must be at least 12 characters long."
+   ],
+   "expect": "benign",
+   "note": "password policy prose"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    "Use the Authorization header with your credentials."
+   ],
+   "expect": "benign",
+   "note": "header prose"
+  },
+  {
+   "direction": "response",
+   "section": "structured",
+   "value": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "status": "ok"
+   },
+   "expect": "benign",
+   "note": "uuid in structured"
+  },
+  {
+   "direction": "response",
+   "section": "structured",
+   "value": {
+    "checksum": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+   },
+   "expect": "benign",
+   "note": "subresource integrity hash"
+  },
+  {
+   "direction": "response",
+   "section": "structured",
+   "value": {
+    "rows": [
+     {
+      "city": "London",
+      "temp": 18
+     },
+     {
+      "city": "Oslo",
+      "temp": 7
+     }
+    ]
+   },
+   "expect": "benign",
+   "note": "plain table"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    "Read the guide on token bucket rate limiting."
+   ],
+   "expect": "benign",
+   "note": "token-bucket prose"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    "Basic authentication tutorial"
+   ],
+   "expect": "benign",
+   "note": "basic authentication prose"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    "The secret to good bread is patience."
+   ],
+   "expect": "benign",
+   "note": "word secret in prose"
+  },
+  {
+   "direction": "response",
+   "section": "structured",
+   "value": {
+    "key_count": 4,
+    "keys": [
+     "alpha",
+     "beta"
+    ]
+   },
+   "expect": "benign",
+   "note": "key names that are not secrets"
+  },
+  {
+   "direction": "response",
+   "section": "content",
+   "value": [
+    "Deployed build-20261105-7f3a9c1d to staging in 41 s."
+   ],
+   "expect": "benign",
+   "note": "deploy log line"
+  }
+ ]
+}
