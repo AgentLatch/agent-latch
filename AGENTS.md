@@ -144,6 +144,7 @@ docker/requirements-*.txt      # hash-pinned image dependency locks; regenerate 
 .github/workflows/code-quality.yml # CI: ruff check across the repo, npm audit --audit-level=high for web/
 .github/workflows/publish.yml  # PyPI release via Trusted Publishing (on GitHub release; manual run → TestPyPI; PRs get a dry run that never publishes)
 .github/workflows/images.yml   # build + smoke-test both images on PRs; push to GHCR on release (provenance, SBOM)
+.github/workflows/code-graph.yml # on push to main: build a Graphify code graph (AST only) and upload it as the `code-graph` artifact
 .github/dependabot.yml         # weekly updates: base image digest, action SHAs, image dependency locks
 MANIFEST.in                    # sdist extras (test fixtures the shipped tests read)
 llms.txt                       # LLM-oriented project summary
