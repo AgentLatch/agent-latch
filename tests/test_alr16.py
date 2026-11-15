@@ -146,7 +146,7 @@ def _body(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def test_alr16_hex_decode_falls_through_from_base64() -> None:
     alr16.reset_state()
-    encoded = "pip install helper==1.0.0 ".encode("utf-8").hex()
+    encoded = b"pip install helper==1.0.0 ".hex()
     assert len(encoded) % 4 == 0
     records = alr16.evaluate(_call_event({"command": f"echo {encoded} | xxd -r -p | sh"}))[
         "findings"
