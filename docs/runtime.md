@@ -304,6 +304,46 @@ That prints the same kind of table as `agent-latch scan`: severity, rule, locati
 
 Restarting the importer skips events and results already in its output files, so rows and lines are not repeated. Malformed lines are logged and skipped. The importer does not block or modify MCP traffic. Its output files can hold payload data, so keep them local and access-controlled (they are created with mode `0600`; `runtime-logs/` is in `.gitignore`).
 
+### Restarting the importer
+
+A restarted `import-logs` skips every event whose gate rows are already in `gate-results.csv`.
+Gates that keep state between events, such as ALR03, therefore do not see those earlier events
+again. ALR03's identity baseline lives only in memory for one importer run (its
+`cross_run_baseline` check already reports `PARTIAL` for this reason), so after a restart the first
+handshake the importer evaluates, possibly one recorded while it was stopped, becomes the new
+baseline, and an identity change across the stop can be missed. This is a property of any importer
+restart. To check the whole recording again with fresh gate state, run one extra pass over the same
+kept log files, with outputs that do not exist yet so nothing is skipped:
+
+```bash
+agent-latch-runtime import-logs --once --dir RECHECK_DIR \
+  --trace PATH/trace.jsonl --payloads PATH/payloads.jsonl --run-id RUN_ID
+```
+
+`RECHECK_DIR` is a new, empty folder that only you can read, outside any source repository. `--dir`
+sends every output of this pass there: events, gate results, and `normalized.jsonl`, which holds
+full arguments, payloads and responses, so treat the folder as sensitive. Leave out `--database`
+and any `--connector`, so the pass only evaluates gates. Review the findings with
+`agent-latch --runtime-result RECHECK_DIR/gate-results.csv`, then delete the folder. The importer
+you restarted keeps running unchanged.
+
+Two limits apply to this re-check:
+
+- **It needs the payloads.** ALR03 reads a server's identity from the `initialize` handshake
+  payload. Without `payloads.jsonl` (the proxy was started without `--payloads`, or the file was
+  not kept), ALR03 reports `INCONCLUSIVE` with `payload_unavailable` and cannot detect an identity
+  change, in the re-check or anywhere else.
+- **It does not repair the live importer.** The re-check runs in its own process with its own
+  baseline. The restarted importer keeps the baseline it built from the first handshake it
+  evaluated, so later identity changes are judged against that baseline, not the one from the
+  re-check.
+
+**Log rotation has no documented procedure for the runtime as a whole.** Rotating the proxy's log
+files touches the trace, the payloads file, the audit ledger and its anchor, and the state the
+runtime gates keep. Until a procedure is documented, do not rotate or move the log files while the
+proxy or a follow-mode importer is running, and follow `docs/ledger-operations.md` ("Retention and
+rotation") for the ledger.
+
 ## Tamper-evident audit ledger (preview)
 
 A trace file is only evidence if nobody can quietly rewrite it. `--ledger FILE` seals every trace record into a local hash chain, and `anchor` publishes one short digest where the agent cannot write, so an edit, a deletion or a full rebuild shows up when you verify.
