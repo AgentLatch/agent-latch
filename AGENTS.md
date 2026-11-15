@@ -101,6 +101,7 @@ src/agent_latch/
     normalizer.py # MCPEventNormalizer: joins a trace record and its payload record into one event
     importer.py   # RuntimeLogImporter: tails logs, writes events, runs gates; optional EventWriter (EventReader is the read-only view)
     sqlite_store.py # SQLiteEventStore (writer, seals rows, triggers) and SQLiteEventReader (read-only), stdlib sqlite3 (`--database`)
+    connectors.py # optional connectors: contract, `--connector*` parsing, `env:` secrets, entry-point discovery, per-connector delivery (stdlib only; never touches `--database`)
     results.py    # agent-latch --runtime-result: findings from gate-results.csv grouped by gate, plus the ledger and store verdicts
     store_check.py # check_store: one read-only look at an event store (verdict, unsealed, or error); the ALR15-R02 finding
     ledger/       # ALR15: tamper-evident hash chain over trace records, plus anchor points (stdlib, local)
@@ -130,6 +131,7 @@ tests/test_alr05_eval.py       # ALR05 held-out detection targets (recall >= 80%
 tests/test_alr10.py            # ALR10: masking metadata, severity, policy, leak-proofing (SQLite, SARIF) and the inline labeled corpus
 tests/test_alr10_heldout.py    # ALR10 validation on runtime_fixtures/alr10_heldout.json: request and response rates, known misses
 tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
+tests/test_connectors.py       # connector selection, options and `env:` secrets, discovery, delivery and errors from import-logs (fake connectors, no network)
 tests/runtime_fixtures/        # demo-server wrapper, audit_reader_server (a reader-only MCP tool), the ALR04 event dataset, the ALR05 labeled output cases, and the ALR10 validation set
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux
@@ -187,11 +189,15 @@ agent-latch-runtime proxy [--name NAME] [--trace FILE] [--excerpt-chars N]
 agent-latch-runtime import-logs [--dir DIR] [--trace FILE] [--payloads FILE]
             [--events-csv FILE] [--output-csv FILE] [--normalized-out FILE]
             [--database FILE [--anchor PATH]] [--policy FILE] [--run-id ID] [--once] [--quiet]
+            [--connector [NAME=]TYPE]... [--connector-option NAME.KEY=VALUE]... [--connector-config FILE]
+agent-latch-runtime connectors
 agent-latch-runtime anchor (--ledger FILE | --database FILE [--accept-unchecked-rows]) --to PATH [--quiet]
 agent-latch-runtime verify [PATH | --ledger FILE | --database FILE] [--all] [--trace FILE] [--anchor PATH]
 agent-latch-runtime audit-tool --database FILE [--name NAME]
 agent-latch-runtime demo [--dir DIR] [--scenario default|poisoned-output|secret-leak]
 ```
+
+Connectors are optional and explicit (`docs/connectors.md`, `docs/runtime.md`): nothing is discovered, imported or sent unless `--connector` (or a `[connectors.NAME]` table in `--connector-config`) names it. Secrets are written as `env:VAR` and are read by the core; option values never appear in output, and a connector's own messages are scrubbed of resolved secrets. A configuration error exits `2` before any file is opened. With `--once`, events that were not delivered, were rejected or were dropped also exit `2`. `--database` does not go through connectors.
 
 `agent-latch-runtime proxy` is a preview: it records MCP traffic and never blocks (see `docs/runtime.md`). It exits `2` on a configuration error. It never writes to stdout, which carries the MCP protocol in stdio mode. `import-logs` runs in parallel as a separate process: it only reads the proxy's log files, prints one line per event, writes `events.csv` and `gate-results.csv` (ALR03, ALR04 and ALR10 are installed) under the ignored `runtime-logs/` folder by default, and never blocks or changes traffic. The gates report findings only; the runtime report does not clear a tool. ALR10 reads only masked payloads: its evidence is the masked-location metadata (`payloads.masked_record`), so it never sees or writes a raw secret. `demo` records a session with the bundled synthetic server into `runtime-logs/demo/` and imports it, so the pipeline can be checked with one command; `--scenario secret-leak` sends and receives fake credentials so the ALR10 checks fire. `--policy FILE` (YAML or JSON, trusted operator configuration, never from the monitored project) is passed to every gate whose `evaluate` accepts `policy`: the ALR10 allowlist `allowed_secret_tools` and the ALR03 suppressions. `importer.load_policy` reads it with `yaml.safe_load`; a bad file exits `2`. Stored payload metadata is untrusted: ALR10 reports any masking kind outside `alr10.APPROVED_KINDS` as `unknown`.
 
