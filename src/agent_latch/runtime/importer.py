@@ -35,11 +35,16 @@ import pkgutil
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
+from agent_latch.runtime.connectors import (
+    ConnectorDeliveryError,
+    ConnectorRunner,
+    LoadedConnector,
+)
 from agent_latch.runtime.ledger.anchor import Anchor, AnchorError, point_for
 from agent_latch.runtime.ledger.canonical import dumps
 from agent_latch.runtime.ledger.event_seal import (
@@ -284,6 +289,8 @@ class RuntimeLogImporter:
         summary: TextIO | None = None,
         store: EventWriter | None = None,
         anchor: Anchor | None = None,
+        connectors: Sequence[LoadedConnector] = (),
+        connector_dir: Path | None = None,
         run_id: str | None = None,
         follow: bool = True,
         poll_interval: float = POLL_INTERVAL_SECONDS,
@@ -303,10 +310,11 @@ class RuntimeLogImporter:
             )
         store_path = store.path if store is not None else None
         anchor_path = anchor.path if anchor is not None else None
+        connector_paths = [c.connector.path for c in connectors]
         paths = [
             p for p in (
                 trace_path, payloads_path, output_csv, events_csv, normalized_path, store_path,
-                anchor_path,
+                anchor_path, *connector_paths,
             ) if p
         ]
         if len({p.resolve() for p in paths}) != len(paths):
@@ -320,6 +328,11 @@ class RuntimeLogImporter:
         self.store = store
         self.anchor = anchor
         self.gates = list(gates)
+        # Connectors are an extra list of destinations. The store above keeps its own waiting list
+        # and retry path, and nothing here changes it.
+        self._runners = [
+            ConnectorRunner(loaded, connector_dir or trace_path.parent) for loaded in connectors
+        ]
         self.follow = follow
         self.poll_interval = poll_interval
         self.payload_grace = payload_grace
@@ -373,6 +386,7 @@ class RuntimeLogImporter:
                 progressed = self._ingest()
                 progressed = self._drain(final=False) or progressed
                 self._save_events(final=False)
+                self._deliver_connectors(final=False)
                 if progressed:
                     continue
                 if not self.follow:
@@ -385,6 +399,7 @@ class RuntimeLogImporter:
                 self._ingest()
                 self._drain(final=False)
                 self._save_events(final=False)
+                self._deliver_connectors(final=True)
                 if self._unsaved:
                     log.warning(
                         "agent-latch-runtime: %d event(s) not saved to the database; they will be"
@@ -400,6 +415,8 @@ class RuntimeLogImporter:
             raise
         finally:
             self._close()
+        if not self.follow:
+            self._raise_connector_problems()
 
     def _finish(self) -> None:
         """Read what is left in the files, then do the last drain and the last store save."""
@@ -410,6 +427,7 @@ class RuntimeLogImporter:
             pass
         self._drain(final=True)
         self._save_events(final=True)
+        self._deliver_connectors(final=True)
         self._require_tail_matched()
         unmatched = sum(len(queue) for queue in self._queues.values())
         if unmatched:
@@ -421,6 +439,8 @@ class RuntimeLogImporter:
             self._refuse_lowered_version()  # before open: opening an old file migrates it
             self.store.open()  # first, so a bad database leaves no other file open
             self._audit_store()
+        for runner in self._runners:  # after the store, before the other files
+            runner.open()
         if self.events_csv is not None:
             self._events = _open_private(self.events_csv)
             self._events_writer, self._events_done = _csv_writer(
@@ -446,6 +466,23 @@ class RuntimeLogImporter:
         self._writer = self._events_writer = None
         if self.store is not None:
             self.store.close()
+        for runner in self._runners:
+            runner.close()
+            log.warning("agent-latch-runtime: %s", runner.summary())
+
+    def _deliver_connectors(self, *, final: bool) -> None:
+        """Hand new events to each connector. A failing one never holds back another."""
+        for runner in self._runners:
+            runner.deliver(final=final)
+
+    def _raise_connector_problems(self) -> None:
+        """With ``--once``, undelivered, rejected or dropped events are a failed run (exit 2)."""
+        problems = [runner.summary() for runner in self._runners if runner.has_problems]
+        if problems:
+            raise ConnectorDeliveryError(
+                "; ".join(problems) + ". Fix the destination, then run import-logs --once again"
+                " with the same input and connector settings"
+            )
 
     def _save_events(self, *, final: bool) -> None:
         """Save waiting events in one store transaction; keep them for a retry if that fails."""
@@ -770,6 +807,8 @@ class RuntimeLogImporter:
             fresh = True
         if self.store is not None:
             self._unsaved.append(copy.deepcopy(event))  # saved at the end of this pass
+        for runner in self._runners:
+            runner.add(event)  # each connector keeps its own copy, delivered after this pass
         findings = errors = 0
         if self._csv is not None and self._writer is not None:
             findings += self._record_unsealed_store(run_id)

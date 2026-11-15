@@ -304,6 +304,26 @@ That prints the same kind of table as `agent-latch scan`: severity, rule, locati
 
 Restarting the importer skips events and results already in its output files, so rows and lines are not repeated. Malformed lines are logged and skipped. The importer does not block or modify MCP traffic. Its output files can hold payload data, so keep them local and access-controlled (they are created with mode `0600`; `runtime-logs/` is in `.gitignore`).
 
+### Send events to a connector (optional)
+
+A connector is a separate package that sends the normalized events somewhere other than the built-in files: a database, another live system or an archive (design: [connectors.md](connectors.md)). **Nothing is discovered, imported or sent unless you name a connector.** `--database` is unchanged and does not use connectors. No connector package ships with AgentLatch yet; this is the configuration and the command line they plug into.
+
+```sh
+agent-latch-runtime connectors                       # list installed types; imports nothing
+agent-latch-runtime import-logs \
+  --connector pg=postgres \
+  --connector-option pg.dsn=env:AGENTLATCH_PG_DSN \
+  --connector-option pg.table=agent_events
+```
+
+- `--connector [NAME=]TYPE` selects an installed connector (repeatable). `NAME` defaults to `TYPE`, and two names let you run two of one type.
+- `--connector-option NAME.KEY=VALUE` sets one value for a selected connector (repeatable). `--connector-config FILE` reads the same settings from a TOML file (`[connectors.NAME]` with `type = "..."`); options on the command line override the file. Both are trusted operator configuration: never a file from the monitored project.
+- **Secrets.** Write a secret as `env:VARNAME`. The core reads the variable, so the value is never on the command line, in the process list or in output. Option values are never printed, and anything a connector says is scrubbed of the secret values the core resolved. A variable that is not set is an error that names the variable.
+- **Payloads stay off.** A connector gets events with `payload` set to `null` unless you pass `NAME.payloads=true` for that connector. Other options every connector takes: `max_batch_events` (default 500), `max_pending_batches` (default 100) and `timeout` (seconds, default 10, enforced by the connector).
+- **Errors you can act on.** An unknown type lists what is installed. A package that cannot be imported, a connector API outside the supported range (the message says whether to upgrade AgentLatch or the connector), a bad option, or two packages registering one type each exit `2` before any file is opened.
+- **Delivery.** Events go to each connector in batches of at most `max_batch_events`, after every pass over the logs. A temporary failure keeps the batch and retries after 1, 2, 4 ... up to 60 seconds. A refused batch is saved to `DIR/NAME.rejected.jsonl` (mode `0600`) and skipped. A connector that fails in another way is turned off for the rest of the run and every other output continues. The waiting queue holds `max_pending_batches` batches, and the oldest is dropped when it is full.
+- **Exit code.** With `--once`, events that were not delivered, were rejected or were dropped exit `2` after the final summary. Rebuild the gap by running `import-logs --once` again with the same input and connector settings: events are keyed by run and order, so a destination can merge duplicates. Following (no `--once`) ends with Ctrl+C and exit `0`, after a summary line per connector.
+
 ### Restarting the importer
 
 A restarted `import-logs` skips every event whose gate rows are already in `gate-results.csv`.

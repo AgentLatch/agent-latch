@@ -13,6 +13,12 @@ from urllib.parse import urlparse
 from rich_argparse import RawDescriptionRichHelpFormatter
 
 from agent_latch import __version__
+from agent_latch.runtime.connectors import (
+    ConnectorConfigError,
+    installed_connectors,
+    load_connectors,
+    parse_connector_settings,
+)
 from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates, load_policy
 from agent_latch.runtime.ledger import (
     Ledger,
@@ -60,6 +66,8 @@ _EPILOG = """\
   [cyan]agent-latch-runtime import-logs --database events.db --anchor ~/offbox/store-anchors.jsonl[/cyan]
   [cyan]agent-latch-runtime verify --database events.db --anchor ~/offbox/store-anchors.jsonl[/cyan]
   [cyan]agent-latch-runtime anchor --database events.db --to ~/offbox/store-anchors.jsonl[/cyan]
+  [cyan]agent-latch-runtime import-logs --connector pg=postgres --connector-option pg.dsn=env:PG_DSN[/cyan]
+  [cyan]agent-latch-runtime connectors[/cyan]   (list installed connector types; nothing is loaded)
   [cyan]agent-latch-runtime demo[/cyan]   (try it with a synthetic server, no setup)
 
 In an MCP config, put [cyan]agent-latch-runtime[/cyan] as the command and move the real server
@@ -184,10 +192,38 @@ def _parser() -> argparse.ArgumentParser:
         " allowed_secret_tools for ALR10. Trusted configuration: never a file from the monitored"
         " project",
     )
+    importer.add_argument(
+        "--connector", action="append", default=[], metavar="[NAME=]TYPE",
+        help="send events to an installed connector (repeatable). NAME defaults to TYPE and lets"
+        " you run two of one type. Nothing is loaded or sent unless you name it; list the"
+        " installed types with `agent-latch-runtime connectors`",
+    )
+    importer.add_argument(
+        "--connector-option", action="append", default=[], metavar="NAME.KEY=VALUE",
+        help="a setting for a selected connector (repeatable). Write secrets as env:VARNAME, so the"
+        " value is read from the environment and never appears on the command line or in output."
+        " Every connector also takes payloads=true|false (default false), max_batch_events,"
+        " max_pending_batches and timeout",
+    )
+    importer.add_argument(
+        "--connector-config", type=Path, metavar="FILE",
+        help="the same settings in a TOML file ([connectors.NAME] with type = \"...\"); options on"
+        " the command line override it. Trusted configuration: never a file from the monitored"
+        " project",
+    )
     importer.add_argument("--run-id", help="run id for the events (default: hash of first trace line)")
     importer.add_argument(
         "--once", action="store_true",
         help="process what the files hold now and exit instead of following new lines",
+    )
+
+    commands.add_parser(
+        "connectors",
+        help="list the installed connector types (nothing is loaded or sent)",
+        description=(
+            "List the connector types installed in this Python environment, with the package and"
+            " version that provides each. No connector is imported or started."
+        ),
     )
 
     verify = commands.add_parser(
@@ -400,6 +436,14 @@ def _import_logs(args: argparse.Namespace) -> int:
         print("agent-latch-runtime: --anchor needs --database", file=sys.stderr)
         return 2
     try:
+        loaded = []
+        if args.connector or args.connector_option or args.connector_config:
+            loaded = load_connectors(
+                parse_connector_settings(
+                    args.connector, args.connector_option, args.connector_config
+                ),
+                directory,
+            )
         gates = discover_gates(load_policy(args.policy) if args.policy else None)
         store = SQLiteEventStore(args.database) if args.database else None
         importer = RuntimeLogImporter(
@@ -412,6 +456,8 @@ def _import_logs(args: argparse.Namespace) -> int:
             summary=None if args.quiet else sys.stderr,
             store=store,
             anchor=make_anchor(args.anchor) if args.anchor else None,
+            connectors=loaded,
+            connector_dir=directory,
             run_id=args.run_id,
             follow=not args.once,
         )
@@ -419,6 +465,7 @@ def _import_logs(args: argparse.Namespace) -> int:
             f"agent-latch-runtime: importing {trace} into {events_csv}"
             + (f" and {args.database}" if args.database else "")
             + (f" (anchoring to {args.anchor})" if args.anchor else "")
+            + "".join(f" and connector {c.name} ({c.type})" for c in loaded)
             + f" with {len(gates)} gate(s)"
             + ("" if args.once else "; following new lines (Ctrl+C to stop)"),
             file=sys.stderr,
@@ -431,9 +478,32 @@ def _import_logs(args: argparse.Namespace) -> int:
         # Exit 1, as verify does.
         print(f"agent-latch-runtime: {error}", file=sys.stderr)
         return 1
+    except ConnectorConfigError as error:
+        # Messages never carry option values; secrets are written as env: references.
+        print(f"agent-latch-runtime: connector error: {error}", file=sys.stderr)
+        return 2
     except (ImportError, OSError, ValueError, AnchorError) as error:
         print(f"agent-latch-runtime: importer failed: {error}", file=sys.stderr)
         return 2
+    return 0
+
+
+def _connectors(args: argparse.Namespace) -> int:
+    """Run ``connectors``: list installed connector types without importing any of them."""
+    try:
+        found = installed_connectors()
+    except ConnectorConfigError as error:
+        print(f"agent-latch-runtime: connector error: {error}", file=sys.stderr)
+        return 2
+    if not found:
+        print(
+            "agent-latch-runtime: no connectors installed; a connector is a separate package that"
+            " registers the 'agent_latch.connectors' entry point"
+        )
+        return 0
+    width = max(len(item.type) for item in found)
+    for item in found:
+        print(f"{item.type:<{width}}  {item.package} {item.version}  ({item.target})")
     return 0
 
 
@@ -707,6 +777,8 @@ def main(argv: list[str] | None = None) -> int:
         return _proxy(args)
     if args.subcommand == "import-logs":
         return _import_logs(args)
+    if args.subcommand == "connectors":
+        return _connectors(args)
     if args.subcommand == "verify":
         return _verify(args)
     if args.subcommand == "anchor":
