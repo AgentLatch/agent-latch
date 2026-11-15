@@ -434,9 +434,12 @@ connectors/
     CHANGELOG.md
     src/agentlatch_connector_jsonl_archive/__init__.py
     tests/
-  postgres/                         # later
   otel/                             # later
 ```
+
+The PostgreSQL store is a **paid** connector, so it is not in this folder. It lives in a separate
+private repository with the same layout and follows this contract unchanged. How paid packages are
+licensed and distributed is in [`connector-licensing.md`](connector-licensing.md).
 
 Why one folder rather than separate repositories or the main package:
 
