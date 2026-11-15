@@ -241,6 +241,7 @@ Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per g
 ## Conventions
 
 - Container images: keep them free of Node.js, compilers and the source tree, running as user `10001`, with the base image pinned by digest and dependencies installed from the hash-pinned locks with `--only-binary=:all:`. A server that needs another runtime goes in its own container or a user-built derived image (`docs/docker.md`).
+- Paid connector packages and the `agentlatch-license` library live in a private repository (`docs/connector-licensing.md`), outside this one. Paid code never enters this repository, its wheels or its container images.
 - Keep runtime dependencies minimal: `rich`, `rich-argparse`, `PyYAML`. `pip-audit` is an optional `[audit]` extra, and pinned `fastmcp` is the optional `[runtime]` extra (`import agent_latch.runtime` must not import it). Do not add new runtime dependencies without strong justification.
 - Use `from __future__ import annotations`, type hints, and `pathlib.Path` throughout. Use frozen dataclasses for value types.
 - Rules are static heuristics. Parse with `ast` and never import or execute scanned code. Load YAML only with `yaml.SafeLoader` (see `manifest._LineLoader`).

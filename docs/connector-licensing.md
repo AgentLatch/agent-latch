@@ -3,7 +3,9 @@
 > **Status: proposed design, not implemented yet. Pending legal review** (see
 > [section 8](#8-legal-review)). This document defines how separately licensed (paid) connector
 > packages are distributed and how self-hosted customers receive and validate a license. It builds
-> on the connector contract in `docs/connectors.md` (AgentLatch/agent-latch#77). Nothing here
+> on the connector contract in `docs/connectors.md` (AgentLatch/agent-latch#77, revised in
+> AgentLatch/agent-latch#89). **Merge the connector design first:** the links to
+> `docs/connectors.md` in this document are dead on `main` until it is merged. Nothing here
 > changes the AgentLatch core or its MIT license.
 
 ## 1. Goals and rules
@@ -42,6 +44,11 @@ layout and CI rules. Free connectors stay in `connectors/` in this repository. T
 (`runtime/connectors.py`) stays in the MIT core, so paid packages build on a public interface
 rather than the other way round.
 
+The private repository also holds the paid packages' own release tags (`connector-<type>-vX.Y.Z`),
+CI and publish workflow. The public `publish-connectors.yml` (`docs/connectors.md`, section 6.4)
+does not publish them. `agent-latch-runtime connectors` lists an installed paid type with its
+version and `CONNECTOR_API` without loading it, so a license is never needed just to list it.
+
 ### 2.1 The shared license library
 
 All paid connectors use one small private package, `agentlatch-license`, that verifies license
@@ -49,8 +56,13 @@ files. It is the only place the verification code and the public keys live:
 
 - It depends on the `cryptography` package for Ed25519 signatures. That dependency belongs to
   paid packages only and never becomes a core dependency.
-- It exposes one function, `require_license(product: str, context: ConnectorContext) ->
-  LicenseInfo`, which each paid connector factory calls before it returns a connector.
+- It exposes one function, `require_license(product: str, license: str | None = None) ->
+  LicenseInfo`, which each paid connector calls in its `open()` method (section 5). `license` is
+  the value of the operator's `license` option, if any. The factory only records that value:
+  `docs/connectors.md`, section 4, allows no I/O at the create step, and reading the license file is
+  I/O.
+- It writes its own canonical-JSON function (section 4) and does not import the core's ledger
+  module, so it depends on no core internal.
 - It is versioned on its own (SemVer). Paid connectors depend on a compatible range, for example
   `agentlatch-license>=1,<2`.
 
@@ -92,7 +104,10 @@ Customers run AgentLatch on their own machines. Paid packages reach them in one 
 
 3. **Container image.** A paid runtime image built on the public runtime image
    (`docs/docker.md`), adding the paid wheels, pushed to a private registry. It follows the same
-   image rules: pinned base digest, user `10001`, no compilers or source tree.
+   image rules as `AGENTS.md`: base image pinned by digest, dependencies from hash-pinned locks
+   installed with `--only-binary=:all:`, user `10001`, no compilers or source tree. The public
+   `.github/dependabot.yml` does not cover the private repository, so that repository needs its
+   own automated updates for the base image digest, workflow actions and locks.
 
 Every release is signed. Wheels and bundles carry SHA-256 hashes, and the `SHA256SUMS` file is
 signed with a release key separate from the license-signing key, so a leaked download token
@@ -129,8 +144,10 @@ committed to a public repository.
   `grace_days`. Removing it earlier would turn a license that is still inside its grace period
   into "not valid".
 - **Canonical JSON** for the signature uses the same rules as the ledger
-  (`runtime/ledger/canonical.py`): sorted keys, no spaces, UTF-8, so the same license always
-  verifies the same way.
+  (`runtime/ledger/canonical.py`): sorted keys, no spaces, UTF-8 with no ASCII escaping, so the
+  same license always verifies the same way. `agentlatch-license` carries its own copy of that
+  small function, with test vectors that pin the exact bytes, instead of importing the ledger
+  module, which is a core internal.
 
 ### 4.1 How the connector finds the license
 
@@ -146,9 +163,11 @@ same rule as all connector configuration (`docs/connectors.md`, section 6.2).
 
 ## 5. Validation
 
-`require_license(product, context)` runs inside the connector factory, at the **create** step of
-the connector lifecycle (`docs/connectors.md`, section 4), before the connector opens anything.
-It:
+`require_license(product, license)` runs at the start of the connector's `open()`, the **open**
+step of the connector lifecycle (`docs/connectors.md`, section 4), before the connector opens
+anything of its own. That step runs once, after the `--database` store is opened and before
+`events.csv` and the other files, and a `ConnectorConfigError` raised there exits `2`. The create
+step is not used, because it allows no I/O. It:
 
 1. Reads the license file (at most 64 KB) and parses it as JSON.
 2. Checks `schema`, finds the public key for `kid`, and verifies the Ed25519 signature.
@@ -172,20 +191,22 @@ its `license_id` is added to a deny list shipped in the next `agentlatch-license
 
 ## 6. Behavior on missing, expired or invalid licenses
 
-All failures surface through the error types already defined in `docs/connectors.md`, section 5,
-so the importer needs no licensing-specific code.
+All failures surface through the error types defined in `docs/connectors.md`, section 5
+(`ConnectorConfigError` at open, `ConnectorDisabled` while running), so the importer needs no
+licensing-specific code. A license problem is never a `ConnectorUnavailable`, so it is never
+retried.
 
 | Situation | When it is detected | What happens |
 |---|---|---|
-| **No license file found** | Create | `ConnectorConfigError`: `import-logs` exits `2` before opening any output. The message lists the three places it looked and how to get a license. |
-| **File unreadable or not valid JSON** | Create | `ConnectorConfigError`, exit `2`. The message names the path, not the content. |
-| **Bad signature, unknown `kid`, or edited fields** | Create | `ConnectorConfigError`, exit `2`: "license file is not valid". The importer does not say which check failed beyond that, so a modified file gets no hints. |
-| **Product not covered** | Create | `ConnectorConfigError`, exit `2`, naming the connector type and the `license_id`. |
-| **On deny list** | Create | `ConnectorConfigError`, exit `2`, asking the operator to contact AgentLatch. |
-| **Not yet valid** (`not_before` in the future, beyond a 24-hour clock-skew allowance) | Create | `ConnectorConfigError`, exit `2`, showing the start date. |
-| **Expired, inside the grace period** | Create | The connector works normally. A warning is printed at startup and in the final summary, with the number of days left. |
-| **Expired, past the grace period** (trials have no grace period) | Create | `ConnectorConfigError`, exit `2`, showing the expiry date and how to renew. |
-| **Expires while the importer is running** (follow mode) | `write`, at most once an hour, comparing the clock with the license already loaded (no file or network access) | Inside the grace period: one warning, then normal work. Past the grace period: the connector raises `ConnectorConfigError`, which the importer treats like any connector bug (`docs/connectors.md`, section 5): that connector is disabled for the rest of the run, its waiting batches count as undelivered, and every other output keeps running. See [section 6.1](#61-recovering-after-renewal). |
+| **No license file found** | Open | `ConnectorConfigError`: `import-logs` exits `2` before opening any output. The message lists the three places it looked and how to get a license. |
+| **File unreadable or not valid JSON** | Open | `ConnectorConfigError`, exit `2`. The message names the path, not the content. |
+| **Bad signature, unknown `kid`, or edited fields** | Open | `ConnectorConfigError`, exit `2`: "license file is not valid". The importer does not say which check failed beyond that, so a modified file gets no hints. |
+| **Product not covered** | Open | `ConnectorConfigError`, exit `2`, naming the connector type and the `license_id`. |
+| **On deny list** | Open | `ConnectorConfigError`, exit `2`, asking the operator to contact AgentLatch. |
+| **Not yet valid** (`not_before` in the future, beyond a 24-hour clock-skew allowance) | Open | `ConnectorConfigError`, exit `2`, showing the start date. |
+| **Expired, inside the grace period** | Open | The connector works normally. A warning is printed at startup and in the final summary, with the number of days left. |
+| **Expired, past the grace period** (trials have no grace period) | Open | `ConnectorConfigError`, exit `2`, showing the expiry date and how to renew. |
+| **Expires while the importer is running** (follow mode) | `write`, at most once an hour, comparing the clock with the license already loaded (no file or network access) | Inside the grace period: one warning, then normal work. Past the grace period: the connector raises `ConnectorDisabled("license <license_id> expired on <date>; renew it and restart the importer")`. The importer warns once with that message, disables that connector for the rest of the run, counts its waiting batches as undelivered, and every other output keeps running. See [section 6.1](#61-recovering-after-renewal). |
 
 ### 6.1 Recovering after renewal
 
@@ -196,8 +217,8 @@ but only if the files are kept exactly as they are:
 1. **Keep the log files whole until recovery is done.** Keep the original `trace.jsonl` from its
    first line, including everything written before the license lapsed, and the matching
    `payloads.jsonl` for the same period whenever the proxy writes one (the connector may need
-   it, and the gate re-check below always does). Do not rotate, truncate or edit them until
-   step 4 and the gate re-check below are finished. The importer derives each event's
+   it, and the optional gate re-check in `docs/runtime.md` always does). Do not rotate, truncate or
+   edit them until step 4 and any re-check are finished. The importer derives each event's
    identity from them: the run id is a hash of the first trace line, and an event's `order` is
    its trace line number. A file that was cut or rotated produces different identities, so
    connectors can no longer match events they already have, and recovery is incomplete.
@@ -211,46 +232,10 @@ but only if the files are kept exactly as they are:
    event key), and then keeps following, so this one step both catches up and resumes live
    delivery.
 
-**Stateful gates after a restart (known gap).** Step 4 restarts the importer, and a restarted
-importer skips every event whose gate rows are already in `gate-results.csv`. Gates that keep
-state between events, such as ALR03, therefore do not see those earlier events again. ALR03's
-identity baseline lives only in memory for one importer run (its `cross_run_baseline` check
-already reports `PARTIAL` for this reason), so after the restart the first handshake the importer
-evaluates, possibly one recorded while it was stopped, becomes the new baseline, and an identity
-change across the stop can be missed. This is a property of any importer restart, not of
-licensing, and this design does not change it. To check the whole recording again with fresh gate
-state, run one extra pass after step 4, over the same kept log files and with outputs that do
-not exist yet, so nothing is skipped:
-
-```bash
-agent-latch-runtime import-logs --once --dir RECHECK_DIR \
-  --trace PATH/trace.jsonl --payloads PATH/payloads.jsonl --run-id RUN_ID
-```
-
-`RECHECK_DIR` is a new, empty folder that only the operator can read, outside any source
-repository. `--dir` sends every output of this pass there: events, gate results, and
-`normalized.jsonl`, which holds full arguments, payloads and responses, so treat the folder as
-sensitive. Leave out `--connector` and `--database`, so the pass only evaluates gates. Review
-the findings with `agent-latch --runtime-result RECHECK_DIR/gate-results.csv`, then delete the
-folder. The live importer from step 4 keeps running unchanged.
-
-Two limits apply to this re-check:
-
-- **It needs the payloads.** ALR03 reads a server's identity from the `initialize` handshake
-  payload. Without `payloads.jsonl` (the proxy was started without `--payloads`, or the file was
-  not kept), ALR03 reports `INCONCLUSIVE` with `payload_unavailable` and cannot detect an
-  identity change, in the re-check or anywhere else.
-- **It does not repair the live importer.** The re-check runs in its own process with its own
-  baseline. The importer restarted in step 4 keeps the baseline it built from the first
-  handshake it evaluated, so later identity changes are judged against that baseline, not the
-  one from the re-check.
-
-**Log rotation is out of scope here.** Rotating the proxy's log files touches the trace, the
-payloads file, the audit ledger and its anchor, and the state the runtime gates keep, none of
-which is about licensing. This design does not define a rotation procedure. Until one is
-documented for the runtime as a whole, do not rotate or move the log files while the proxy or a
-follow-mode importer is running, and follow `docs/ledger-operations.md` ("Retention and
-rotation") for the ledger.
+**Stateful gates after a restart.** The restart in step 4 affects gates that keep state between
+events, such as ALR03, and so does any importer restart. That is not specific to licensing, so it
+and the optional re-check pass are described in `docs/runtime.md` ("Restarting the importer"),
+together with why log rotation is out of scope. Nothing in this design changes it.
 
 If the importer normally runs only with `--once` (for example from a scheduled job), step 4 is
 simply the next `--once` run with the same options, after steps 2 and 3. A `--once` run alone
@@ -259,7 +244,7 @@ the files.
 
 Guarantees in every case:
 
-- **Only the paid connector is affected.** Most failures happen at create, so the operator
+- **Only the paid connector is affected.** Most failures happen at open, so the operator
   sees them immediately. They can renew, or remove that `--connector` and run everything else
   (CSVs, gates, `--database`, free connectors) exactly as before.
 - **No data is deleted or locked.** Data a paid connector already wrote stays where it is, in its
