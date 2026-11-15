@@ -24,7 +24,7 @@ class EventStore(Protocol):
     def close(self) -> None: ...
 ```
 
-`import-logs` runs in one of two modes (existing flag, `src/agent_latch/runtime/cli.py:155`):
+`import-logs` runs in one of two modes, chosen by the existing `--once` flag:
 
 - **Follow mode** (the default) keeps watching the log files and imports new lines as the proxy
   writes them, until you press Ctrl+C.
@@ -151,6 +151,12 @@ and never replace a non-null value. Skipping a known key is not enough, because 
 carry a payload the first one lacked. `SQLiteEventStore` skips known keys (`INSERT OR IGNORE`),
 which is one reason `--database` stays outside the adapter and unchanged.
 
+This changes what the store contract promises. Today the `EventWriter` docstring in
+`src/agent_latch/runtime/importer.py` (`EventStore` is its old name) says `save` "adds only events
+whose key is new (saving a key again keeps the first write)". The implementation PR (rollout step
+2) must rewrite that docstring to state the merge rule above for stores used through the adapter,
+and say that `SQLiteEventStore` keeps the old behavior.
+
 The adapter exists so that new store packages can be written against `EventStore`. The
 `--database` path itself does **not** go through the adapter (see section 7).
 
@@ -246,7 +252,10 @@ Rules:
   non-null value and never discards the more complete copy just because the key was seen
   before. Stores update the row, exporters send the event again (receivers apply the same rule),
   and archive readers prefer the copy with a payload. The `--database` store is unchanged and
-  keeps its current `INSERT OR IGNORE`. Changing it is out of scope here (section 7).
+  keeps its current `INSERT OR IGNORE`. Changing it is out of scope here (section 7). The same
+  holds for the built-in files: `events.csv` and `normalized.jsonl` also skip an event key they
+  already hold, so a replay never adds the late payload there, and the first copy (with
+  `payload: null`) stays.
 - **Archive objects are write-once.** `batch_id` can contain characters that are not valid in
   file names (`:`, and anything an operator passes to `--run-id`), so it is never used as a name
   directly. An archive names each object
@@ -255,38 +264,17 @@ Rules:
   A retry of an identical batch maps to the same name, and a replay with different contents (for
   example now with a payload) gets a new name. A connector must never overwrite an existing
   object:
-  - **Local files:** write the complete bytes to a temporary file in the same folder, flush and
-    `fsync` it, then publish it with a create-only atomic step (`os.link` to the final name, which
-    fails if the name exists), remove the temporary file, and then `fsync` the containing folder
-    so the new name survives a crash. Only after that does `write` report success. A failed write
-    therefore never leaves a partial object under the final name. On macOS, plain `fsync` does
-    not force the drive's cache to permanent storage, so every sync above uses
-    `fcntl(fd, F_FULLFSYNC)` there instead. A sync failure is handled by its cause:
-    - **Not supported** (for example `ENOTSUP` or `EINVAL` from `F_FULLFSYNC` on a network or
-      FUSE file system): this will never succeed, so it is never retried. The connector checks
-      for it once in `open()` by running every sync step it will use later on a test file in the
-      archive folder (the file sync, `F_FULLFSYNC` on macOS, and the folder sync), and raises
-      `ConnectorConfigError` (exit `2`) unless the operator chose
-      `--connector-option NAME.durability=best-effort`. In that mode the connector uses plain
-      `fsync` (or no folder sync where none exists), logs once at open that objects may not
-      survive a power loss, and reports success after the steps it can do. If a "not supported"
-      error still appears later in `write` (for example the folder was remounted), the connector
-      raises `ConnectorConfigError` there too: the importer disables that connector for the rest
-      of the run, its waiting batches count as undelivered, `--once` exits `2`, and nothing is
-      retried in a loop (section 5).
-    - **Temporary** (for example `EINTR`, `EAGAIN`, `ENOSPC`, or an I/O error on a device that
-      may come back): `write` does not report success; it raises `ConnectorUnavailable` and the
-      batch is retried with the usual backoff.
-
-    Platforms that cannot sync a folder at all, such as Windows, need `durability=best-effort`,
-    and the connector's documentation says so.
-  - **Object stores:** use a conditional put ("only if absent").
-  - **Name already exists:** read the existing object and check that its SHA-256 matches the name
-    and the intended bytes, and (for local files) sync the containing folder as above, since an
-    earlier attempt may have failed at exactly that step. Only then is the write a no-op success.
-    If that sync fails, the write raises `ConnectorUnavailable` and is retried. A hash mismatch
-    means the existing object is damaged: it is left untouched and the batch is reported as
+  - **Local files and object stores:** publish with a create-only step that fails if the name
+    exists (for local files an atomic `os.link` from a synced temporary file; for object stores a
+    conditional put, "only if absent"), and report success from `write` only after the object is
+    durable. A failed write never leaves a partial object under the final name.
+  - **Name already exists:** verify that the existing object's SHA-256 matches the name. If it
+    does, the write is a no-op success (after any sync step an earlier attempt may have missed).
+    A mismatch means the existing object is damaged: leave it untouched and report the batch as
     `ConnectorRejected`, so `--once` exits `2`.
+  - The step-by-step durability rules (`fsync`, `F_FULLFSYNC` on macOS, per-platform sync errors and
+    the `durability=best-effort` option) belong to the connector, not the contract. They are in
+    `connectors/jsonl-archive/README.md`.
 - **Each event** is the normalized event that every gate and `normalized.jsonl` already see:
 
   | Field | Type | Notes |
@@ -316,14 +304,15 @@ Rules:
 
 ## 5. Error behavior
 
-Connectors signal failures with three exceptions, defined in `connectors.py`. Anything else
+Connectors signal failures with four exceptions, defined in `connectors.py`. Anything else
 counts as a bug:
 
 | Exception | Meaning | What the importer does |
 |---|---|---|
-| `ConnectorConfigError(ValueError)` | Can never work as configured | At create or open: exit `2` with the message. During `write`: treated as a bug (last row). |
+| `ConnectorConfigError(ValueError)` | Can never work as configured | At create or open: exit `2` with the message. During `write`: treated as a bug (last row); use `ConnectorDisabled` instead. |
 | `ConnectorUnavailable(OSError)` | Temporary: network, lock, rate limit, disk full | Keeps the batch, warns **once**, retries with backoff. Logs "reachable again" when it recovers. Same idea as today's SQLite retry. |
 | `ConnectorRejected(Exception)` | The destination refused **this** batch for good (for example HTTP 400) | Does not retry. Writes the batch to `runtime-logs/<name>.rejected.jsonl` (mode `0600`), warns, and moves on. |
+| `ConnectorDisabled(Exception)` | The connector must stop for the rest of the run, for a reason the operator should read (for example a license that expired while running, or a sync mode that stopped being supported) | Does not retry. Warns **once** with the connector name and the exception's message, disables that connector for the rest of the run, and keeps every other output going. Its waiting batches count as undelivered, so `--once` exits `2`. Only valid from `write`; from `create` or `open`, use `ConnectorConfigError`. |
 | Any other exception | A bug in the connector | Warns with the exception type only, **disables that connector** for the rest of the run, keeps every other output going. The disabled connector's waiting batches count as undelivered. |
 
 `ConnectorUnavailable` subclasses `OSError` so that it reads like any other storage failure. A
@@ -355,9 +344,10 @@ from the trace again and matches by itself.
 **Never in the request path.** No connector error can reach the proxy. The importer is a separate
 process that only reads log files (see `docs/runtime.md`).
 
-**Messages.** Warnings name the connector and the exception type and message. They never print
-option values, payloads or event contents. Connector authors must not put secrets in exception
-messages.
+**Messages.** Warnings name the connector and the exception type and message. For a bug (any
+other exception) the importer prints the type only. Warnings never print option values, payloads or
+event contents. Connector authors must not put secrets in exception messages, because
+`ConnectorDisabled` and `ConnectorConfigError` messages are shown to the operator as written.
 
 **Exit codes for `import-logs`** (unchanged values: `0` and `2`):
 
@@ -475,6 +465,18 @@ Rules:
 - Naming: PyPI `agentlatch-connector-<type>`, import `agentlatch_connector_<type>`, entry point
   `<type>`.
 
+### 6.5 Containers and dependency updates
+
+- **Images.** The published runtime image (`docs/docker.md`) holds Python and AgentLatch only, and
+  its rules (no source tree, hash-pinned locks, base image pinned by digest) do not change.
+  Connectors are **not** added to it. An operator who needs one builds a derived image on top of
+  the runtime image and installs the connector there, the same route `docs/docker.md` already
+  gives for servers that need another runtime. The implementation PR for step 3 must say this in
+  `docs/docker.md`, with a short example.
+- **Dependabot.** `.github/dependabot.yml` watches only `/docker`, so it would never open update
+  PRs for `connectors/*/pyproject.toml`. Each connector folder added in steps 3 and 4 needs its own
+  `pip` entry in that file (or a grouped entry per folder), in the same PR that adds the folder.
+
 ## 7. Keeping today's behavior untouched
 
 These stay byte-for-byte or behavior-for-behavior the same, and the implementation PR adds tests
@@ -487,6 +489,8 @@ that prove it:
 - `--database FILE` keeps its flag, help text, startup message, retry-and-warn behavior and exit
   codes. It is **not** rewritten as `--connector sqlite`. Connectors are an additional,
   separate list (`RuntimeLogImporter(..., connectors=[...])`), run after the store in each pass.
+  The store keeps its existing waiting list and retry path, and the new per-connector queues do
+  not touch it.
 - A run with no `--connector` makes no new imports, loads no entry points, and writes no new
   files. Its output is identical to today's.
 - `import agent_latch.runtime` still imports no optional dependency. `connectors.py` is standard
@@ -510,9 +514,19 @@ that prove it:
 
 1. Merge this document (this PR).
 2. Add `runtime/connectors.py`, the importer's `connectors=` list, the CLI flags and the
-   `connectors` listing, plus tests with an in-memory fake connector for every error path.
+   `connectors` listing, plus tests with an in-memory fake connector for every error path. This
+   step also has to do the following work, which this document does not detail further:
+   - Give each connector its own queue of frozen batches, with backoff and the drop-oldest cap
+     (section 5). Today the importer keeps a single `_unsaved` list and merges new events into it
+     on every retry. That list stays for `--database` and is not reused for connectors
+     (section 7).
+   - Rewrite the `EventWriter` docstring, as described in section 3.
+   - Add `connectors/` and `runtime/connectors.py` to the repository layout in `AGENTS.md`, and
+     add the CI job per connector folder (section 6.3).
+   - Settle the container and dependency-update rules (section 6.5).
 3. Add `connectors/_template` and `connectors/jsonl-archive`, the first real connector. It is
-   local and stdlib-only, so it proves the contract with no network behavior.
+   local and stdlib-only, so it proves the contract with no network behavior. Its README starts
+   from the design notes in `connectors/jsonl-archive/README.md`.
 4. Add network connectors (PostgreSQL, OpenTelemetry), each documented as opt-in network
    behavior.
 5. Add the gate-results batch type (section 8) so exporters can forward findings.
