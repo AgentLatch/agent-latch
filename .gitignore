@@ -20,3 +20,6 @@ runtime-logs/
 
 # Local-only testing tooling (attack demo modes, ad-hoc flags). Never committed.
 local/
+
+# Local Graphify output. CI builds the shared copy (.github/workflows/code-graph.yml).
+graphify-out/

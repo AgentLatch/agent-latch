@@ -1,8 +1,9 @@
 """AgentLatch runtime checks for live MCP tool traffic (preview).
 
 Today this package records MCP traffic routed through ``agent-latch-runtime proxy`` and never
-changes or blocks it. ``import-logs`` runs the ALR04 gate in ``agent_latch.gates`` and records
-findings. The runtime report lists findings only. The operator policy and enforcement are planned.
+changes or blocks it. ``import-logs`` runs the gates in ``agent_latch.gates`` (ALR03, ALR04, ALR10) and records
+findings. The runtime report lists findings only. An operator policy file (``--policy``) feeds
+the gates' allowlists; enforcement is planned.
 
 Importing this package must not import FastMCP: only ``middleware``, ``proxy`` and ``cli`` need
 the optional ``[runtime]`` extra, so the pure modules stay testable without it.

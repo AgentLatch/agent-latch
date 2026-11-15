@@ -28,6 +28,29 @@ log = logging.getLogger("agent_latch.runtime")
 
 PayloadSink = Callable[[PayloadEvent], None]
 DEFAULT_PAYLOAD_MAX_CHARS = 4000
+# At most this many masked-location entries are kept per record, to bound the record size.
+MAX_MASKED_LOCATIONS = 100
+
+
+def masked_record(record: Mapping[str, Any], max_chars: int) -> dict[str, Any]:
+    """A secret-masked copy of a payload record, with masked-location metadata attached.
+
+    When masking replaced anything inside the payload body, the masked body carries a ``masked``
+    list of ``{"path", "kind"}`` entries (paths relative to the payload body, for example
+    ``$/arguments/api_key``). The entries name where a secret-like value was and what shape it
+    had; they never hold any part of the value. Old records without the key still load.
+    """
+    locations: list[dict[str, str]] = []
+    masked = mask_value(dict(record), max_chars, locations=locations)
+    prefix = "$/payload/"
+    spots = [
+        {"path": f"$/{item['path'][len(prefix):]}", "kind": item["kind"]}
+        for item in locations
+        if item["path"].startswith(prefix)
+    ]
+    if spots and isinstance(masked.get("payload"), dict):
+        masked["payload"]["masked"] = spots[:MAX_MASKED_LOCATIONS]
+    return masked
 
 
 class PayloadTap:
@@ -192,7 +215,7 @@ class PayloadFile:
     def __call__(self, record: PayloadEvent) -> None:
         if self._file is None:
             return
-        masked = mask_value(record.to_dict(), self.max_chars)
+        masked = masked_record(record.to_dict(), self.max_chars)
         self._file.write(json.dumps(masked, ensure_ascii=False) + "\n")
         self._file.flush()
 

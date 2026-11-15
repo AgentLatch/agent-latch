@@ -226,12 +226,13 @@ def sarif_rule() -> dict[str, Any]:
 
 
 def sarif_results(
-    verification: Verification, ledger_uri: str, block_count: int
+    verification: Verification, ledger_uri: str, block_count: int, *, by_line: bool = True
 ) -> list[dict[str, Any]]:
     """One SARIF result per problem the verifier found, located in the ledger file.
 
     Each ledger line is one block, so a block's sequence number doubles as its line number. A
-    record that is gone has no line; it points at the nearest one.
+    record that is gone has no line; it points at the nearest one. An event store is a database,
+    not lines (``by_line=False``): its results name the file and the seal number instead.
     """
     if verification.status == STATUS_MISSING:
         return []
@@ -245,12 +246,19 @@ def sarif_results(
             "ruleId": RULE_ID,
             "level": level,
             "message": {"text": f"{where}: {issue.detail}"},
-            "locations": [{
-                "physicalLocation": {
-                    "artifactLocation": {"uri": ledger_uri},
-                    "region": {"startLine": line},
+            "locations": [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": ledger_uri},
+                        "region": {"startLine": line},
+                    }
                 }
-            }],
+                if by_line
+                else {
+                    "physicalLocation": {"artifactLocation": {"uri": ledger_uri}},
+                    "logicalLocations": [{"name": f"seal {issue.seq}", "kind": "object"}],
+                }
+            ],
             "properties": {
                 "severity": "info" if level == "warning" else "high",
                 "kind": issue.kind,

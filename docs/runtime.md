@@ -1,6 +1,6 @@
 # Runtime proxy for MCP (preview)
 
-`agent-latch-runtime proxy` sits between an AI app and one MCP server and records the traffic: the handshake, the tool list, every tool call and result, and prompt templates. **Preview, monitor only:** it passes every message through unchanged and never blocks anything. `import-logs` then runs the installed gates — ALR03 (endpoint trust) and ALR04 (tool schema injection) — which report findings. The report lists findings only. Opt-in blocking is planned.
+`agent-latch-runtime proxy` sits between an AI app and one MCP server and records the traffic: the handshake, the tool list, every tool call and result, and prompt templates. **Preview, monitor only:** it passes every message through unchanged and never blocks anything. `import-logs` then runs the preview gates: ALR03 reports findings for endpoint identity (the handshake), ALR04 reports findings for instruction-like content in tool definitions, ALR05 reports findings for instruction-like content in tool results, and ALR10 reports findings for secret-like values crossing the tool boundary. The report lists findings only. Opt-in blocking is planned.
 
 ```
 AI app (MCP client) ──▶ agent-latch-runtime proxy ──▶ real MCP server
@@ -108,7 +108,7 @@ The HTTP listener has no authentication, so it accepts loopback addresses only. 
 
 Where an app's MCP client runs decides how it reaches the proxy:
 
-- **Local apps** (Claude Desktop, Cursor, VS Code, Antigravity) run their MCP client on your PC. They start the proxy themselves over stdio, using the config change above. No network is involved. Use a real server after `--`. A trace from that connection shows calls; a finding still needs [Import logs](#import-logs) with `--payloads`, because ALR04 reads tool definitions, not the text a tool returns.
+- **Local apps** (Claude Desktop, Cursor, VS Code, Antigravity) run their MCP client on your PC. They start the proxy themselves over stdio, using the config change above. No network is involved. Use a real server after `--`. A trace from that connection shows calls; a finding still needs [Import logs](#import-logs). ALR04 reads tool definitions and ALR05 reads tool results, so `--payloads` gives both gates the full text; without it, ALR05 has nothing to scan and reports one coverage record per run.
 - **ChatGPT on the web** calls tools from OpenAI's servers. It cannot start a program on your PC or reach `localhost`. OpenAI's Secure MCP Tunnel connects out from your PC, so the proxy's unauthenticated HTTP listener is not published. The steps are in [docs/clients/chatgpt.md](clients/chatgpt.md). That guide records a trace of the bundled practice server. It is not the findings path.
 
 | Client | Connection | Status |
@@ -142,11 +142,11 @@ With `--trace FILE`, each MCP message adds one JSON line (`"schema": "agentlatch
 | `tools/call` failure | Exception type and duration |
 | `prompts/list`, `prompts/get` | Prompt names, argument names and hash, message roles, and a short excerpt |
 
-The trace never stores argument values or full outputs. The excerpt is at most `--excerpt-chars` characters (default 200; `0` turns it off), with secret-like values such as API keys, tokens and private keys replaced by `[REDACTED]`. Masking is pattern-based and can miss unusual formats, so treat the trace file as sensitive.
+The trace never stores argument values or full outputs. The excerpt is at most `--excerpt-chars` characters (default 200; `0` turns it off), with secret-like values such as API keys, tokens and private keys replaced by `[REDACTED]`. Each record also carries `transport` (`stdio` or `http`), how the proxy reaches the upstream server; the ALR10 checks rate a secret sent to a remote (`http`) server higher. Masking is pattern-based and can miss unusual formats, so treat the trace file as sensitive.
 
 ## Intercepted payloads (opt-in)
 
-The trace says *that* a tool was called. Checking *what* was asked for (the command, path, URL or query, and what came back) needs the payload. The proxy turns each `tools/list`, `tools/call` and `prompts/get` message into a payload record with its full payload: requests before they are forwarded to the server, results before they go back to the app. Today the records are only written to a file. Runtime checks that read them are planned.
+The trace says *that* a tool was called. Checking *what* was asked for (the command, path, URL or query, and what came back) needs the payload. The proxy turns each `tools/list`, `tools/call` and `prompts/get` message into a payload record with its full payload: requests before they are forwarded to the server, results before they go back to the app. The records are written to a file. `import-logs` runs the ALR10 gate over them (secrets sent to a tool or returned by one), so without `--payloads` that gate can only report that it had nothing to check (`ALR10-R90`).
 
 `--payloads FILE` writes each record as one JSON line (`"schema": "agentlatch.runtime.payload/1"`), in a file created with mode `0600`. **This file holds argument values and tool output**, so it is off by default:
 
@@ -160,7 +160,7 @@ The trace says *that* a tool was called. Checking *what* was asked for (the comm
 
 Every record also has `record_id`, `seq` (order within the proxy run), `timestamp`, `session_id`, `request_id` (pairs a request with its result), `client_id`, `server`, `method` and `stage`.
 
-Before a record is written, string values under secret-like keys (`api_key`, `password`, `token`, ...) are replaced by `[REDACTED]`, other strings have secret-like values masked as in the trace, and each string is cut to `--payload-max-chars` characters (default 4000). Masking is pattern-based and can miss unusual formats: keep the payloads file local, private and short-lived. Nothing in it is sent anywhere.
+Before a record is written, string values under secret-like keys (`api_key`, `password`, `token`, ...) are replaced by `[REDACTED]`, other strings have secret-like values masked as in the trace, and each string is cut to `--payload-max-chars` characters (default 4000). When masking replaced anything, the payload carries a `masked` list of `{"path", "kind"}` entries naming where each secret-like value was (for example `$/arguments/api_key`) and what shape it had (`key_name`, `assignment`, `token:github`, `token:aws`, `jwt`, `pem`, `bearer`, ...). The entries hold only the kind and path, never any part of the value; the ALR10 checks read them, and records written before the list existed still import. Masking is pattern-based and can miss unusual formats: keep the payloads file local, private and short-lived. Nothing in it is sent anywhere.
 
 ## Try it without an app
 
@@ -168,7 +168,15 @@ Before a record is written, string values under secret-like keys (`api_key`, `pa
 agent-latch-runtime demo
 ```
 
-This runs a bundled synthetic MCP server behind the proxy, lists its tools, calls three tools (one returns a fake credential, one fails), gets a prompt, then imports the logs and prints one line per event. Everything stays on your machine. The files land in `runtime-logs/demo/` and are replaced on each run: `trace.jsonl`, `payloads.jsonl`, `events.csv`, `normalized.jsonl` and `proxy.log` (the proxy's own messages).
+This runs a bundled synthetic MCP server behind the proxy, lists its tools, calls five tools (one returns a fake credential, one fails, one returns a prompt-injection payload that ALR05 flags, and one returns ordinary cooking steps that correctly raise no finding), gets a prompt, then imports the logs and prints one line per event. Everything stays on your machine. The files land in `runtime-logs/demo/` and are replaced on each run: `trace.jsonl`, `payloads.jsonl`, `events.csv`, `normalized.jsonl` and `proxy.log` (the proxy's own messages). Run `agent-latch --runtime-result runtime-logs/demo/gate-results.csv` afterwards to see the findings report.
+
+`demo --scenario poisoned-output` runs a shorter session aimed at ALR05: one `fetch_page` call whose page hides an instruction in invisible Unicode tag characters and visibly steers the agent toward the sibling `send_email` tool. `ALR05-R02` (hidden content) and `ALR05-R03` (action steering) both fire on that one result.
+
+```sh
+agent-latch-runtime demo --scenario secret-leak
+```
+
+The `secret-leak` scenario shows the ALR10 checks instead: the client calls `search_issues` with an argument holding a GitHub-token-shaped fake value (ALR10-R01 fires), and the `read_config` tool returns a fake AWS key (ALR10-R02 fires). The report and the payload file show only `[REDACTED]`; every credential in the demo is fake.
 
 ## Import logs
 
@@ -176,7 +184,7 @@ This runs a bundled synthetic MCP server behind the proxy, lists its tools, call
 
 1. **Normalizes** it: the trace record and its payload record are joined into one event (below).
 2. **Shows** it: one line on stderr, one row in `events.csv`, and the full event (arguments, payload and response) in `normalized.jsonl`.
-3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR04 ships with the package, so this file is created. It records findings and does not block or change the call.
+3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR03, ALR04, ALR05 and ALR10 ship with the package, so this file is created. They record findings and do not block or change the call.
 
 With no file options it reads and writes in `runtime-logs/`:
 
@@ -196,13 +204,25 @@ For a full live run with a real CrewAI agent and this repo's MCP gateway, follow
 
 ### Store events in SQLite
 
+`--policy FILE` hands operator policy (YAML or JSON) to the gates that read it. Today that is the ALR10 allowlist and the ALR03 suppressions. The file is trusted configuration: keep it outside the project being monitored. A file that cannot be read, or that is not a mapping, makes `import-logs` exit `2`.
+
+```yaml
+# policy.yaml
+allowed_secret_tools:
+  - {server: github, tool: search_issues}
+```
+
+```sh
+agent-latch-runtime import-logs --policy ./policy.yaml
+```
+
 `--database FILE` also saves every normalized event in a local SQLite database, using Python's built-in `sqlite3` (nothing extra to install). The CSV and normalized JSONL outputs are unchanged. Without `--database`, nothing else changes, and nothing is uploaded.
 
 ```sh
 agent-latch-runtime import-logs --database ./runtime.db
 ```
 
-Each event is one row in the `events` table. `SQLiteEventStore` is the first destination behind the importer's `EventStore` contract (`open`, `save`, `close`). A later destination, such as a warehouse or an opt-in trace exporter, implements that same contract. This file is only the local one.
+Each event is one row in the `events` table. `SQLiteEventStore` is the first destination behind the importer's `EventWriter` contract (`open`, `save`, `close`; `EventStore` is the older name for the same thing). Only `import-logs` holds a writer. Anything that merely shows events to an agent or a dashboard holds an `EventReader` instead (`SQLiteEventReader` for this file), which has no write methods and opens the file read-only. A later destination, such as a warehouse or an opt-in trace exporter, implements the same contract. This file is only the local one.
 
 | Column | From the normalized event |
 |---|---|
@@ -213,11 +233,12 @@ Each event is one row in the `events` table. `SQLiteEventStore` is the first des
 | `metadata` | `metadata`, as JSON text |
 | `payload` | `payload`, as JSON text (`NULL` without `--payloads`) |
 | `imported_at` | When the importer stored the row (UTC) |
+| `seal_seq`, `seal_prev`, `seal_digest` | The row's seal: its number in the chain, the previous row's digest, and its own digest. See [Keep the event store tamper-evident](#keep-the-event-store-tamper-evident) |
 
-- **No duplicates.** Rows are keyed by `run_id` and `event_order` and saved with `INSERT OR IGNORE`, one transaction per pass. Importing the same files again, or restarting the importer, adds only events it has not stored yet.
+- **No duplicates, first write wins.** Rows are keyed by `run_id` and `event_order` and saved with `INSERT OR IGNORE`, one transaction per pass. Importing the same files again, or restarting the importer, adds only events it has not stored yet, and saving a key again with different content changes nothing.
 - **Live.** Without `--once`, the importer keeps following the logs and saves new events within about a second. If a save fails (for example the database is locked by another program), it logs one warning, keeps the events and retries on the next pass. Events still waiting when it stops are saved on the next run, which re-reads the files.
 - **Trace only.** Without `--payloads`, `payload`, `payloads_path` and `payloads_line` are `NULL` and `metadata` still holds the trace fields.
-- **Schema.** The schema version is kept in `PRAGMA user_version`, and numbered migrations bring an older database up to date when it is opened, each in one transaction. A database from a newer AgentLatch, or a file that is not SQLite, is refused with exit code `2`.
+- **Schema.** The schema version is kept in `PRAGMA user_version`, and numbered migrations bring an older database up to date when it is opened, each in one transaction. A database from a newer AgentLatch, or a file that is not SQLite, is refused with exit code `2`. Version 3 adds the seal columns and seals the rows already stored, in `(run_id, event_order)` order; version 4 adds triggers that abort `UPDATE` and `DELETE`. **The upgrade is one way:** once a file is at version 3 or 4, an older AgentLatch refuses it. Keep a copy first if you may go back. The seal on an older row only vouches for it from the upgrade on: it cannot prove the row was not changed before.
 - **Readable view.** `event_log` shows one line per event: `time`, `server`, `method`, `stage`, `tool_or_prompt`, `client_id`, `is_error`, `duration_ms`, the masked `excerpt` and `has_payload`.
 
 Read it with Python:
@@ -225,6 +246,27 @@ Read it with Python:
 ```sh
 python -c "import sqlite3; db = sqlite3.connect('runtime.db'); [print(r) for r in db.execute('select time, tool_or_prompt, stage, is_error, excerpt from event_log order by time desc limit 10')]"
 ```
+
+### Keep the event store tamper-evident
+
+Every row is sealed when it is saved: a SHA-256 over the event and its import time, chained to the row before it, computed by AgentLatch and not by the database. The newest seal can be published to an anchor outside the agent's reach, and then an edited, deleted, reordered or rebuilt store shows up. It is off unless you pass `--anchor`; the seals themselves are always written.
+
+```sh
+# Import, and publish the newest seal as the store grows (a new store creates the first point)
+agent-latch-runtime import-logs --database ./runtime.db --anchor /safe/place/store-anchors.jsonl
+
+# Check the store: every seal, the table layout, and the newest anchor point
+agent-latch-runtime verify --database ./runtime.db --anchor /safe/place/store-anchors.jsonl
+
+# Publish the head of a store that already has seals (the first point, or on purpose later)
+agent-latch-runtime anchor --database ./runtime.db --to /safe/place/store-anchors.jsonl
+```
+
+`verify --database` reports the same six verdicts as the trace ledger and exits `0` for `intact` or `unanchored`, `1` for `tampered`, `deleted` or `rewritten`, and `2` for a usage error or a `missing` store: one with no rows and no anchor point to prove it ever held any (that is a store file that is absent, or one that exists but is empty; a store an anchor proves held rows is `deleted`, exit `1`). `import-logs` checks the store before it adds anything: a store that no longer matches its seals, its table layout or its anchor is refused with exit `1`, nothing is repaired or re-sealed, and no forged head is anchored, as long as the agent cannot write the store: keeping the store out of the agent's reach is what the guarantee rests on, because someone who can write it can append a correctly sealed row after the importer started, the importer will chain and anchor the next event onto it, and `verify` will accept the chain. Protect the trace and payload files the importer reads in the same way. Found at start, nothing is added; found while it runs, it stops before saving or publishing anything newer, and events it had already saved stay. A sealed store whose anchor file is missing is refused too, because that looks the same as a deleted anchor; restore the anchor or investigate first, and run `anchor --database` only if this store was never anchored. One anchor file per chain: a trace ledger and an event store number their records separately and cannot share a file.
+
+To let an agent look at the store without ever holding its file, run `agent-latch-runtime audit-tool --database FILE`: an MCP server (stdio, needs the `[runtime]` extra) with two tools, `query_audit_log` (one SQL statement, up to 200 rows) and `recent_events`, built on the read-only reader. It exits `2` when the store is missing, not sealed yet, or newer than this AgentLatch. Run it where the agent cannot reach the file, for example in a container with the store's volume mounted read-only ([container layout](docker.md#keep-the-audit-store-out-of-the-agents-reach)).
+
+Detection is not prevention. An agent that runs as the same operating-system user as the store can change the file and its permissions. The only thing that stops that is keeping the store and the anchor in another user or container, with mode `0600`, and never giving the agent their path. See [the event store in the ledger guide](ledger.md#the-event-store-gets-the-same-protection), [setup](ledger-setup.md#also-protect-the-event-store---database) and [the container layout](docker.md#keep-the-audit-store-out-of-the-agents-reach).
 
 **The database is sensitive.** With `--payloads` it holds tool arguments and outputs, masked by pattern only. A new database file is created with mode `0600` on macOS and Linux; on Windows it follows the folder's permissions, so keep it in your user folder. Keep it local and delete it when you no longer need it. The importer makes no network request for this store.
 
@@ -244,7 +286,11 @@ A trace record waits for its payload record (matched on session, request, server
 
 **ALR03 (preview).** Reads the connection handshake (`initialize` / `server/discover`), which the middleware records as an `initialize` event carrying the client and server name/version and the protocol version. It reports a finding when a server does not identify itself (rule ALR03-001), when a server's name or version changes versus an earlier connection in the same run (ALR03-002), and when a server's declared name or title is a look-alike of the proxy label or of a name seen earlier in the run (ALR03-003, typosquat/homoglyph impersonation — string similarity only: confusable folding, edit distance and bigram overlap; no regular expressions). It does not authenticate the transport (that is ALR12) or pin the tool list (ALR02), and identity is self-declared, so a PASS is not proof a server is trustworthy. Findings carry the OWASP categories ASI02, ASI03, ASI04, and ASI07. ALR03 never blocks a connection.
 
-**ALR04 (preview).** Inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. The rules can miss reworded instructions, and they do not look at tool results or what the agent does next. ALR04 never blocks a call.
+**ALR04 (preview).** It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. The rules can miss reworded instructions, and they do not look at tool results or what the agent does next. ALR04 never blocks a call.
+
+**ALR05 (preview).** It inspects tool *results*: the text blocks and structured content of `tools/call` responses, and tool error messages. Three detectors share the text engine in `agent_latch/gates/_text.py` (also used by ALR04): `ALR05-R01` flags instruction-like text (override phrases, forged authority or conversation turns, concealment requests, instructions to read sensitive files), `ALR05-R02` flags hidden or encoded instructions (invisible or bidi characters, Unicode tag sequences, HTML comments, Base64/hex layers that decode to instruction-like text), and `ALR05-R03` flags output that steers the next action (naming another tool of the same server, sending data somewhere, opening a URL). Each finding records whether the tool is expected to return outside content (`openWorldHint`, or a name like `fetch_page`) as `outside_content_context`. A server declares both, so that context never skips a check and never lowers a finding: severity follows the outcome alone. Ordinary instructions in benign data (a recipe's steps, a CLI's manual) do not raise a finding on their own, and one weak signal alone cannot reach FAIL. Payload records exist only with `--payloads`; without them the gate emits one coverage record per run (`ALR05-R90`), and output cut by `--payload-max-chars` gets one coverage record per tool. The proxy sits between the app and the server, so it cannot show whether the output later reached a model or was fenced as data — a finding is a review signal about suspicious untrusted output, never a claim that an injection succeeded. The static rule AG003 checks the code side of the same gate. Findings carry the OWASP category ASI01 as context, not as a coverage claim. ALR05 never blocks a call.
+
+**ALR10 (preview).** It watches secrets crossing the tool boundary on `tools/call` payload records. `ALR10-R01` reports a secret-like value sent to a tool in the request arguments; `ALR10-R02` reports one coming back in the tool's output (text content, structured content or an error message); `ALR10-R90` is a coverage record when a tool call has no payload record (the proxy ran without `--payloads`), because the gate then cannot check it. The gate works on **masked** payloads by design: the proxy replaces secrets with `[REDACTED]` before writing, so the gate never sees a raw secret and nothing it writes can leak one. Its evidence is the masking itself, the `masked` path-and-kind list described above; older records fall back to the `[REDACTED]` markers, which are reported as `INCONCLUSIVE` at `low` severity because a bare marker may also be ordinary text (a redacted legal document, a log line) and is never a FAIL. Severity is `high` for a token-shaped secret (`sk-`, `ghp_`, `AKIA…`, a JWT, a PEM key, a bearer header) in an argument or in tool output, and `high` for any secret sent to a remote (HTTP upstream) server; that remote escalation applies to requests only, so a key-name secret returned by a remote server is `medium`, like one returned by a local server. A secret under a key name sent to a local server is `medium`. A tool that looks like an authentication tool (named `login`/`auth`, or with a password parameter in its schema) is noted in the finding but never downgraded, because a server declares its own tool names and schemas; to expect a credential sent to such a tool, add it to the operator allowlist below. An operator allowlist, `allowed_secret_tools: [{server, tool}]` in a policy file you pass with `import-logs --policy FILE` (YAML or JSON; trusted configuration only, never a file from the monitored project), turns an expected pair into `PASS` with a note. Without `--policy` nothing is allowed. Metadata read from the payload file is treated as untrusted: a masking kind that is not one of the known kinds is reported as `unknown`, never copied into a finding. Findings carry OWASP category ASI03. Blind spots: secrets the masking patterns do not recognize (the same limit as the proxy's masking), secrets split across fields, and encoded secrets. On a small separate validation set (`tests/runtime_fixtures/alr10_heldout.json`, written after the patterns and not used to tune them; 48 synthetic cases) it flagged 7 of 12 secrets in requests and 8 of 10 in tool output, with no false positives in either direction. The misses were credentials inside URLs, GitLab, Stripe-style and Google API keys, npm tokens, and environment-style names with a prefix such as `AWS_SECRET_ACCESS_KEY` or `DB_PASSWORD`. These numbers come from a small hand-written set, so treat them as a regression check and not as a measure of real traffic. ALR10 never blocks a call and does not clear a tool.
 
 **gate-results.csv.** Columns are `run_id`, `order`, `gate_id`, `result_json`, and `result_json` always has the same shape: `{"gate_id":"...","status":"ok","findings":[],"error":null}`. If a gate raises, its row has `"status":"error"` and only the exception type in `error`; later gates still run.
 
@@ -257,6 +303,46 @@ agent-latch --runtime-result
 That prints the same kind of table as `agent-latch scan`: severity, rule, location, OWASP category, and the finding. It reads every gate in the file, not only ALR04, and it lists findings only. A finding that sets `path` and `line` uses that location. Otherwise, when `entity.tool` matches a function in the project path (the positional argument, default `.`), the location is that function's docstring line, for example `mcp-server/tools/alr04_fixture_tools.py:14`. A tool that comes from a mounted server and has no function in the project is shown as `server/tool #event`. `--plain` prints text instead of the table. `--fail-on` applies to these rows the same way it applies to a scan. The default CSV is `runtime-logs/gate-results.csv`; pass another file as `--runtime-result FILE`.
 
 Restarting the importer skips events and results already in its output files, so rows and lines are not repeated. Malformed lines are logged and skipped. The importer does not block or modify MCP traffic. Its output files can hold payload data, so keep them local and access-controlled (they are created with mode `0600`; `runtime-logs/` is in `.gitignore`).
+
+### Restarting the importer
+
+A restarted `import-logs` skips every event whose gate rows are already in `gate-results.csv`.
+Gates that keep state between events, such as ALR03, therefore do not see those earlier events
+again. ALR03's identity baseline lives only in memory for one importer run (its
+`cross_run_baseline` check already reports `PARTIAL` for this reason), so after a restart the first
+handshake the importer evaluates, possibly one recorded while it was stopped, becomes the new
+baseline, and an identity change across the stop can be missed. This is a property of any importer
+restart. To check the whole recording again with fresh gate state, run one extra pass over the same
+kept log files, with outputs that do not exist yet so nothing is skipped:
+
+```bash
+agent-latch-runtime import-logs --once --dir RECHECK_DIR \
+  --trace PATH/trace.jsonl --payloads PATH/payloads.jsonl --run-id RUN_ID
+```
+
+`RECHECK_DIR` is a new, empty folder that only you can read, outside any source repository. `--dir`
+sends every output of this pass there: events, gate results, and `normalized.jsonl`, which holds
+full arguments, payloads and responses, so treat the folder as sensitive. Leave out `--database`
+and any `--connector`, so the pass only evaluates gates. Review the findings with
+`agent-latch --runtime-result RECHECK_DIR/gate-results.csv`, then delete the folder. The importer
+you restarted keeps running unchanged.
+
+Two limits apply to this re-check:
+
+- **It needs the payloads.** ALR03 reads a server's identity from the `initialize` handshake
+  payload. Without `payloads.jsonl` (the proxy was started without `--payloads`, or the file was
+  not kept), ALR03 reports `INCONCLUSIVE` with `payload_unavailable` and cannot detect an identity
+  change, in the re-check or anywhere else.
+- **It does not repair the live importer.** The re-check runs in its own process with its own
+  baseline. The restarted importer keeps the baseline it built from the first handshake it
+  evaluated, so later identity changes are judged against that baseline, not the one from the
+  re-check.
+
+**Log rotation has no documented procedure for the runtime as a whole.** Rotating the proxy's log
+files touches the trace, the payloads file, the audit ledger and its anchor, and the state the
+runtime gates keep. Until a procedure is documented, do not rotate or move the log files while the
+proxy or a follow-mode importer is running, and follow `docs/ledger-operations.md` ("Retention and
+rotation") for the ledger.
 
 ## Tamper-evident audit ledger (preview)
 
@@ -271,7 +357,7 @@ agent-latch-runtime verify --ledger runtime-logs/trace.ledger.jsonl \
   --trace runtime-logs/trace.jsonl --anchor /mnt/audit/anchors.jsonl
 ```
 
-`agent-latch --runtime-result FILE --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl` prints the verdict as the first thing in the report, in bold in a terminal:
+`agent-latch --runtime-result FILE --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl` prints the verdict as the first thing in the report, in bold in a terminal (add `--database FILE [--database-anchor PATH]` for the event store's verdict too; the findings are listed by gate):
 
 ```
 AUDIT TRAIL TAMPERED — a record was altered; the log cannot be trusted.
@@ -285,7 +371,7 @@ Start here: [the audit ledger](ledger.md) (the model and the verdicts), [setup](
 ## Limits
 
 - It sees only servers whose config entry goes through the proxy. Other servers, the app's built-in tools (for example Claude Code's shell and file edits) and the user's prompts to the model don't pass through it.
-- It records traffic and runs ALR03 on the handshake and ALR04 on tool definitions. It reports findings and does not block calls.
+- It records traffic and runs the bundled gates: ALR03 on the handshake, ALR04 on tool definitions and ALR10 on tool-call payloads. It reports findings and does not block calls.
 - The audit ledger proves a log was not changed after it was recorded. It says nothing about whether what was recorded was safe, and a chain without an anchor cannot catch a full rewrite. See [the audit ledger](ledger.md).
 - It sees MCP traffic only, not the agent's requests to its model, so it records what the agent did, not the prompt or reasoning behind it.
 - Payload records cover `initialize` (the handshake), `tools/list`, `tools/call` and `prompts/get`. Other MCP messages (`resources/list`, `resources/read`, notifications, sampling) pass through without a record, and `prompts/list` is only in the trace. Tool results keep text content only: image, audio and embedded-resource blocks are left out. A failed `prompts/get` writes no record.

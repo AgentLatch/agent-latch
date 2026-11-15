@@ -96,6 +96,80 @@ docker run --rm -v /home/me/agentlatch-data:/data ghcr.io/agentlatch/agent-latch
 
 If the folder on your machine is not writable by user `10001`, add `--user "$(id -u):$(id -g)"` to the `docker run` arguments. Docker passes no environment variables from your machine into the container unless you name them with `-e NAME`.
 
+### Keep the audit store out of the agent's reach
+
+A sealed store detects a change; only keeping the agent away from the file prevents one. The
+recommended picture is three separate places:
+
+1. **The agent's container.** It holds the agent and nothing of AgentLatch: no store, no anchor, no
+   Docker socket. Run it as a normal user: `--user 10001:10001 --cap-drop=ALL --security-opt
+   no-new-privileges --read-only --tmpfs /tmp --pids-limit 256`. Never use `--privileged`, never mount
+   `/var/run/docker.sock`, never mount the store's volume into it, and keep `sudo` out of the image.
+2. **The AgentLatch container.** The proxy, `import-logs`, the ledger and the store, with `/data` in its
+   own **named volume**, which lives inside Docker's storage where the agent has no path to it. The
+   anchor goes in a **second** volume, so a container that mounts only the store cannot reach it. A new
+   volume is owned by root, so give the anchor volume to the image's user once:
+
+   ```sh
+   docker volume create agentlatch-data && docker volume create agentlatch-anchor
+   docker run --rm -u root --entrypoint chown -v agentlatch-anchor:/anchor \
+     ghcr.io/agentlatch/agent-latch-runtime:<version> 10001:10001 /anchor
+   docker run --rm -v agentlatch-data:/data -v agentlatch-anchor:/anchor \
+     ghcr.io/agentlatch/agent-latch-runtime:<version> \
+     import-logs --dir runtime-logs/demo --database /data/audit.db \
+     --anchor /anchor/store-anchors.jsonl --once --quiet
+   docker run --rm -v agentlatch-data:/data:ro -v agentlatch-anchor:/anchor:ro \
+     ghcr.io/agentlatch/agent-latch-runtime:<version> \
+     verify --database /data/audit.db --anchor /anchor/store-anchors.jsonl
+   ```
+
+   Both files are then owned by user `10001` with mode `0600`. The test in
+   `docs/audit-trail-dev/06-docker-test.md` checks that user `10002` is denied read, write, `chmod` and
+   delete access, even with both volumes mounted read-write. To rely on these permissions, do not give
+   another container user `10001` or privileges that bypass file permissions: a root container with
+   enough capabilities can change the files.
+
+   **Give the agent a tool, not a path.** `agent-latch-runtime audit-tool --database /data/audit.db` is an
+   MCP server (stdio) with two tools, `query_audit_log` and `recent_events`, that holds only a read-only
+   reader. Start it in its own container with the store mounted read-only and nothing else:
+
+   ```sh
+   docker run -i --rm --network none --read-only --cap-drop=ALL --security-opt no-new-privileges \
+     -v agentlatch-data:/data:ro ghcr.io/agentlatch/agent-latch-runtime:<version> \
+     audit-tool --database /data/audit.db
+   ```
+
+   The agent's app launches that command as its MCP server (`-i` is required). Every write the agent
+   tries through it, even raw SQL, is refused.
+
+   **Never give the agent Docker.** An agent that can run `docker` can mount the volume as root. The
+   seals and the anchor detect what it changes only while the anchor is out of its reach: if it can
+   also rewrite the anchor, nothing detects it, and nothing stops it changing the store. Keep the
+   anchor off that machine or in write-once storage. Do not mount
+   `/var/run/docker.sock` into the agent's container, and do not give a shell tool to an agent whose
+   host user can use Docker.
+
+   **A protected anchor does not vouch for rows it has not covered yet.** The importer rebuilds rows
+   past the newest anchor point from the trace and payload files and keeps them if they match, so an
+   agent that can change the store *and* those files can get a forged row accepted. Keep the trace
+   and payload files out of the agent's reach too, not only the store.
+
+3. **The anchor.** Outside both: another host, a mounted share the agent cannot write, or write-once
+   storage. An agent that can also write the anchor makes tampering undetectable.
+
+Three settings need care:
+
+- Keep `/data` in a **named volume** (`-v agentlatch-data:/data`). A host folder mounted there can show
+  up as owned by the person running the agent, and then the agent can change it. Whether Docker Desktop
+  does this is not something the tests prove (CI runs on Linux): check it by hand with `ls -ln` on the
+  mounted folder and with a second user.
+- Do **not** add `--user "$(id -u):$(id -g)"` to the store's container: that runs it as the agent's own user.
+- `--http` is not how an agent connects across containers, because it accepts only a loopback address.
+  Use stdio (`docker run -i`), or a sidecar that shares the agent's network (`--network container:<agent>`).
+
+Containers share the host kernel; for very sensitive data a separate machine or VM is stronger. Without
+containers, run the agent as a separate non-administrator OS user.
+
 ### Limits
 
 **The upstream server must be reachable from inside the container.** With `--upstream-url`, the proxy connects over the network, and this works for any server. With `proxy -- COMMAND`, the proxy starts the server *inside the container*, so the command must exist there:
