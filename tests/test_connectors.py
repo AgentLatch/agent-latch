@@ -593,3 +593,84 @@ def test_connectors_command_reports_a_duplicate_type(
     _install(monkeypatch, FakeEntry("pg", package="a"), FakeEntry("pg", package="b"))
     assert cli.main(["connectors"]) == 2
     assert "registered by two packages" in capsys.readouterr().err
+
+
+# --- review fixes: dropped, cap order, backoff overflow, rejected file ----------------------
+
+
+def test_events_arriving_after_a_connector_was_disabled_are_counted_as_dropped(
+    tmp_path: Path,
+) -> None:
+    connector = FakeConnector()
+    connector.open_error = RuntimeError("boom")
+    runner = ConnectorRunner(_loaded(connector), tmp_path)
+    runner.open()  # disables the connector before it gets any event
+    for event in _events(3):
+        runner.add(event)
+    assert runner.dropped == 3 and runner.has_problems
+
+
+def test_once_fails_when_a_connector_could_not_open_and_received_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _record_run(tmp_path)
+    connector = FakeConnector()
+    connector.open_error = RuntimeError("boom")
+    assert _run_cli(monkeypatch, tmp_path, connector) == 2
+    assert not connector.batches
+
+
+def test_the_pending_limit_applies_after_delivery_not_before(tmp_path: Path) -> None:
+    connector = FakeConnector()
+    runner = ConnectorRunner(_loaded(connector, max_batch_events=1, max_pending_batches=2), tmp_path)
+    runner.open()
+    for event in _events(5):
+        runner.add(event)
+    runner.deliver(final=False)  # a healthy connector gets all five before any limit applies
+    assert runner.delivered == 5 and runner.dropped == 0 and len(connector.batches) == 5
+
+
+def test_backoff_never_overflows_during_a_long_outage(tmp_path: Path) -> None:
+    runner = ConnectorRunner(_loaded(FakeConnector()), tmp_path)
+    for _ in range(3000):  # far past the point where 2**attempts overflows a float
+        runner._schedule_retry(100.0)
+    assert runner._next_attempt == 160.0  # capped at 60 seconds
+
+
+def test_a_rejected_batch_that_cannot_be_saved_stays_queued(tmp_path: Path) -> None:
+    (tmp_path / "fake.rejected.jsonl").mkdir()  # not a file, so the append fails
+    connector = FakeConnector(write_errors=[ConnectorRejected("HTTP 400")])
+    runner = ConnectorRunner(_loaded(connector), tmp_path)
+    runner.open()
+    for event in _events(3):
+        runner.add(event)
+    runner.deliver(final=True)  # does not raise
+    assert runner.undelivered == 3 and runner.rejected == 0 and runner.has_problems
+
+
+def test_a_failing_rejection_file_does_not_stop_the_other_connectors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _record_run(tmp_path)
+    (tmp_path / "bad.rejected.jsonl").mkdir()
+    bad = FakeConnector(write_errors=[ConnectorRejected("HTTP 400")])
+    good = FakeConnector()
+    _install(monkeypatch, FakeEntry("bad", _factory_for(bad)), FakeEntry("good", _factory_for(good)))
+    code = cli.main([
+        "import-logs", "--dir", str(tmp_path), "--once", "--quiet",
+        "--connector", "bad", "--connector", "good",
+    ])
+    assert code == 2 and good.batches and not bad.batches
+    assert "could not be saved" in caplog.text
+
+
+def test_the_rejection_file_must_not_be_another_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _record_run(tmp_path)
+    _install(monkeypatch, FakeEntry("fake", _factory_for(FakeConnector())))
+    code = cli.main([
+        "import-logs", "--dir", str(tmp_path), "--once", "--quiet",
+        "--events-csv", str(tmp_path / "fake.rejected.jsonl"), "--connector", "fake",
+    ])
+    assert code == 2 and "must all be different files" in capsys.readouterr().err

@@ -44,6 +44,7 @@ from agent_latch.runtime.connectors import (
     ConnectorDeliveryError,
     ConnectorRunner,
     LoadedConnector,
+    rejected_path_for,
 )
 from agent_latch.runtime.ledger.anchor import Anchor, AnchorError, point_for
 from agent_latch.runtime.ledger.canonical import dumps
@@ -310,7 +311,10 @@ class RuntimeLogImporter:
             )
         store_path = store.path if store is not None else None
         anchor_path = anchor.path if anchor is not None else None
-        connector_paths = [c.connector.path for c in connectors]
+        # A connector's own file, and the file it saves refused batches to, must not be another output.
+        connector_paths = [c.connector.path for c in connectors] + [
+            rejected_path_for(c.name, connector_dir or trace_path.parent) for c in connectors
+        ]
         paths = [
             p for p in (
                 trace_path, payloads_path, output_csv, events_csv, normalized_path, store_path,

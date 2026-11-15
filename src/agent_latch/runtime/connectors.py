@@ -452,6 +452,13 @@ def load_connectors(
 # Delivery: one runner per connector, so one failing connector never holds back another.
 
 
+def rejected_path_for(name: str, log_dir: Path) -> Path:
+    """Where a connector's refused batches are saved. The importer includes it in its check that
+    no two outputs are the same file.
+    """
+    return log_dir / f"{name}.rejected.jsonl"
+
+
 def _now() -> str:
     stamp = datetime.now(UTC).isoformat(timespec="milliseconds")
     return stamp.replace("+00:00", "Z")
@@ -464,7 +471,7 @@ class ConnectorRunner:
         self.loaded = loaded
         self.name = loaded.name
         self._connector = loaded.connector
-        self._rejected_path = log_dir / f"{loaded.name}.rejected.jsonl"
+        self._rejected_path = rejected_path_for(loaded.name, log_dir)
         self._buffer: list[dict[str, Any]] = []  # events not yet in a batch
         self._queue: deque[EventBatch] = deque()  # frozen batches waiting for delivery
         self._open = False
@@ -514,6 +521,7 @@ class ConnectorRunner:
     def add(self, event: dict[str, Any]) -> None:
         """Take a private copy of an event. Payloads are removed unless the operator allowed them."""
         if self._disabled:
+            self.dropped += 1  # never lost silently: --once reports it and exits 2
             return
         copied = copy.deepcopy(event)
         if not getattr(self._connector, "accepts_payloads", False):
@@ -525,6 +533,12 @@ class ConnectorRunner:
         wait and tries each batch once.
         """
         self._make_batches()
+        try:
+            self._deliver(final=final)
+        finally:
+            self._enforce_cap()  # only what still has to wait after the write attempts
+
+    def _deliver(self, *, final: bool) -> None:
         if self._disabled:
             return
         now = time.monotonic()
@@ -545,7 +559,8 @@ class ConnectorRunner:
                     self._failing = True
                 return
             except ConnectorRejected as error:
-                self._reject(batch, str(error))
+                if not self._reject(batch, str(error)):
+                    return  # could not save it locally: the batch stays queued, undelivered
                 continue
             except ConnectorDisabled as error:
                 self._disable(str(error))
@@ -591,6 +606,9 @@ class ConnectorRunner:
                         events=tuple(chunk),
                     )
                 )
+
+    def _enforce_cap(self) -> None:
+        """Drop the oldest waiting batches beyond ``max_pending_batches``, counting every event."""
         while len(self._queue) > self.loaded.max_pending_batches:
             dropped = self._queue.popleft()
             self.dropped += len(dropped.events)
@@ -600,21 +618,33 @@ class ConnectorRunner:
             )
 
     def _schedule_retry(self, now: float) -> None:
-        delay = min(BACKOFF_MAX_SECONDS, BACKOFF_START_SECONDS * (2**self._attempts))
-        self._attempts += 1
+        # The exponent is capped first: 2**1024 overflows a float long before min() could help.
+        delay = min(BACKOFF_MAX_SECONDS, BACKOFF_START_SECONDS * (2 ** min(self._attempts, 16)))
+        self._attempts = min(self._attempts + 1, 1_000)
         self._next_attempt = now + delay
 
-    def _reject(self, batch: EventBatch, reason: str) -> None:
+    def _reject(self, batch: EventBatch, reason: str) -> bool:
+        """Save a refused batch locally, then drop it from the queue. If it cannot be saved, keep
+        it queued, stop this connector only, and let the final status report it as undelivered.
+        """
+        try:
+            self._rejected_path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self._rejected_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(batch.as_dict(), ensure_ascii=False) + "\n")
+        except OSError as error:
+            self._disable(
+                f"the destination refused batch {batch.batch_id}, and it could not be saved to"
+                f" {self._rejected_path} ({type(error).__name__})"
+            )
+            return False
         self._queue.popleft()
         self.rejected += len(batch.events)
-        self._rejected_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self._rejected_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(batch.as_dict(), ensure_ascii=False) + "\n")
         self._warn(
             f"destination refused batch {batch.batch_id} ({scrub(reason, self.loaded.secrets)});"
             f" saved to {self._rejected_path}"
         )
+        return True
 
     def _disable(self, reason: str) -> None:
         self._disabled = True
@@ -655,6 +685,7 @@ __all__ = [
     "load_connectors",
     "masked",
     "parse_connector_settings",
+    "rejected_path_for",
     "resolve_options",
     "scrub",
 ]
