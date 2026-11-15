@@ -87,44 +87,14 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-import json
-import re
-from collections import OrderedDict
-from collections.abc import Mapping
 from threading import RLock
 from typing import Any
+from urllib.parse import unquote
 
 from agent_latch.catalog import gate
-from agent_latch.owasp import category_entries
-from agent_latch.gates._text import (
-    BIDI,
-    CODE_FENCE,
-    CORRELATIONS,
-    HTML_COMMENT,
-    LIMIT_NOTES,
-    MIN_COVERAGE,
-    NON_OPERATIVE,
-    READ_VERB,
-    REDACTED,
-    SENSITIVE_PATH,
-    SUSPICIOUS_KEYS,
-    TRUNCATION,
-    UNKNOWN_EXTENT_NOTES,
-    ZERO_WIDTH,
-    Evidence,
-    Field,
-    decode_layers,
-    digest,
-    extract,
-    field_role,
-    normalise,
-    normalise_variants,
-    rx,
-    safe,
-    spans,
-    walk,
-)
+from agent_latch.gates._text import Evidence
 from agent_latch.gates._text import verdict as _text_verdict
+from agent_latch.owasp import category_entries
 
 GATE_ID = "ALR04"
 # Every ALR04 check cites its gate's OWASP categories (agent_latch.catalog).
@@ -655,6 +625,12 @@ class Verdict:
     outcome: str
     reason: str
     signals: tuple[Signal, ...]
+
+    @property
+    def is_finding(self) -> bool:
+        return self.outcome != PASS
+
+
 # category -> (fail_at, review_at): the score needed for FAIL via corroboration, and for review.
 # Hard evidence fails on its own. A soft weight below review_at is informational: it only matters
 # through corroboration. Each category has at least one signal that reaches review (tested).
@@ -673,10 +649,6 @@ RULE_THRESHOLDS = {
 # The phrase families, text preparation, bounded walk, decode layers, clause splitting, the
 # Evidence type and the corroboration verdict live in agent_latch.gates._text, shared with the
 # other runtime gates. This module keeps only tool-definition logic.
-
-    @property
-    def is_finding(self) -> bool:
-        return self.outcome != PASS
 
 
 def _signal(clause: Clause, category: str, name: str) -> Signal:
@@ -833,115 +805,6 @@ def check_data_exfiltration(clauses: list[Clause], _ctx: ToolContext) -> Verdict
     category = "data_exfiltration"
     for clause in clauses:
         if "transfer" not in clause.verbs or not clause.destination:
-    def classify(chunk: str, source: str) -> None:
-        clauses, overflow = spans(chunk)
-        if overflow:
-            notes.add("span_limit")
-        fences = [(m.start(), m.end()) for m in CODE_FENCE.finditer(chunk)]
-        for start, part in clauses:
-            flags = extract(part)
-            quoted = bool(NON_OPERATIVE.search(part)) or any(lo <= start < hi for lo, hi in fences)
-            if CORRELATIONS["override"].search(part) or CORRELATIONS["override_i18n"].search(part):
-                add("instruction_override", "content", True, .94,
-                    "action_targets_protected_instruction", source, quoted)
-            elif "override" in flags and "protected" in flags:
-                add("instruction_override", "content", False, .57,
-                    "possible_policy_override", source, quoted)
-            elif "override" in flags and "directive" in flags:
-                add("instruction_override", "content", False, .38,
-                    "unresolved_override_intent", source, quoted)
-
-            if CORRELATIONS["authority"].search(part):
-                add("authority_spoofing", "structure", True, .90,
-                    "forged_role_with_directive", source, quoted)
-            elif "authority" in flags:
-                add("authority_spoofing", "structure", False, .55,
-                    "authority_marker", source, quoted)
-
-            selection = bool(CORRELATIONS["selection"].search(part))
-            if not selection and own:
-                selection = bool(rx(r"\b(?:always|must|only)?\s*(?:use|call|select|choose)\s+(?:"
-                                    + re.escape(own) + r")\s+(?:for\s+all|regardless|instead)\b")
-                                 .search(part))
-            if selection:
-                add("tool_selection_hijack", "content", True, .85,
-                    "mandatory_tool_selection", source, quoted)
-            elif "selection" in flags:
-                add("tool_selection_hijack", "content", False, .50,
-                    "tool_preference_claim", source, quoted)
-
-            if CORRELATIONS["exfil"].search(part):
-                add("data_exfiltration", "content", True, .95,
-                    "transfer_of_secret_to_destination", source, quoted)
-            elif {"transfer", "destination", "sensitive"} <= flags:
-                add("data_exfiltration", "content", False, .72,
-                    "possible_sensitive_transfer", source, quoted)
-            if CORRELATIONS["access_path"].search(part):
-                add("sensitive_access", "content", True, .86,
-                    "access_verb_targets_secret_path", source, quoted)
-            elif "sensitive" in flags and "read" in flags:
-                # Generic secret words are common in honest tools ("retrieve the API key").
-                weight = .66 if flags & {"directive", "prerequisite"} else .45
-                add("sensitive_access", "content", False, weight,
-                    "possible_sensitive_access", source, quoted)
-
-            if "prerequisite" in flags and CORRELATIONS["access_path"].search(part):
-                add("malicious_prerequisite", "content", True, .90,
-                    "sensitive_access_prerequisite", source, quoted)
-            elif {"prerequisite", "sensitive", "read"} <= flags:
-                add("malicious_prerequisite", "content", False, .66,
-                    "possible_sensitive_prerequisite", source, quoted)
-
-            if "secrecy" in flags:
-                add("concealment", "content", True, .86,
-                    "instruction_to_conceal_from_user", source, quoted)
-
-            if "tool_bypass" in flags and "tool_action" in flags:
-                part_folded = part.casefold()
-                for sibling, folded in lowered_siblings:
-                    if (own_name, sibling) in allowed or folded not in part_folded:
-                        continue
-                    if rx(r"(?<!\w)" + re.escape(sibling[:120]) + r"(?!\w)").search(part):
-                        add("cross_tool_manipulation", "content", False, .70,
-                            "sibling_tool_bypass", source, quoted)
-                        break
-
-    for variant in normalise_variants(text):
-        classify(variant, "visible")
-    visible = normalise(text)
-    for match in HTML_COMMENT.finditer(visible):
-        classify(match.group(1), "html_comment")
-        add("hidden_or_encoded_instruction", "structure", False, .25, "html_comment",
-            "html_comment")
-    tags = "".join(chr(ord(c) - 0xE0000) for c in raw if 0xE0020 <= ord(c) <= 0xE007E)
-    if tags:
-        add("hidden_or_encoded_instruction", "structure", False, .70, "unicode_tag_content",
-            "unicode")
-        classify(tags, "unicode_tags")
-    if any(c in BIDI for c in raw):
-        add("hidden_or_encoded_instruction", "structure", False, .55, "bidi_control", "unicode")
-    if sum(c in ZERO_WIDTH and c not in "‌‍" for c in raw) >= 1:
-        add("hidden_or_encoded_instruction", "structure", False, .35, "zero_width_characters",
-            "unicode")
-    for source, decoded in decode_layers(visible, notes):
-        before = len(evidence)
-        for variant in normalise_variants(decoded):
-            classify(variant, source)
-        if len(evidence) > before:
-            add("hidden_or_encoded_instruction", "structure", False, .65,
-                "encoded_instruction", source)
-    if field.kind == "key" and visible.casefold() in SUSPICIOUS_KEYS:
-        add("hidden_or_encoded_instruction", "structure", False, .55,
-            "suspicious_schema_key", "key")
-    return evidence
-
-
-def cross_field_evidence(parts: list[tuple[str, str]]) -> list[Evidence]:
-    """Instructions split across two fields of one tool (fragmentation); concrete targets only."""
-    out: list[Evidence] = []
-    visible = [(path, normalise(text[:MAX_FIELD_CHARS])) for path, text in parts if text]
-    for index, (path_a, text_a) in enumerate(visible):
-        if not SENSITIVE_PATH.search(text_a):
             continue
         if clause.secret_path or clause.secret_word:
             if _softened(clause):
@@ -1300,7 +1163,9 @@ _CONDITION = _word_rx({"before", "prior", "first", "prerequisite", "required", "
 _MODALITY_OVERRIDE = _word_rx({"precedence", "supersede", "override", "authoritative", "govern",
                                "precedent"})
 _INTERNAL = _word_rx({"internal", "withheld", "omit", "redact", "hidden", "undisclosed"})
-_NOT_VISIBLE = re.compile(r"\bnot\s+(?:visible|shown|disclosed|reported|surfaced)\b", re.I)
+_NOT_VISIBLE = re.compile(
+    r"\bnot\s+(?:visible|shown|disclosed|reported|surfaced)\b", re.IGNORECASE
+)
 _ACTOR = _word_rx({"assistant", "agent", "model", "llm", "you", "your"})
 _SELECTION_CLAIM = re.compile(
     r"\b(?:preferred|default|primary|optimal|best|first)\s+(?:\w+\s+){0,2}"
@@ -1526,7 +1391,7 @@ def _anchor_similarity(text: str, anchors: tuple[str, ...]) -> int:
         union = words | other
         if union:
             best = max(best, len(words & other) / len(union))
-    return int(round(best * 100.0)) * 100
+    return round(best * 100.0) * 100
 
 
 def _frame_findings(frames: list[Frame]) -> list[IntentFinding]:
