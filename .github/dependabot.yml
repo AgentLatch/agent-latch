@@ -1,0 +1,21 @@
+# Weekly update pull requests for everything the container images pin.
+version: 2
+updates:
+  # The digest-pinned Python base image in the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  # Workflow actions, pinned to commit SHAs.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  # The hash-pinned image dependency locks (docker/requirements-*.txt).
+  - package-ecosystem: pip
+    directory: /docker
+    schedule:
+      interval: weekly
+    groups:
+      image-dependencies:
+        patterns: ["*"]

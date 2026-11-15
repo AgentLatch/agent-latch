@@ -19,10 +19,10 @@ from fastmcp.client.transports import StdioTransport
 from fastmcp.server import create_proxy
 
 from agent_latch.runtime.events import PayloadEvent
-from agent_latch.runtime.middleware import AgentLatchMiddleware
+from agent_latch.runtime.middleware import AgentLatchMiddleware, _implementation
 from agent_latch.runtime.payloads import PayloadFile, PayloadTap
 from agent_latch.runtime.redact import MASK
-from agent_latch.runtime.trace import TraceLog
+from agent_latch.runtime.trace import TraceLog, summarize_record
 
 FIXTURES = Path(__file__).resolve().parent / "runtime_fixtures"
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -214,6 +214,65 @@ def test_proxy_command_over_stdio(tmp_path: Path) -> None:
     assert FAKE_TOKEN not in payloads_path.read_text(encoding="utf-8")
 
 
+def test_handshake_is_recorded_and_alr03_identifies_the_server(tmp_path: Path) -> None:
+    """End to end: the middleware records the handshake, and both runtime gates run on it."""
+    from agent_latch.gates import alr03
+    from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
+
+    sys.path.insert(0, str(FIXTURES))
+    try:
+        from fake_server import server as backend
+    finally:
+        sys.path.remove(str(FIXTURES))
+
+    alr03.reset_state()
+    trace_path = tmp_path / "trace.jsonl"
+    payloads_path = tmp_path / "payloads.jsonl"
+    trace = TraceLog(trace_path, summary=None)
+    payload_file = PayloadFile(payloads_path)
+    tap = PayloadTap([payload_file])
+    proxy = create_proxy(backend, name="weather")
+    proxy.add_middleware(AgentLatchMiddleware(trace, server="weather", tap=tap))
+    asyncio.run(_exercise(Client(proxy)))
+    trace.close()
+    payload_file.close()
+
+    # The handshake is in the trace and the payloads. This proxy is built directly with
+    # create_proxy (default identity="proxy"), so it reports the proxy's own label; build_proxy
+    # (used by the CLI) forwards the upstream identity instead.
+    handshake = next(r for r in _records(trace_path) if r["method"] == "initialize")
+    assert handshake["server_info"]["name"] == "weather"
+    assert handshake["server_info"]["version"]
+    payload_handshake = next(
+        e for e in _records(payloads_path) if e["method"] == "initialize"
+    )
+    assert payload_handshake["payload"]["server_info"]["name"] == "weather"
+
+    # Importing runs every discovered gate, including ALR03, on the handshake event.
+    out_csv = tmp_path / "gate-results.csv"
+    RuntimeLogImporter(
+        trace_path, out_csv, discover_gates(), payloads_path=payloads_path, follow=False
+    ).run()
+    with out_csv.open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert {row["gate_id"] for row in rows} == {
+        "ALR03", "ALR04", "ALR05", "ALR10", "ALR16"
+    }
+
+    alr03_rows = [r for r in rows if r["gate_id"] == "ALR03"]
+    handshake_rows = [
+        json.loads(r["result_json"])["findings"]
+        for r in alr03_rows
+        if json.loads(r["result_json"])["findings"]
+    ]
+    flat = [finding for findings in handshake_rows for finding in findings]
+    identification = next(
+        f for f in flat if f["rule_id"] == alr03.RULE_IDS["server_identification"]
+    )
+    assert identification["outcome"] == "PASS"
+    assert identification["entity"]["server"] == "weather"
+
+
 def test_demo_command_records_and_imports_a_session(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -229,3 +288,127 @@ def test_demo_command_records_and_imports_a_session(
     for name in ("trace.jsonl", "payloads.jsonl", "events.csv", "normalized.jsonl"):
         assert FAKE_TOKEN not in (tmp_path / name).read_text(encoding="utf-8")
     assert FAKE_TOKEN not in err
+
+
+def test_demo_secret_leak_scenario_fires_alr10(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent_latch.runtime import cli
+    from agent_latch.runtime.demo import FAKE_GITHUB_TOKEN
+
+    assert cli.main(["demo", "--dir", str(tmp_path), "--scenario", "secret-leak"]) == 0
+    err = capsys.readouterr().err
+    with (tmp_path / "gate-results.csv").open(encoding="utf-8", newline="") as stream:
+        findings = [
+            finding
+            for row in csv.DictReader(stream)
+            for finding in json.loads(row["result_json"])["findings"]
+            if finding.get("gate_id") == "ALR10"
+        ]
+    by_rule = {finding["rule_id"]: finding for finding in findings}
+    assert by_rule["ALR10-R01"]["entity"]["tool"] == "search_issues"
+    assert by_rule["ALR10-R01"]["severity"] == "high"
+    assert by_rule["ALR10-R02"]["entity"]["tool"] == "read_config"
+    assert by_rule["ALR10-R02"]["severity"] == "high"
+    for name in ("trace.jsonl", "payloads.jsonl", "events.csv", "normalized.jsonl",
+                 "gate-results.csv"):
+        text = (tmp_path / name).read_text(encoding="utf-8")
+        assert FAKE_GITHUB_TOKEN not in text and "AKIA" + "FAKEFAKEFAKEFAKE" not in text
+    assert FAKE_GITHUB_TOKEN not in err
+
+
+def test_demo_poisoned_output_scenario_fires_alr05(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent_latch.runtime import cli
+
+    assert cli.main(["demo", "--dir", str(tmp_path), "--scenario", "poisoned-output"]) == 0
+    err = capsys.readouterr().err
+    assert "tools/call fetch_page -> ok" in err
+    with (tmp_path / "gate-results.csv").open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    findings = [
+        finding
+        for row in rows
+        for finding in json.loads(row["result_json"])["findings"]
+        if finding.get("is_finding")
+    ]
+    fired = {finding["rule_id"] for finding in findings}
+    assert {"ALR05-R02", "ALR05-R03"} <= fired
+    r03 = next(finding for finding in findings if finding["rule_id"] == "ALR05-R03")
+    assert r03["outcome"] == "FAIL" and r03["severity"] == "high"
+    assert r03["entity"]["tool"] == "fetch_page"
+    # The hidden instruction and the attacker's address never reach the findings.
+    assert "attacker@example.com" not in json.dumps(findings)
+
+
+def test_hostile_handshake_strings_do_not_reach_trace_or_terminal(tmp_path: Path) -> None:
+    info = _implementation({
+        "name": "evil\x1b[2J\x1b[31m" + "A" * 5000,
+        "version": "1.0\x1b]0;pwned\x07",
+    })
+    log = TraceLog(tmp_path / "trace.jsonl", summary=None)
+    record = log.initialized(
+        session_id="s", request_id="1", server="x",
+        protocol_version="2025\x1b[0m" + "9" * 500, client={}, server_info=info,
+    )
+    line = summarize_record(record)
+    assert "\x1b" not in line and "\x07" not in line
+    assert len(line) < 400
+    raw = (tmp_path / "trace.jsonl").read_text()
+    assert len(raw) < 1000 and "\\x1b" in raw
+
+
+def test_proxy_import_database_and_report_in_one_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Proxy -> import-logs (with a database) -> the findings report, with one planted secret."""
+    import sqlite3
+
+    from agent_latch.cli import main as scan_main
+    from agent_latch.runtime import cli as runtime_cli
+
+    sent = "ghp_" + "EndToEndCanary0042" * 2
+    trace_path, payloads_path = tmp_path / "trace.jsonl", tmp_path / "payloads.jsonl"
+    transport = StdioTransport(
+        command=sys.executable,
+        args=[
+            "-m", "agent_latch.runtime.cli", "proxy", "--quiet",
+            "--trace", str(trace_path), "--payloads", str(payloads_path),
+            "--", sys.executable, str(FIXTURES / "fake_server.py"),
+        ],
+        env={**os.environ, "PYTHONPATH": str(SRC)},
+        log_file=tmp_path / "proxy.log",
+        keep_alive=False,
+    )
+
+    async def drive() -> None:
+        async with Client(transport) as client:
+            await client.list_tools()
+            await client.call_tool("search_issues", {"query": "is:open", "token": sent})
+            await client.call_tool("leaky_lookup", {"user": "alice"})  # returns FAKE_TOKEN
+
+    asyncio.run(drive())
+
+    database = tmp_path / "events.db"
+    results_csv = tmp_path / "gate-results.csv"
+    assert runtime_cli.main([
+        "import-logs", "--dir", str(tmp_path), "--once", "--quiet", "--database", str(database),
+    ]) == 0
+    sarif_path = tmp_path / "runtime.sarif"
+    assert scan_main([
+        str(tmp_path), "--runtime-result", str(results_csv), "--format", "sarif",
+        "--output", str(sarif_path), "--fail-on", "none",
+    ]) == 0
+    capsys.readouterr()
+
+    with sqlite3.connect(database) as connection:
+        stored = connection.execute("select count(*) from events").fetchone()[0]
+    assert stored >= 5  # handshake/list/call request+response were saved
+    results = json.loads(sarif_path.read_text(encoding="utf-8"))["runs"][0]["results"]
+    rules = {r["ruleId"].removeprefix("AGENTLATCH-") for r in results}
+    assert {"ALR10-R01", "ALR10-R02"} <= rules
+    for path in (trace_path, payloads_path, results_csv, database, sarif_path,
+                 tmp_path / "events.csv", tmp_path / "normalized.jsonl"):
+        raw = path.read_bytes()
+        assert sent.encode() not in raw and FAKE_TOKEN.encode() not in raw, path.name

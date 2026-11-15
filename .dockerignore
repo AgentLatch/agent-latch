@@ -1,0 +1,10 @@
+# Allow-list: the build context holds only what the Dockerfile copies. Anything else, such as
+# runtime-logs/ (recorded MCP traffic), .env files, event databases or .git, never reaches an image.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!src/
+!docker/
+**/__pycache__
+**/*.py[cod]

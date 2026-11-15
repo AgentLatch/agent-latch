@@ -767,9 +767,9 @@ def test_every_rule_maps_only_to_known_owasp_categories() -> None:
 def test_every_detector_belongs_to_one_gate_within_its_owasp_categories() -> None:
     import re
 
-    from agent_latch.gates import alr04
+    from agent_latch.gates import alr04, alr16
 
-    assert [gate.id for gate in catalog.GATES] == [f"ALR{n:02d}" for n in range(1, 16)]
+    assert [gate.id for gate in catalog.GATES] == [f"ALR{n:02d}" for n in range(1, 17)]
     assert len(catalog.DETECTORS_BY_ID) == len(catalog.DETECTORS)
     for rule_id in RULE_CATEGORIES:
         assert (rule_id in catalog.DETECTORS_BY_ID) != (rule_id in catalog.DIAGNOSTICS), rule_id
@@ -777,6 +777,9 @@ def test_every_detector_belongs_to_one_gate_within_its_owasp_categories() -> Non
     assert {d.id for d in catalog.detectors_for("ALR04")} == set(alr04.RULE_IDS.values())
     assert {alr04.RULE_COVERAGE, alr04.RULE_SUMMARY} <= set(catalog.DIAGNOSTICS)
     assert alr04.OWASP == list(catalog.gate("ALR04").owasp)
+    assert {d.id for d in catalog.detectors_for("ALR16")} == set(alr16.RULE_IDS.values())
+    assert {alr16.RULE_COVERAGE, alr16.RULE_SUMMARY} <= set(catalog.DIAGNOSTICS)
+    assert list(alr16.OWASP) == list(catalog.gate("ALR16").owasp)
     for detector in catalog.DETECTORS:
         gate = catalog.gate(detector.gate)
         assert set(catalog.detector_owasp(detector)) <= set(gate.owasp), detector.id

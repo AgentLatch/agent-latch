@@ -2,7 +2,9 @@
 
 It starts the bundled demo server (``demo_server``) behind the real proxy with ``--trace`` and
 ``--payloads``, makes a few calls through it as an MCP client would, then imports the logs once.
-Nothing leaves the machine: the server is local and synthetic, and its fake credential is masked.
+The ``secret-leak`` scenario instead sends a GitHub-token-shaped fake value to ``search_issues``
+and reads a fake AWS key back from ``read_config``, so ALR10-R01 and ALR10-R02 fire. Nothing
+leaves the machine: the server is local and synthetic, and every fake credential is masked.
 """
 
 from __future__ import annotations
@@ -16,6 +18,9 @@ from typing import TextIO
 from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
 
 DEMO_SERVER = "demo-server"
+SCENARIOS = ("default", "poisoned-output", "secret-leak")
+# A fake, token-shaped value (built by concatenation so secret scanners do not flag the source).
+FAKE_GITHUB_TOKEN = "ghp_" + "DEMOFAKE" * 3
 # The only files the demo writes; a rerun removes just these, so the demo starts clean.
 DEMO_FILES = (
     "trace.jsonl", "payloads.jsonl", "events.csv", "gate-results.csv", "normalized.jsonl",
@@ -23,7 +28,7 @@ DEMO_FILES = (
 )
 
 
-async def _drive(directory: Path, log_file: TextIO) -> None:
+async def _drive(directory: Path, log_file: TextIO, scenario: str) -> None:
     from fastmcp import Client
     from fastmcp.client.transports import StdioTransport
 
@@ -41,25 +46,45 @@ async def _drive(directory: Path, log_file: TextIO) -> None:
     )
     async with Client(transport) as client:
         await client.list_tools()
+        if scenario == "secret-leak":
+            await client.call_tool(
+                "search_issues", {"query": "is:open label:bug", "token": FAKE_GITHUB_TOKEN}
+            )
+            await client.call_tool("read_config", {"section": "aws"})
+            return
+        if scenario == "poisoned-output":
+            # One fetch whose page hides an instruction in invisible characters and visibly
+            # steers the agent toward the sibling send_email tool (ALR05-R02 and ALR05-R03).
+            await client.call_tool("fetch_page", {"url": "https://example.com/news"})
+            return
         await client.call_tool("get_weather", {"city": "London"})
         await client.call_tool("leaky_lookup", {"user": "alice"})
         await client.call_tool("broken_tool", {"reason": "demo"}, raise_on_error=False)
+        # ALR05 contrast: instruction-like output (finding) vs ordinary instructions (none).
+        await client.call_tool("echo_injection", {"city": "London"})
+        await client.call_tool("recipe_steps", {"dish": "pancakes"})
         await client.list_prompts()
         await client.get_prompt("summarize", {"topic": "Mars"})
 
 
-def run_demo(directory: Path, *, out: TextIO = sys.stderr) -> None:
+def run_demo(directory: Path, *, out: TextIO | None = None, scenario: str = "default") -> None:
     """Record a demo session into ``directory`` and import it; raises on failure."""
+    # Resolve sys.stderr at call time: a default bound at import time can point at a stream
+    # that has since been closed (for example a test harness's capture buffer).
+    out = out if out is not None else sys.stderr
+    if scenario not in SCENARIOS:
+        raise ValueError(f"unknown demo scenario {scenario!r}; choose from {', '.join(SCENARIOS)}")
     directory.mkdir(parents=True, exist_ok=True)
     for name in DEMO_FILES:
         (directory / name).unlink(missing_ok=True)
     out.write(
-        f"agent-latch-runtime: demo: calling the synthetic {DEMO_SERVER} through the proxy\n"
+        f"agent-latch-runtime: demo: calling the synthetic {DEMO_SERVER} through the proxy"
+        f" (scenario: {scenario})\n"
     )
     out.flush()
     # The proxy's own stderr (startup message, warnings) goes to proxy.log in the demo folder.
     with (directory / "proxy.log").open("w", encoding="utf-8") as log_file:
-        asyncio.run(_drive(directory, log_file))
+        asyncio.run(_drive(directory, log_file, scenario))
     gates = discover_gates()
     out.write(f"agent-latch-runtime: demo: importing the logs ({len(gates)} gate(s))\n")
     out.flush()

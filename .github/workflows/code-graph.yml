@@ -1,0 +1,50 @@
+name: Code graph
+
+# Rebuilds a Graphify knowledge graph of this repository whenever main changes and publishes it
+# as a build artifact. Nothing is committed: teammates download the artifact, or run
+# `graphify update .` in their own clone. Parsing is local (tree-sitter), with no LLM, no API key
+# and no secrets.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-graph-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  graph:
+    name: Build code graph
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install Graphify
+        # Pinned to an exact version. Bump it on purpose and read the release notes first.
+        run: python -m pip install "graphifyy==0.9.109"
+      - name: Build the graph (AST only, no LLM)
+        env:
+          PYTHONHASHSEED: "0"  # deterministic clustering, so community ids do not churn
+        run: graphify update .
+      - name: Upload the graph
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: code-graph
+          path: |
+            graphify-out/graph.json
+            graphify-out/graph.html
+            graphify-out/GRAPH_REPORT.md
+          retention-days: 30
+          if-no-files-found: error
