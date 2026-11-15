@@ -44,6 +44,8 @@ files:
 - **Name already exists:** read the existing object and check that its SHA-256 matches the name
   and the intended bytes, and (for local files) sync the containing folder as above, since an
   earlier attempt may have failed at exactly that step. Only then is the write a no-op success.
-  If that sync fails, the write raises `ConnectorUnavailable` and is retried. A hash mismatch
+  If that sync fails, classify the failure by its cause, exactly as above: a temporary failure
+  raises `ConnectorUnavailable` and is retried, and a "not supported" failure (for example
+  `ENOTSUP` after the folder was remounted) raises `ConnectorDisabled`, never a retry. A hash mismatch
   means the existing object is damaged: it is left untouched and the batch is reported as
   `ConnectorRejected`, so `--once` exits `2`.

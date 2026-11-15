@@ -130,7 +130,9 @@ class StoreConnector:
 
     def write(self, batch: EventBatch, /) -> int:
         try:
-            self.store.save(list(batch.events))     # merges duplicates per section 4.1
+            # Deep copy: a store may modify the dictionaries it is given and then raise, and a
+            # retry must still receive the identical batch (section 4.1, "Frozen once tried").
+            self.store.save(copy.deepcopy(list(batch.events)))  # merges per section 4.1
         except ConnectorUnavailable:
             raise
         except OSError as error:                    # the store contract's "not stored" signal
@@ -140,6 +142,10 @@ class StoreConnector:
     def close(self) -> None:
         self.store.close()
 ```
+
+The adapter passes the store a deep copy of the events, not the batch's own dictionaries. A store
+that changes an event and then raises `OSError` therefore cannot alter the queued batch, so the
+retry sends the identical batch.
 
 `write` returns the number of events handled, not the number newly stored, so replaying a batch
 the store already has still counts as success. The adapter turns the store's plain `OSError` into
