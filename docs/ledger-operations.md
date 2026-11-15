@@ -217,6 +217,46 @@ and the anchor line. Anyone can re-run the check independently; that is the poin
 and start a new pair with a new anchor file (or continue the same anchor file, which will refuse a
 backwards `seq` — that refusal is your cue that you are looking at two different logs).
 
+## When `import-logs` refuses the event store
+
+`import-logs --database … --anchor …` checks the store before it adds a row. When it exits `1` with
+"the event store changed after it was sealed", nothing was repaired, and the forged head was not anchored. If it was found at start, nothing was added either; if it was found while the importer ran, events saved before then stay in the store, and the message names the row. The same
+rules apply as for a ledger: freeze, record, classify, and never fix the file first.
+
+**Freeze and record.** Stop the importer, copy the store and the anchor file somewhere read-only, and
+save the verdict:
+
+```sh
+agent-latch-runtime verify --database runtime.db --anchor store-anchors.jsonl > verify.txt 2>&1
+echo "exit=$?" >> verify.txt
+shasum -a 256 runtime.db store-anchors.jsonl >> verify.txt
+```
+
+**Classify.**
+
+| What it said | Read it as | Usual causes |
+|---|---|---|
+| `tampered`, `#N: the row no longer matches its seal` | Row N was changed | A deliberate edit; a tool that rewrote the file; a bad merge or restore |
+| `tampered`, `a row has no valid seal` | A row was added outside AgentLatch | An agent or script inserted a row |
+| `tampered`, `the table layout, view or triggers differ` | Schema changed | A column was added, the `event_log` view edited, or a trigger dropped (or a manual migration) |
+| `deleted` | Rows or the table or the file are gone | Deliberate removal; a partial restore; a dropped table |
+| `rewritten` | The whole chain was rebuilt | Forgery with fresh seals; restoring an older genuine copy; the wrong anchor file |
+| `refused … no matching trace record` or `differs from what the trace and payload files rebuild` | Rows past the anchor are not what the logs say | A forged row after a crash; the logs were rotated or edited; the wrong trace |
+| `refused … anchor is missing or empty` | A sealed store with no anchor | The anchor was deleted, or this store was never anchored (for example an older store you just upgraded). Restore or investigate the anchor first; only if it never existed, run `anchor --database` once |
+
+**An ordinary crash is not an incident.** If the importer died between saving and publishing, the store
+is a few rows ahead of the anchor. Restart it with the same `--trace`, `--payloads` and `--anchor`: it
+rebuilds those rows from the logs, and if they match it publishes and carries on. It only refuses when
+a row past the anchor differs from the logs or has no log line.
+
+**After an incident, start a new store.** Keep the old file and anchor as evidence, then use a new
+`--database` file *and* a new anchor file. Do not delete the old anchor to make a refusal go away.
+
+**Upgrading AgentLatch.** The first `import-logs --database` after an upgrade migrates the store (version
+3 seals old rows, version 4 adds triggers). That is one way, so back the file up before upgrading if you
+might return to an older AgentLatch, which would refuse it. The layout hash in the anchor is compared only
+for the same schema version, so the upgrade itself does not raise an alarm.
+
 ## Starting over on purpose
 
 If you genuinely need a fresh log — a new machine, a rebuilt agent, a test environment — do it

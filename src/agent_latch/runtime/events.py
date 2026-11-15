@@ -62,6 +62,10 @@ class PayloadEvent:
     - ``tools/call`` error: ``tool``, ``error_type``, ``error_message``, ``duration_ms``
     - ``prompts/get`` request: ``prompt``, ``arguments``
     - ``prompts/get`` response: ``prompt``, ``messages`` (role, text)
+
+    The on-disk form adds one payload key of its own: ``masked``, a list of ``{"path", "kind"}``
+    entries naming where a secret-like value was masked (``payloads.masked_record``). It holds
+    only kinds and paths, never values, and records written before it existed still load.
     """
 
     record_id: str

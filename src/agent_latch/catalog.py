@@ -142,6 +142,13 @@ GATES: tuple[Gate, ...] = (
         detectors=(
             ("AGENTLATCH-AG003", "static",
              "Content from outside reaches the model as if it were instructions, not data"),
+            ("ALR05-R01", "runtime",
+             ("Output that reads as instructions for the model is indistinguishable from data "
+              "unless the host fences it")),
+            ("ALR05-R02", "runtime",
+             "Instructions hidden in invisible characters or encoding still reach the model"),
+            ("ALR05-R03", "runtime",
+             "Output that names the next tool, destination or URL steers the agent's next step"),
         ),
     ),
     Gate(
@@ -218,6 +225,10 @@ GATES: tuple[Gate, ...] = (
             ("AGENTLATCH-SEC001", "static",
              ("A secret in the project can be read by the agent, its prompts or anyone with the "
               "code")),
+            ("ALR10-R01", "runtime",
+             "A credential sent with a tool call crosses to that tool's server and its logs"),
+            ("ALR10-R02", "runtime",
+             "A credential in tool output lands in the model's context and transcripts"),
         ),
     ),
     Gate(
@@ -285,6 +296,9 @@ GATES: tuple[Gate, ...] = (
             ("ALR15-R01", "runtime",
              ("An agent, or whoever holds its account, can hide what it did by editing or "
               "rebuilding its own audit log")),
+            ("ALR15-R02", "runtime",
+             ("An event store that does not seal its rows can be changed without a trace, so "
+              "its record cannot be checked at all")),
         ),
     ),
     Gate(
@@ -325,6 +339,15 @@ DIAGNOSTICS: dict[str, str] = {
     "ALR04-099": "ALR04 per-scan summary",
     "ALR16-090": "ALR16 could not fully inspect a tool-call argument (coverage)",
     "ALR16-099": "ALR16 per-scan summary",
+    "ALR05-R90": "ALR05 could not inspect tool output (no payload recorded, or output was cut)",
+    "ALR10-R90": "ALR10 saw a tool call but no payload record (coverage)",
+}
+
+# Runtime detectors that cite only a subset of their gate's OWASP categories. Other runtime
+# detectors cite their gate's full list; static rules list their own in owasp.RULE_CATEGORIES.
+RUNTIME_DETECTOR_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "ALR10-R01": ("ASI03",),
+    "ALR10-R02": ("ASI03",),
 }
 
 GATES_BY_ID: dict[str, Gate] = {gate.id: gate for gate in GATES}
@@ -369,8 +392,12 @@ def detectors_for(gate_id: str) -> list[Detector]:
 
 
 def detector_owasp(detector: Detector) -> tuple[str, ...]:
-    """Static detectors list their own categories in owasp.py; runtime ones cite their gate's."""
-    return RULE_CATEGORIES.get(detector.id, GATES_BY_ID[detector.gate].owasp)
+    """Static detectors list their own categories in owasp.py; runtime ones cite their gate's,
+    unless RUNTIME_DETECTOR_CATEGORIES narrows them to a subset."""
+    specific = RULE_CATEGORIES.get(detector.id)
+    if specific is None:
+        specific = RUNTIME_DETECTOR_CATEGORIES.get(detector.id)
+    return specific if specific is not None else GATES_BY_ID[detector.gate].owasp
 
 
 def gate_status(gate_id: str) -> str:
