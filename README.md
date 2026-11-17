@@ -19,14 +19,14 @@
 
 ![Example AgentLatch scan showing detected security findings](https://raw.githubusercontent.com/AgentLatch/agent-latch/main/docs/assets/gent-latch-scan-example.png)
 
-> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs four preview gates: ALR03 on the connection handshake, ALR04 on MCP tool definitions, ALR05 on MCP tool results and ALR10 on secret-like values crossing the tool boundary. They report findings and do not block calls.
+> **Project status: early proof of concept.** AgentLatch is not a complete vulnerability scanner, runtime protection system, security score, or certification. A clean scan means only that the enabled checks did not report a finding. The runtime proxy records traffic and runs five preview gates: ALR02 on changes to the advertised tool list against an approved baseline, ALR03 on the connection handshake, ALR04 on MCP tool definitions, ALR05 on MCP tool results and ALR10 on secret-like values crossing the tool boundary. They report findings and do not block calls.
 
 ## What AgentLatch does so far
 
 AgentLatch checks an AI agent at three points, and you can use each on its own:
 
 1. **Static scan:** reads an agent project's code, prompts and manifests before anything runs, and reports risky patterns with the file and line.
-2. **Runtime monitor (preview):** sits between an agent and its MCP server, records the tool traffic with secrets masked, and flags unidentified or look-alike servers (ALR03), tool definitions that contain instruction-like content (ALR04) and secret-like values crossing the tool boundary (ALR10).
+2. **Runtime monitor (preview):** sits between an agent and its MCP server, records the tool traffic with secrets masked, and flags tool lists that differ from an approved baseline (ALR02), unidentified or look-alike servers (ALR03), tool definitions that contain instruction-like content (ALR04) and secret-like values crossing the tool boundary (ALR10).
 3. **Tamper-evident ledger (preview):** seals that record in a hash chain, so an edited, deleted or rebuilt log shows up when you verify it.
 
 Everything runs on your machine and nothing is uploaded. The only network use is the opt-in `--dependencies` audit. AgentLatch reports findings and never blocks a tool call, and a clean result is not a security guarantee.
@@ -213,7 +213,7 @@ pre-commit run agent-latch --all-files
 
 ## 3. Runtime monitor for MCP (preview)
 
-**What it does:** `agent-latch-runtime` sits between an AI agent and an MCP server and records what the agent asks its tools to do and what comes back. It is a **preview and monitor only**: it never blocks a call. It runs three gates: ALR03, which reports a finding when a server does not identify itself, changes identity or impersonates a known server; ALR04, which reports a finding when a tool definition contains instruction-like content, and ALR10, which reports a secret-like value sent to a tool or returned into the model's context (the logs hold only `[REDACTED]`; the finding points at the masked spot). Secrets are masked in every file. Try `agent-latch-runtime demo --scenario secret-leak` to see the ALR10 checks fire on fake credentials.
+**What it does:** `agent-latch-runtime` sits between an AI agent and an MCP server and records what the agent asks its tools to do and what comes back. It is a **preview and monitor only**: it never blocks a call. It runs preview gates: ALR02, which compares each complete tool list with a baseline you approved and reports changed, added or removed tools (it cannot compare without one and says so); ALR03, which reports a finding when a server does not identify itself, changes identity or impersonates a known server; ALR04, which reports a finding when a tool definition contains instruction-like content, and ALR10, which reports a secret-like value sent to a tool or returned into the model's context (the logs hold only `[REDACTED]`; the finding points at the masked spot). Secrets are masked in every file. Try `agent-latch-runtime demo --scenario secret-leak` to see the ALR10 checks fire on fake credentials.
 
 ![Runtime monitor: the agent talks to the MCP server through the agent-latch-runtime proxy, which passes every message through unchanged and writes masked logs. import-logs joins them into events and findings, and agent-latch --runtime-result prints the report.](docs/assets/diagrams/runtime-monitor.svg)
 

@@ -116,6 +116,9 @@ class AgentLatchMiddleware(Middleware):
                 tool.description or "",
                 tool.parameters or {},
                 _annotations(tool),
+                title=_optional_str(getattr(tool, "title", None)),
+                output_schema=_optional_dict(getattr(tool, "output_schema", None)),
+                meta=_optional_dict(getattr(tool, "meta", None)),
             )
             for tool in tools
         ]
@@ -255,6 +258,14 @@ def _client_id(context: MiddlewareContext[Any]) -> str | None:
         return ctx.client_id if ctx is not None else None
     except RuntimeError:
         return None
+
+
+def _optional_str(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _optional_dict(value: Any) -> dict[str, Any] | None:
+    return dict(value) if isinstance(value, dict) else None
 
 
 def _annotations(tool: Tool) -> dict[str, Any]:

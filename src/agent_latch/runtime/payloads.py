@@ -226,8 +226,16 @@ class PayloadFile:
 
 
 def _definition(tool: ToolInfo) -> dict[str, Any]:
-    return {
+    definition: dict[str, Any] = {
         "description": tool.description,
         "input_schema": dict(tool.input_schema),
         "annotations": dict(tool.annotations),
     }
+    # Only when the server sends them, so records for plain tools keep their shape.
+    if tool.title is not None:
+        definition["title"] = tool.title
+    if tool.output_schema is not None:
+        definition["output_schema"] = dict(tool.output_schema)
+    if tool.meta:
+        definition["meta"] = dict(tool.meta)
+    return definition
