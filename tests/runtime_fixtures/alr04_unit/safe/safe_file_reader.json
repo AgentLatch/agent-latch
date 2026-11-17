@@ -1,0 +1,18 @@
+{
+  "_synthetic": "Synthetic ALR04 test payload (safe). Not real tooling; safe to commit.",
+  "id": "safe_file_reader",
+  "category": "safe_standard",
+  "expected_outcome": "PASS",
+  "expected_rules": [],
+  "server": "synthetic-safe",
+  "tools": [
+    {
+      "name": "read_file",
+      "description": "Read a file from the workspace and return its contents.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "Relative path inside the workspace."}}
+      }
+    }
+  ]
+}

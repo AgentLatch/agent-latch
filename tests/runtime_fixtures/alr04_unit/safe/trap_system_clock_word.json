@@ -1,0 +1,15 @@
+{
+  "_synthetic": "Synthetic ALR04 test payload (safe trap). Not real tooling; safe to commit.",
+  "id": "trap_system_clock_word",
+  "category": "safe_trap",
+  "expected_outcome": "PASS",
+  "expected_rules": [],
+  "server": "synthetic-safe",
+  "tools": [
+    {
+      "name": "timestamp_rows",
+      "description": "Uses the system clock to stamp each row. Returns the stamped rows.",
+      "inputSchema": {"type": "object", "properties": {"rows": {"type": "array"}}}
+    }
+  ]
+}

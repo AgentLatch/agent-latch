@@ -1,0 +1,15 @@
+{
+  "_synthetic": "Synthetic ALR04 test payload (safe trap). Not real tooling; safe to commit.",
+  "id": "trap_documentation_url",
+  "category": "safe_trap",
+  "expected_outcome": "PASS",
+  "expected_rules": [],
+  "server": "synthetic-safe",
+  "tools": [
+    {
+      "name": "describe_schema",
+      "description": "See https://docs.example/tools for the schema. Returns rows.",
+      "inputSchema": {"type": "object", "properties": {}}
+    }
+  ]
+}

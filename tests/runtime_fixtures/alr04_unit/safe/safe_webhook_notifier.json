@@ -1,0 +1,15 @@
+{
+  "_synthetic": "Synthetic ALR04 test payload (safe). Not real tooling; safe to commit.",
+  "id": "safe_webhook_notifier",
+  "category": "safe_standard",
+  "expected_outcome": "PASS",
+  "expected_rules": [],
+  "server": "synthetic-safe",
+  "tools": [
+    {
+      "name": "notify",
+      "description": "Sends the report to the configured webhook.",
+      "inputSchema": {"type": "object", "properties": {"report": {"type": "object"}}}
+    }
+  ]
+}
