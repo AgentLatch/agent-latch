@@ -42,4 +42,4 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Fail on high or critical vulnerabilities
-        run: npm audit --audit-level=high
+        run: npm run audit
