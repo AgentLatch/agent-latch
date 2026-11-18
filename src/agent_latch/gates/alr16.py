@@ -23,8 +23,8 @@ Outcomes
 The gate is monitor-only and makes no network calls. Output never contains commands, URLs,
 package names or file contents: evidence is a signal name, a field pointer and a SHA-256.
 
-Layout: the package-manager tables are in ``_alr16_grammar``, the command lexer is in
-``_commandline``, and this module holds the detection logic and the record format.
+Layout of this file, top to bottom: limits; rules and ranks; the command lexer; the
+package-manager tables (data only); detection logic; record format and ``evaluate``.
 
 Known blind spots, also returned by ``startup_capabilities``: shell indirection (variables,
 aliases, ``eval`` of built strings); commands handed to another launcher (docker, ssh, xargs,
@@ -50,10 +50,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from agent_latch import catalog
-from agent_latch.gates import _alr16_grammar as grammar
-from agent_latch.gates import _commandline as shell
-from agent_latch.gates._alr16_grammar import Action, Manager
-from agent_latch.gates._commandline import Command
 
 GATE_ID = "ALR16"
 OWASP = tuple(catalog.gate(GATE_ID).owasp)
@@ -66,6 +62,8 @@ MAX_STRINGS = 256  # argument strings read per call
 MAX_TOTAL_CHARS = 32_000  # characters read per call, all strings together
 MAX_ARGUMENT_DEPTH = 5  # nesting of objects and arrays in the arguments
 MAX_NESTING = 3  # layers followed through sh -c, $(...), eval and decoded text
+MAX_COMMANDS = 1024  # commands split out of one text
+MAX_PROBE_CHARS = 2000  # characters read when only a text's first program is needed
 MAX_PACKAGES = 64  # package specs classified per install command
 MAX_SPEC_CHARS = 200  # characters of one package spec that are classified
 MAX_DECODE_CANDIDATES = 64  # Base64/hex runs tried per string
@@ -141,6 +139,487 @@ def safe(text: Any, limit: int = 120) -> str:
     return flat[:limit]
 
 
+# --- command text -> commands and words ------------------------------------------------------
+# One pass, linear in the input. Follows POSIX quoting closely enough to find each command's
+# program and arguments. Nothing is executed or expanded: variables and aliases stay as
+# written, backslashes are kept (so Windows paths survive) except before a quote character
+# or a line break, and cmd.exe ^ and PowerShell backtick escapes are not interpreted.
+
+
+@dataclass(frozen=True)
+class Command:
+    tokens: tuple[str, ...]
+    operator: str = ""  # what follows this command: | || && ; & or "" at the end
+    # Bodies of $(...) and `...` ("cmd") and of <(...) ("proc") found in this command.
+    substitutions: tuple[tuple[str, str], ...] = ()
+
+
+def _closing_paren(text: str, start: int) -> int:
+    """Index of the ``)`` that closes a group opened just before ``start``, or -1."""
+    depth, quote = 1, ""
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def lex(text: str) -> tuple[list[Command], bool]:
+    """Return (commands, cut). ``cut`` is true when MAX_COMMANDS stopped the split."""
+    commands: list[Command] = []
+    tokens: list[str] = []
+    substitutions: list[tuple[str, str]] = []
+    current: list[str] = []
+    open_token = False  # a token has started; it may still be empty, as in ''
+    quote = ""
+    index, size = 0, len(text)
+
+    def end_token() -> None:
+        nonlocal open_token
+        if open_token:
+            tokens.append("".join(current))
+            current.clear()
+            open_token = False
+
+    def end_command(operator: str) -> None:
+        end_token()
+        if tokens:
+            commands.append(Command(tuple(tokens), operator, tuple(substitutions)))
+            tokens.clear()
+            substitutions.clear()
+
+    def substitution(start: int) -> int:
+        """Record a $(...), `...` or <(...) body, keep its text in the token, skip past it."""
+        nonlocal open_token
+        if text[start] == "`":
+            body_start, kind = start + 1, "cmd"
+            end = text.find("`", body_start)
+        else:
+            body_start, kind = start + 2, "proc" if text[start] == "<" else "cmd"
+            end = _closing_paren(text, body_start)
+        if end < 0:
+            end = size  # unterminated: the rest of the text is the body
+        substitutions.append((kind, text[body_start:end]))
+        current.append(text[start:end + 1])
+        open_token = True
+        return end + 1
+
+    while index < size:
+        if len(commands) >= MAX_COMMANDS:
+            return commands, True
+        char = text[index]
+        following = text[index + 1] if index + 1 < size else ""
+        if quote:
+            if char == quote:
+                quote = ""
+            elif quote == '"' and char == "\\" and following == '"':
+                current.append('"')
+                index += 1
+            elif quote == '"' and (char == "`" or (char == "$" and following == "(")):
+                index = substitution(index)
+                continue
+            else:
+                current.append(char)
+        elif char in "'\"":
+            quote, open_token = char, True
+        elif char == "\\" and following in ("\n", "\r"):
+            index += 2 if text.startswith("\r\n", index + 1) else 1  # line continuation
+        elif char == "\\" and following in ("'", '"'):
+            current.append(following)
+            open_token = True
+            index += 1
+        elif char in " \t":
+            end_token()
+        elif char in ";\n\r":
+            end_command(";")
+        elif char == "#" and not open_token:
+            index = text.find("\n", index)  # comment: skip to the end of the line
+            if index < 0:
+                break
+            continue
+        elif char == "`" or (char in "$<" and following == "("):
+            index = substitution(index)
+            continue
+        elif char == "(" and not open_token:
+            tokens.append("(")  # subshell: `(cd /tmp && make)`; dropped by strip_prefixes
+        elif char == "|":
+            end_command("||" if following == "|" else "|")
+            if following in ("|", "&"):
+                index += 1
+        elif char == "&":
+            if following == "&":
+                end_command("&&")
+                index += 1
+            elif following == ">" or (index and text[index - 1] in "<>"):
+                current.append(char)  # part of a redirection such as 2>&1
+                open_token = True
+            else:
+                end_command("&")
+        else:
+            current.append(char)
+            open_token = True
+        index += 1
+    end_command("")
+    return commands, False
+
+
+_VERSIONED_PROGRAM = re.compile(r"(pip|python)\d+(?:\.\d+)?")
+_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
+_REDIRECTION = re.compile(r"(?:\d*|&)(?:>>?|<)(.*)", re.DOTALL)  # 2>&1, >file, >>, <in
+
+# Shell keywords and grouping characters that can stand in front of a command.
+KEYWORDS = frozenset({"if", "then", "else", "elif", "do", "while", "until", "!", "{", "("})
+# Prefix commands that run another command: (options that take a value, positionals to skip).
+WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
+    "sudo": (frozenset({"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U", "-r", "-t"}), 0),
+    "doas": (frozenset({"-u", "-C"}), 0),
+    "env": (frozenset({"-u", "-C", "-S"}), 0),
+    "nice": (frozenset({"-n"}), 0),
+    "timeout": (frozenset({"-s", "-k"}), 1),
+    "command": (frozenset(), 0),
+    "exec": (frozenset(), 0),
+    "nohup": (frozenset(), 0),
+    "time": (frozenset(), 0),
+}
+
+
+def basename(token: str) -> str:
+    """Lower-case last path component, for POSIX and Windows separators."""
+    return token.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].lower()
+
+
+def program_name(token: str) -> str:
+    """Normalised program name: /usr/bin/pip3.11, pip.exe and !pip all become ``pip``."""
+    name = basename(token).lstrip("!%")  # notebook shell escapes
+    for suffix in (".exe", ".cmd", ".bat"):
+        name = name.removesuffix(suffix)
+    versioned = _VERSIONED_PROGRAM.fullmatch(name)
+    return versioned.group(1) if versioned else name
+
+
+def assignment(token: str) -> tuple[str, str] | None:
+    """(name, value) when the token is a ``NAME=value`` assignment."""
+    match = _ASSIGNMENT.fullmatch(token)
+    return (match.group(1), match.group(2)) if match else None
+
+
+def split_redirections(tokens: Sequence[str]) -> tuple[list[str], list[str]]:
+    """Separate ``> file`` style redirections from a command's words: (words, targets)."""
+    words: list[str] = []
+    targets: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        index += 1
+        # <<< is a here-string and <( ... ) a process substitution; both stay as words.
+        match = None if token.startswith(("<<<", "<(", ">(")) else _REDIRECTION.fullmatch(token)
+        if match is None:
+            words.append(token)
+            continue
+        target = match.group(1)
+        if not target and index < len(tokens):
+            target = tokens[index]
+            index += 1
+        targets.append(target)
+    return words, targets
+
+
+def strip_prefixes(words: Sequence[str]) -> tuple[list[str], dict[str, str]]:
+    """Drop leading shell keywords, ``NAME=value`` assignments and wrappers such as sudo.
+
+    Returns (argv, assignments). ``argv[0]`` is then the program that actually runs.
+    """
+    assignments: dict[str, str] = {}
+    index = 0
+    while index < len(words):
+        if words[index] in KEYWORDS:
+            index += 1
+            continue
+        pair = assignment(words[index])
+        if pair:
+            assignments[pair[0]] = pair[1]
+            index += 1
+            continue
+        wrapper = WRAPPERS.get(program_name(words[index]))
+        if wrapper is None:
+            break
+        value_flags, positionals = wrapper
+        index += 1
+        while index < len(words) and words[index].startswith("-"):
+            index += 2 if words[index] in value_flags else 1
+        index += positionals
+    return list(words[index:]), assignments
+
+
+def first_program(text: str) -> str:
+    """Normalised program of the first command in ``text``; empty when there is none."""
+    commands, _ = lex(text[:MAX_PROBE_CHARS])
+    if not commands:
+        return ""
+    words, _ = split_redirections(commands[0].tokens)
+    argv, _ = strip_prefixes(words)
+    return program_name(argv[0]) if argv else ""
+
+
+# --- package-manager grammar (data only) ----------------------------------------------------
+# To teach the gate a new package manager, option or environment variable, add a row in this
+# section and a case in tests/runtime_fixtures/alr16_events.json. The detection logic further
+# down should not need to change.
+
+
+@dataclass(frozen=True)
+class Action:
+    """What one command-line option or environment variable does.
+
+    ``effect`` is a source or verification effect (index, extra_index, tls_off,
+    integrity_off, no_index, system_env, vcs, path) or a directive for the install parser
+    (requirements, hashed, locked, spec, pin, yes). An empty effect means "takes a value that
+    ALR16 does not interpret". ``when`` names the value that makes a setting risky.
+    """
+
+    effect: str = ""
+    takes_value: bool = False
+    when: str = "any"  # any | true | false | off
+
+
+VALUE = Action(takes_value=True)
+INDEX = Action("index", True)
+EXTRA_INDEX = Action("extra_index", True)
+TLS_OFF = Action("tls_off")
+TLS_OFF_FOR = Action("tls_off", True)  # the value names a host, as in --trusted-host HOST
+TLS_OFF_IF_FALSE = Action("tls_off", True, "false")
+TLS_OFF_IF_TRUE = Action("tls_off", True, "true")
+INTEGRITY_OFF = Action("integrity_off")
+INTEGRITY_OFF_FOR = Action("integrity_off", True)
+NO_INDEX = Action("no_index")
+SYSTEM_ENV = Action("system_env")
+REQUIREMENTS = Action("requirements", True)
+HASHED = Action("hashed")
+LOCKED = Action("locked")
+SPEC = Action("spec", True)  # the value is a package spec
+PIN = Action("pin", True)  # the value is the exact version of the packages named
+YES = Action("yes")  # download without asking
+
+# How the words after the verb are read.
+INSTALL = "install"  # positionals are package specs
+LOCKFILE = "lockfile"  # installs exactly what the lock file lists; no specs on the line
+RUN = "run"  # downloads the first positional and runs it; the rest are its own arguments
+RUN_LOCAL = "run_local"  # may run a local binary; a download is certain only with -y or -p
+WITH_ONLY = "with_only"  # packages come from options only, as in uv run --with
+
+
+@dataclass(frozen=True)
+class Manager:
+    verbs: Mapping[tuple[str, ...], str]  # subcommand path -> how to read what follows
+    flags: Mapping[str, Action] = field(default_factory=dict)
+    # How an exact version is written: pep440 (==), npm and at (@1.2.3), go, conda, gem, or
+    # flag (only through a PIN option). Empty: versions are not expected (OS packages), so
+    # an unpinned name is not a finding.
+    pin_style: str = "pep440"
+    fold_flags: bool = False  # option names are case-insensitive (PowerShell)
+
+
+def _values(*names: str) -> dict[str, Action]:
+    return dict.fromkeys(names, VALUE)
+
+
+# Options that take a value must be listed even when ALR16 ignores the value. An unlisted
+# option is read as a switch, and its value would then be mistaken for a package name.
+_PYTHON_FLAGS: dict[str, Action] = {
+    "-i": INDEX, "--index-url": INDEX, "--index": INDEX, "--default-index": INDEX,
+    "--find-links": INDEX, "-f": INDEX, "--pypi-mirror": INDEX, "--source": INDEX,
+    "--extra-index-url": EXTRA_INDEX,
+    "--trusted-host": TLS_OFF_FOR, "--allow-insecure-host": TLS_OFF_FOR,
+    "--no-index": NO_INDEX,
+    "--break-system-packages": SYSTEM_ENV,
+    "-r": REQUIREMENTS, "--requirement": REQUIREMENTS,
+    "--require-hashes": HASHED,
+    "-e": SPEC, "--editable": SPEC, "--with": SPEC, "--from": SPEC,
+    **_values(
+        "-c", "--constraint", "-t", "--target", "--prefix", "--root", "--python", "-p",
+        "--platform", "--python-version", "--implementation", "--abi", "--only-binary",
+        "--no-binary", "--progress-bar", "--src", "--upgrade-strategy", "--config-settings",
+        "-C", "--global-option", "--log", "--cache-dir", "--retries", "--timeout", "--proxy",
+        "--cert", "--client-cert", "--hash", "--use-feature", "--use-deprecated",
+        "--exists-action", "--report", "--root-user-action", "--keyring-provider",
+        "--group", "-G", "--extras", "-E", "--index-strategy",
+    ),
+}
+_NODE_FLAGS: dict[str, Action] = {
+    "--registry": INDEX,
+    "--strict-ssl": TLS_OFF_IF_FALSE, "--no-strict-ssl": TLS_OFF,
+    "-y": YES, "--yes": YES,
+    "-p": SPEC, "--package": SPEC,
+    "--frozen-lockfile": LOCKED, "--immutable": LOCKED,
+    **_values(
+        "--prefix", "--cache", "--userconfig", "-w", "--workspace", "--tag", "--otp",
+        "--loglevel", "-C", "--dir", "--filter", "--cwd", "-c", "--call",
+    ),
+}
+_CARGO_FLAGS: dict[str, Action] = {
+    "--registry": INDEX, "--index": INDEX,
+    "--git": Action("vcs", True), "--path": Action("path", True),
+    "--version": PIN, "--vers": PIN,
+    **_values(
+        "--branch", "--tag", "--rev", "--root", "--features", "-F", "--target", "--profile",
+        "-j", "--jobs", "--bin", "--example", "--config", "--manifest-path", "-p", "--package",
+    ),
+}
+_GEM_FLAGS: dict[str, Action] = {
+    "-s": INDEX, "--source": INDEX, "-v": PIN, "--version": PIN,
+    **_values("-P", "--trust-policy", "-i", "--install-dir", "-n", "--bindir", "--platform"),
+}
+_APT_FLAGS: dict[str, Action] = {
+    "--allow-unauthenticated": INTEGRITY_OFF, "--force-yes": INTEGRITY_OFF,
+    **_values("-o", "-t", "--target-release"),
+}
+_DNF_FLAGS: dict[str, Action] = {
+    "--nogpgcheck": INTEGRITY_OFF, "--repofrompath": INDEX,
+    **_values("--enablerepo", "--disablerepo", "--releasever", "--installroot"),
+}
+_APK_FLAGS: dict[str, Action] = {
+    "--allow-untrusted": INTEGRITY_OFF, "-X": INDEX, "--repository": INDEX,
+    **_values("--repositories-file", "-t", "--virtual", "-p", "--root"),
+}
+_CONDA_FLAGS: dict[str, Action] = {
+    "-c": INDEX, "--channel": INDEX, "-k": TLS_OFF, "--insecure": TLS_OFF,
+    **_values("-n", "--name", "-p", "--prefix", "--file", "--solver"),
+}
+_WINGET_FLAGS: dict[str, Action] = {
+    "--ignore-security-hash": INTEGRITY_OFF, "-s": INDEX, "--source": INDEX,
+    "-v": PIN, "--version": PIN,
+    **_values(
+        "--id", "--name", "--moniker", "-q", "--query", "-m", "--manifest", "-l", "--location",
+        "--scope", "-a", "--architecture", "--locale", "--override", "--custom", "--header",
+    ),
+}
+_CHOCO_FLAGS: dict[str, Action] = {
+    "-s": INDEX, "--source": INDEX, "--version": PIN,
+    "--ignore-checksums": INTEGRITY_OFF, "--allow-empty-checksums": INTEGRITY_OFF,
+    **_values(
+        "--params", "--package-parameters", "--install-arguments", "--ia", "-u", "--user",
+        "-p", "--password", "--timeout", "--execution-timeout",
+    ),
+}
+_POWERSHELL_FLAGS: dict[str, Action] = {
+    "-name": SPEC, "-requiredversion": PIN, "-repository": INDEX,
+    "-skippublishercheck": INTEGRITY_OFF,
+    **_values("-scope", "-minimumversion", "-maximumversion", "-proxy", "-credential"),
+}
+
+_ADD_OR_INSTALL = {("add",): INSTALL, ("install",): INSTALL, ("i",): INSTALL}
+
+# Keys are normalised program names (see program_name).
+MANAGERS: dict[str, Manager] = {
+    "pip": Manager({("install",): INSTALL}, _PYTHON_FLAGS),
+    "pipx": Manager({("install",): INSTALL, ("run",): RUN}, _PYTHON_FLAGS),
+    "uv": Manager(
+        {("add",): INSTALL, ("pip", "install"): INSTALL, ("tool", "install"): INSTALL,
+         ("tool", "run"): RUN, ("run",): WITH_ONLY},
+        _PYTHON_FLAGS,
+    ),
+    "uvx": Manager({(): RUN}, _PYTHON_FLAGS),
+    "poetry": Manager({("add",): INSTALL}, _PYTHON_FLAGS),
+    "pipenv": Manager({("install",): INSTALL}, _PYTHON_FLAGS),
+    "npm": Manager(
+        {**_ADD_OR_INSTALL, ("ci",): LOCKFILE, ("exec",): RUN_LOCAL, ("x",): RUN_LOCAL},
+        _NODE_FLAGS, "npm",
+    ),
+    "npx": Manager({(): RUN_LOCAL}, _NODE_FLAGS, "npm"),
+    "yarn": Manager(
+        {("add",): INSTALL, ("global", "add"): INSTALL, ("install",): INSTALL, ("dlx",): RUN},
+        _NODE_FLAGS, "npm",
+    ),
+    "pnpm": Manager({**_ADD_OR_INSTALL, ("dlx",): RUN}, _NODE_FLAGS, "npm"),
+    "bun": Manager({**_ADD_OR_INSTALL, ("x",): RUN_LOCAL}, _NODE_FLAGS, "npm"),
+    "bunx": Manager({(): RUN_LOCAL}, _NODE_FLAGS, "npm"),
+    "cargo": Manager({("install",): INSTALL, ("add",): INSTALL}, _CARGO_FLAGS, "at"),
+    "go": Manager({("install",): INSTALL}, {}, "go"),
+    "gem": Manager({("install",): INSTALL}, _GEM_FLAGS, "gem"),
+    "conda": Manager({("install",): INSTALL}, _CONDA_FLAGS, "conda"),
+    "mamba": Manager({("install",): INSTALL}, _CONDA_FLAGS, "conda"),
+    "install-module": Manager({(): INSTALL}, _POWERSHELL_FLAGS, "flag", fold_flags=True),
+    # OS package managers: pin_style is empty, so an unpinned name is not a finding.
+    "apt": Manager({("install",): INSTALL}, _APT_FLAGS, ""),
+    "apt-get": Manager({("install",): INSTALL}, _APT_FLAGS, ""),
+    "dnf": Manager({("install",): INSTALL}, _DNF_FLAGS, ""),
+    "yum": Manager({("install",): INSTALL}, _DNF_FLAGS, ""),
+    "apk": Manager({("add",): INSTALL}, _APK_FLAGS, ""),
+    "brew": Manager({("install",): INSTALL}, {}, ""),
+    "winget": Manager({("install",): INSTALL}, _WINGET_FLAGS, ""),
+    "choco": Manager({("install",): INSTALL}, _CHOCO_FLAGS, ""),
+}
+
+# Environment variables that change where packages come from or what is verified.
+ENV_SETTINGS: dict[str, Action] = {
+    "PIP_INDEX_URL": INDEX, "UV_INDEX_URL": INDEX, "UV_DEFAULT_INDEX": INDEX,
+    "NPM_CONFIG_REGISTRY": INDEX, "GOPROXY": INDEX,
+    "PIP_EXTRA_INDEX_URL": EXTRA_INDEX, "UV_EXTRA_INDEX_URL": EXTRA_INDEX,
+    "PIP_TRUSTED_HOST": TLS_OFF_FOR,
+    "NODE_TLS_REJECT_UNAUTHORIZED": TLS_OFF_IF_FALSE,
+    "NPM_CONFIG_STRICT_SSL": TLS_OFF_IF_FALSE,
+    "GIT_SSL_NO_VERIFY": TLS_OFF_IF_TRUE,
+    "GONOSUMDB": INTEGRITY_OFF_FOR, "GOINSECURE": INTEGRITY_OFF_FOR,
+    "GONOSUMCHECK": Action("integrity_off", True, "true"),
+    "GOSUMDB": Action("integrity_off", True, "off"),
+    "PIP_NO_INDEX": Action("no_index", True, "true"),
+    "PIP_BREAK_SYSTEM_PACKAGES": Action("system_env", True, "true"),
+}
+
+# `pip config set global.index-url URL`, `npm config set registry URL` and similar.
+CONFIG_MANAGERS = frozenset({"pip", "npm", "yarn", "pnpm"})
+CONFIG_KEYS: dict[str, Action] = {
+    "index-url": INDEX, "extra-index-url": EXTRA_INDEX, "trusted-host": TLS_OFF_FOR,
+    "registry": INDEX, "npmregistryserver": INDEX, "strict-ssl": TLS_OFF_IF_FALSE,
+}
+SOURCE_CONFIG_PROGRAMS = frozenset({"add-apt-repository", "apt-key"})
+SOURCE_CONFIG_FILES = frozenset({
+    "pip.conf", "pip.ini", ".npmrc", ".yarnrc", ".yarnrc.yml", "uv.toml", ".condarc",
+    "sources.list",
+})
+
+# Registries a package manager uses when nothing is configured. Hosts are matched exactly.
+DEFAULT_INDEX_HOSTS = frozenset({
+    "pypi.org", "files.pythonhosted.org", "registry.npmjs.org", "registry.yarnpkg.com",
+    "proxy.golang.org", "crates.io", "index.crates.io", "rubygems.org",
+    "repo.anaconda.com", "conda.anaconda.org",
+})
+DEFAULT_INDEX_NAMES = frozenset({
+    "psgallery", "crates-io", "conda-forge", "defaults", "winget", "msstore", "direct", "off",
+})
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+# Programs ALR16 recognises besides package managers.
+SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "ash", "fish"})
+POWERSHELLS = frozenset({"powershell", "pwsh"})
+FETCHERS = frozenset({
+    "curl", "wget", "irm", "iwr", "invoke-webrequest", "invoke-restmethod",
+})
+POWERSHELL_EVAL = frozenset({"iex", "invoke-expression"})
+DECODERS = {"base64": frozenset({"-d", "-D", "--decode"}), "xxd": frozenset({"-r"})}
+ECHOERS = frozenset({"echo", "printf"})
+# Interpreters and the options that take program text.
+CODE_FLAGS: dict[str, frozenset[str]] = {
+    "python": frozenset({"-c"}),
+    "py": frozenset({"-c"}),
+    "node": frozenset({"-e", "--eval", "-p", "--print"}),
+    "ruby": frozenset({"-e"}),
+    "perl": frozenset({"-e", "-E"}),
+    "php": frozenset({"-r"}),
+}
+SCRIPT_RUNNERS = SHELLS | POWERSHELLS | frozenset(CODE_FLAGS) | {"source", "."}
+ENV_SETTERS = frozenset({"export", "set", "setx", "declare", "typeset"})
+
+
 # --- source and verification settings -------------------------------------------------------
 
 _EFFECT_SIGNAL = {
@@ -171,15 +650,15 @@ def _url_parts(value: str) -> tuple[str, str]:
 
 def _is_plaintext(value: str) -> bool:
     scheme, host = _url_parts(value)
-    return scheme == "http" and host not in grammar.LOOPBACK_HOSTS
+    return scheme == "http" and host not in LOOPBACK_HOSTS
 
 
 def _is_default_index(entry: str) -> bool:
     # Hosts are compared exactly, so pypi.org.example.net is not treated as pypi.org.
     host = _url_parts(entry)[1]
     if host:
-        return host in grammar.DEFAULT_INDEX_HOSTS
-    return entry.lower() in grammar.DEFAULT_INDEX_NAMES
+        return host in DEFAULT_INDEX_HOSTS
+    return entry.lower() in DEFAULT_INDEX_NAMES
 
 
 def _index_signals(value: str, *, extra: bool) -> list[str]:
@@ -497,32 +976,32 @@ def _fetches(script: str) -> bool:
     """True when the script is nothing but ``$(curl ...)`` or the backtick form of it."""
     script = script.strip()
     if script.startswith("$(") and script.endswith(")"):
-        return shell.first_program(script[2:-1]) in grammar.FETCHERS
+        return first_program(script[2:-1]) in FETCHERS
     if len(script) > 1 and script[0] == script[-1] == "`":
-        return shell.first_program(script[1:-1]) in grammar.FETCHERS
+        return first_program(script[1:-1]) in FETCHERS
     return False
 
 
 def _runs_stdin(program: str, args: Sequence[str]) -> bool:
     """True when the program executes whatever is piped into it."""
-    if program in grammar.SHELLS:
+    if program in SHELLS:
         for arg in args:
             if arg in ("-", "-s", "--"):
                 return True
             if _SHELL_COMMAND_FLAG.fullmatch(arg) or not arg.startswith("-"):
                 return False  # the script comes from -c or a file, not from the pipe
         return True
-    if program in grammar.POWERSHELLS:
+    if program in POWERSHELLS:
         return not args or args[-1] == "-"
-    if program in grammar.CODE_FLAGS:
+    if program in CODE_FLAGS:
         return all(arg == "-" for arg in args)  # `curl ... | python -m json.tool` is fine
-    return program in grammar.POWERSHELL_EVAL
+    return program in POWERSHELL_EVAL
 
 
 def _emits_unseen_content(program: str, args: Sequence[str]) -> bool:
     """True when the program's output is content the gate cannot read: fetched or decoded."""
-    decode_flags = grammar.DECODERS.get(program, frozenset())
-    return program in grammar.FETCHERS or any(arg in decode_flags for arg in args)
+    decode_flags = DECODERS.get(program, frozenset())
+    return program in FETCHERS or any(arg in decode_flags for arg in args)
 
 
 def _fetch_signals(program: str, args: Sequence[str]) -> list[str]:
@@ -544,8 +1023,8 @@ def _exported(word: str, program: str, args: Sequence[str]) -> dict[str, str]:
         return {name: value}
     if program == "setx":
         return {args[0]: args[1]} if len(args) >= 2 else {}
-    if program in grammar.ENV_SETTERS:
-        return dict(pair for pair in map(shell.assignment, args) if pair)
+    if program in ENV_SETTERS:
+        return dict(pair for pair in map(assignment, args) if pair)
     return {}
 
 
@@ -562,7 +1041,7 @@ class Analyser:
         if depth > MAX_NESTING:
             self.scan.notes.add("nesting_limit")
             return
-        commands, cut = shell.lex(text)
+        commands, cut = lex(text)
         if cut:
             self.scan.notes.add("command_limit")
         self.commands(commands, depth)
@@ -572,10 +1051,10 @@ class Analyser:
         # Each stage is looked at once, so a long pipeline costs linear time.
         upstream: list[tuple[str, list[str]]] = []
         for command in commands:
-            words, redirect_targets = shell.split_redirections(command.tokens)
-            argv, assignments = shell.strip_prefixes(words)
+            words, redirect_targets = split_redirections(command.tokens)
+            argv, assignments = strip_prefixes(words)
             self.environment(assignments)
-            program = shell.program_name(argv[0]) if argv else ""
+            program = program_name(argv[0]) if argv else ""
             args = argv[1:]
             if upstream and _runs_stdin(program, args):
                 self._piped_into_interpreter(upstream, depth)
@@ -592,7 +1071,7 @@ class Analyser:
 
     def environment(self, assignments: Mapping[str, str]) -> None:
         for name, value in assignments.items():
-            action = grammar.ENV_SETTINGS.get(name.upper())
+            action = ENV_SETTINGS.get(name.upper())
             if action is not None:
                 self._signal(_effect_signals(action, value), name)
 
@@ -611,11 +1090,11 @@ class Analyser:
         args = argv[1:]
         self._runs_written_script(program, argv)
         self.environment(_exported(argv[0], program, args))
-        if program in grammar.MANAGERS:
+        if program in MANAGERS:
             self._manager(program, args)
-        elif program in grammar.SHELLS:
+        elif program in SHELLS:
             self._shell(args, command, depth)
-        elif program in grammar.POWERSHELLS:
+        elif program in POWERSHELLS:
             self._powershell(args, depth)
         elif program == "cmd":
             self._cmd(args, depth)
@@ -626,11 +1105,11 @@ class Analyser:
             self.text(script, depth + 1)
         elif program in ("source", "."):
             self._process_substitution(command)
-        elif program in grammar.POWERSHELL_EVAL:
+        elif program in POWERSHELL_EVAL:
             self._powershell_eval(args, command)
-        elif program in grammar.CODE_FLAGS:
+        elif program in CODE_FLAGS:
             self._interpreter(program, args)
-        elif program in grammar.SOURCE_CONFIG_PROGRAMS:
+        elif program in SOURCE_CONFIG_PROGRAMS:
             self.scan.add("persistent_source_config_change", self.path, program)
 
     def _signal(self, signals: Iterable[str], detail: str) -> None:
@@ -643,16 +1122,16 @@ class Analyser:
             if _emits_unseen_content(program, args):
                 self.scan.add("fetch_pipe_to_shell", self.path, program)
                 self._signal(_fetch_signals(program, args), program)
-            elif program in grammar.ECHOERS:
+            elif program in ECHOERS:
                 self.text(" ".join(args), depth + 1)  # echo "pip install x" | sh
 
     def _runs_written_script(self, program: str, argv: Sequence[str]) -> None:
         if not self._written:
             return
-        candidates = argv[1:] if program in grammar.SCRIPT_RUNNERS else argv[:1]
+        candidates = argv[1:] if program in SCRIPT_RUNNERS else argv[:1]
         for word in candidates:
-            if shell.basename(word) in self._written:
-                self.scan.add("write_then_execute_install", self.path, shell.basename(word))
+            if basename(word) in self._written:
+                self.scan.add("write_then_execute_install", self.path, basename(word))
                 return
 
     def _writes_source_config(self, program: str, argv: Sequence[str],
@@ -660,7 +1139,7 @@ class Analyser:
         targets = [*redirect_targets]
         if program == "tee":
             targets += [arg for arg in argv[1:] if not arg.startswith("-")]
-        names = {shell.basename(target) for target in targets} & grammar.SOURCE_CONFIG_FILES
+        names = {basename(target) for target in targets} & SOURCE_CONFIG_FILES
         if names and _SOURCE_CONFIG_TEXT.search(" ".join(argv)):
             self.scan.add("persistent_source_config_change", self.path, min(names))
 
@@ -680,7 +1159,7 @@ class Analyser:
 
     def _process_substitution(self, command: Command) -> None:
         for kind, body in command.substitutions:  # bash <(curl ...), source <(curl ...)
-            if kind == "proc" and shell.first_program(body) in grammar.FETCHERS:
+            if kind == "proc" and first_program(body) in FETCHERS:
                 self.scan.add("fetch_pipe_to_shell", self.path, "process_substitution")
 
     def _powershell(self, args: Sequence[str], depth: int) -> None:
@@ -708,11 +1187,11 @@ class Analyser:
                 index += 1
 
     def _powershell_eval(self, args: Sequence[str], command: Command) -> None:
-        fetched = any(shell.first_program(body) in grammar.FETCHERS
+        fetched = any(first_program(body) in FETCHERS
                       for _, body in command.substitutions)
         for word in args:  # iex (irm URL), iex (New-Object Net.WebClient).DownloadString(URL)
             lowered = word.lower().lstrip("($")
-            fetched = fetched or shell.program_name(lowered) in grammar.FETCHERS \
+            fetched = fetched or program_name(lowered) in FETCHERS \
                 or "downloadstring" in lowered
         if fetched:
             self.scan.add("fetch_pipe_to_shell", self.path, "iex")
@@ -726,12 +1205,12 @@ class Analyser:
     def _interpreter(self, program: str, args: Sequence[str]) -> None:
         for index, word in enumerate(args):
             value = args[index + 1] if index + 1 < len(args) else ""
-            if word in grammar.CODE_FLAGS[program]:
+            if word in CODE_FLAGS[program]:
                 if _code_installs(value):
                     self.scan.add("install_through_code", self.path, program)
                 return
             if word == "-m" and program in ("python", "py"):
-                if value.lower() in grammar.MANAGERS:  # python -m pip install ...
+                if value.lower() in MANAGERS:  # python -m pip install ...
                     self._manager(value.lower(), args[index + 2:])
                 return
             if not word.startswith("-"):
@@ -740,9 +1219,9 @@ class Analyser:
     # -- package managers -------------------------------------------------------------------
 
     def _manager(self, name: str, args: Sequence[str]) -> None:
-        if name in grammar.CONFIG_MANAGERS and self._config_change(args):
+        if name in CONFIG_MANAGERS and self._config_change(args):
             return
-        manager = grammar.MANAGERS[name]
+        manager = MANAGERS[name]
         matched = _match_verb(manager, args)
         if matched is not None:
             self._install(manager, *matched)
@@ -760,7 +1239,7 @@ class Analyser:
         key, equals, value = words[0].partition("=") if words else ("", "", "")
         if not equals:
             value = " ".join(words[1:])
-        action = grammar.CONFIG_KEYS.get(key.lower().rsplit(".", 1)[-1])
+        action = CONFIG_KEYS.get(key.lower().rsplit(".", 1)[-1])
         signals = _effect_signals(action, value) if action else []
         if signals:  # setting the default registry again is not a change worth reporting
             self._signal([*signals, "persistent_source_config_change"], key)
@@ -777,7 +1256,7 @@ class Analyser:
         for action, value in (*global_options, *_options(manager, after)):
             if action is None:
                 positionals.append(value)
-                if mode != grammar.INSTALL:
+                if mode != INSTALL:
                     break  # the rest are the arguments of the program being run
             elif action.effect == "spec":
                 option_specs.append(value)
@@ -788,23 +1267,23 @@ class Analyser:
             else:
                 self._signal(_effect_signals(action, value), action.effect)
 
-        runs_package = mode in (grammar.RUN, grammar.RUN_LOCAL)
+        runs_package = mode in (RUN, RUN_LOCAL)
         if runs_package:
             # With --from or -p the positional is a command name, not a package.
             specs = option_specs or positionals[:1]
-        elif mode == grammar.INSTALL:
+        elif mode == INSTALL:
             specs = option_specs + positionals
         else:
             specs = option_specs
-        if mode == grammar.RUN_LOCAL and not (option_specs or "yes" in directives):
+        if mode == RUN_LOCAL and not (option_specs or "yes" in directives):
             return  # `npx jest` may run a local binary; a download cannot be told from text
-        if mode == grammar.WITH_ONLY and not specs:
+        if mode == WITH_ONLY and not specs:
             return  # `uv run script.py` installs nothing named on the line
 
         self.scan.installs += 1
         if "hashed" in directives:
             self.scan.modes.add("hashed")
-        if mode == grammar.LOCKFILE or "locked" in directives:
+        if mode == LOCKFILE or "locked" in directives:
             self.scan.modes.add("locked")
         if len(specs) > MAX_PACKAGES:
             self.scan.notes.add("package_limit")
@@ -962,7 +1441,7 @@ def _scan_commands(fields: Sequence[Field], scan: Scan, origin: Origin) -> None:
 
 def _scan_write(fields: Sequence[Field], scan: Scan, origin: Origin) -> None:
     """A file write is not an install. Remember the file if its content contains one."""
-    names = [shell.basename(item.text) for item in fields if item.key in PATH_KEYS]
+    names = [basename(item.text) for item in fields if item.key in PATH_KEYS]
     contents = [item for item in fields if item.key not in PATH_KEYS]
     suspicious = False
     for item in contents:
@@ -971,7 +1450,7 @@ def _scan_write(fields: Sequence[Field], scan: Scan, origin: Origin) -> None:
         scan.notes |= nested.scan.notes
         suspicious = suspicious or nested.scan.found or _code_installs(item.text)
     for name in names:
-        if name in grammar.SOURCE_CONFIG_FILES and any(
+        if name in SOURCE_CONFIG_FILES and any(
                 _SOURCE_CONFIG_TEXT.search(item.text) for item in contents):
             scan.add("persistent_source_config_change", "arguments", name)
     if suspicious and _remember_scripts(origin, [name for name in names if name]):
