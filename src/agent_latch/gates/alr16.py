@@ -1560,112 +1560,107 @@ class Field:
     key: str
     text: str
     argv: tuple[str, ...] | None = None  # set when the value was a complete array of words
+    complete: bool = True
 
 
 def _collect(arguments: Mapping[str, Any], scan: Scan
              ) -> tuple[list[Field], dict[str, str]]:
-    """Flatten the arguments into fields, within the per-call budgets."""
+    """Flatten argument text without copying beyond the inspection budget."""
     fields: list[Field] = []
     environment: dict[str, str] = {}
     budget = MAX_TOTAL_CHARS
     string_count = 0
-    visited = 0
+    exhausted = False
 
-    def take(text: str) -> str | None:
-        nonlocal budget, string_count
+    def take(text: str) -> tuple[str, bool]:
+        nonlocal budget, string_count, exhausted
         if string_count >= MAX_STRINGS:
             scan.notes.add("string_limit")
-            return None
+            exhausted = True
+            return "", False
         string_count += 1
         if len(text) > budget:
             scan.notes.add("character_budget")
-            text = text[:budget]
+            result = text[:budget]
+            budget = 0
+            exhausted = True
+            return result, False
         budget -= len(text)
-        return text
+        if budget == 0:
+            exhausted = True
+        return text, True
 
     def walk(value: Any, path: str, key: str, depth: int) -> None:
-        nonlocal visited
-        visited += 1
-        if visited > MAX_TOTAL_CHARS:
-            scan.notes.add("argument_limit")
+        nonlocal budget, exhausted
+        if exhausted:
             return
         if isinstance(value, str):
-            text = take(value)
+            text, complete = take(value)
             if text:
-                fields.append(Field(path, key, text))
+                fields.append(Field(path, key, text, complete=complete))
         elif isinstance(value, list) and value and isinstance(value[0], str):
             lines = key in LINE_LIST_KEYS
             separator = "\n" if lines else " "
             parts: list[str] = []
             original: list[str] = []
             complete = True
-            items = iter(enumerate(value))
-            for index, item in items:
-                if isinstance(item, str):
-                    text = take(item)
-                    if text is None:
+            for index, item in enumerate(value):
+                if not isinstance(item, str):
+                    complete = False
+                    break
+                if index:
+                    if len(separator) > budget:
+                        scan.notes.add("character_budget")
+                        exhausted = True
                         complete = False
                         break
-                    parts.append(text)
-                    original.append(item)
-                    if text != item:
-                        complete = False
-                        break
-                    if budget == 0:
-                        try:
-                            next(items)
-                        except StopIteration:
-                            pass
-                        else:
-                            scan.notes.add("character_budget")
-                            complete = False
-                        break
-                    continue
-                complete = False
-                if parts:
-                    fields.append(Field(path, key, separator.join(parts)))
-                    parts.clear()
-                walk(item, f"{path}.{index}", key, depth + 1)
-                for later_index, child in items:
-                    walk(child, f"{path}.{later_index}", key, depth + 1)
-                break
+                    budget -= len(separator)
+                    parts.append(separator)
+                text, full = take(item)
+                parts.append(text)
+                original.append(item)
+                if not full:
+                    complete = False
+                    break
+                if exhausted and index + 1 < len(value):
+                    scan.notes.add("character_budget")
+                    complete = False
+                    break
             if parts:
-                joined = separator.join(parts)
-                argv = tuple(original) if complete and not lines else None
-                fields.append(Field(path, key, joined, argv))
+                fields.append(Field(
+                    path, key, "".join(parts),
+                    tuple(original) if complete and not lines else None, complete,
+                ))
+            if not exhausted and index < len(value) and not isinstance(value[index], str):
+                for child_index in range(index, len(value)):
+                    walk(value[child_index], f"{path}.{child_index}", key, depth + 1)
         elif isinstance(value, (Mapping, list)):
             if depth >= MAX_ARGUMENT_DEPTH:
                 scan.notes.add("depth_limit")
                 return
             items = value.items() if isinstance(value, Mapping) else enumerate(value)
             for name, child in items:
-                walk(child, f"{path}.{safe(name, 60)}", key, depth + 1)
-                if visited > MAX_TOTAL_CHARS or budget == 0:
-                    scan.notes.add("argument_limit" if visited > MAX_TOTAL_CHARS
-                                   else "character_budget")
+                child_path = f"{path}.{safe(name, 60)}"
+                if key in ENV_KEYS and isinstance(child, str):
+                    text, _ = take(child)
+                    environment[str(name)] = text
+                else:
+                    walk(child, child_path, key, depth + 1)
+                if exhausted:
                     break
-        # Numbers, booleans and null carry no command text.
 
     for name, value in arguments.items():
-        if str(name).lower() in ENV_KEYS and isinstance(value, Mapping):
+        key = str(name).lower()
+        if key in ENV_KEYS and isinstance(value, Mapping):
             for env_name, env_value in value.items():
-                visited += 1
-                if visited > MAX_TOTAL_CHARS:
-                    scan.notes.add("argument_limit")
+                if exhausted:
                     break
-                if not isinstance(env_value, str):
-                    continue
-                text = take(env_value)
-                if text is None:
-                    break
-                environment[str(env_name)] = text
-                if budget == 0:
-                    scan.notes.add("character_budget")
-                    break
-            continue
-        walk(value, f"arguments.{safe(name, 60)}", str(name).lower(), 0)
-        if visited > MAX_TOTAL_CHARS or budget == 0:
-            scan.notes.add("argument_limit" if visited > MAX_TOTAL_CHARS else "character_budget")
+                if isinstance(env_value, str):
+                    text, _ = take(env_value)
+                    environment[str(env_name)] = text
+        else:
+            walk(value, f"arguments.{safe(name, 60)}", key, 0)
+        if exhausted:
             break
     return fields, environment
 
@@ -1704,45 +1699,58 @@ def _scan_commands(fields: Sequence[Field], scan: Scan, origin: Origin) -> None:
         else:
             analyser.text(item.text)
         if item.key in CODE_KEYS and scan.installs == installs_before \
-                and _code_installs(item.text):
+                and _code_installs(item.text, python=item.key == "code", scan=scan):
             scan.add("install_through_code", item.path, item.key)
         _scan_encoded(item.text, analyser)
 
 
-def _scan_write(fields: Sequence[Field], scan: Scan, origin: Origin) -> None:
+def _scan_write(fields: Sequence[Field], scan: Scan, origin: Origin, tool: str) -> None:
     """A file write is not an install. Remember the file if its content contains one."""
-    names = [basename(item.text) for item in fields if item.key in PATH_KEYS]
+    names = [_normalize_path(item.text) for item in fields
+             if item.key in PATH_KEYS and item.complete]
     contents = [item for item in fields if item.key not in PATH_KEYS]
     suspicious = False
+    python_content = any(posixpath.splitext(name)[1].lower() == ".py" for name in names)
     for item in contents:
         nested = Analyser(Scan(), origin, item.path)
         nested.text(item.text)
         scan.notes |= nested.scan.notes
-        suspicious = suspicious or nested.scan.found or _code_installs(item.text)
+        suspicious = suspicious or nested.scan.found or _code_installs(
+            item.text, python=python_content, scan=scan)
     for name in names:
-        if name in SOURCE_CONFIG_FILES and any(
+        if basename(name) in SOURCE_CONFIG_FILES and any(
                 _SOURCE_CONFIG_TEXT.search(item.text) for item in contents):
-            scan.add("persistent_source_config_change", "arguments", name)
+            scan.add("persistent_source_config_change", "arguments", basename(name))
     if suspicious and _remember_scripts(origin, [name for name in names if name]):
         scan.notes.add("write_history_limit")
+    words = {word.lower() for word in _NAME_WORDS.split(tool) if word}
+    complete_replacement = bool(words & {"write", "save", "create", "put"}) \
+        and not bool(words & {"append", "edit", "patch", "insert"})
+    inspected = [item for item in contents if item.key in {
+        "content", "contents", "text", "body", "new_content", "data",
+    }]
+    if (complete_replacement and names and inspected and not suspicious
+            and all(item.complete for item in inspected) and not scan.notes):
+        _forget_scripts(origin, names)
 
 
-def _scan_call(arguments: Mapping[str, Any], role: str, origin: Origin) -> Scan:
+def _scan_call(arguments: Mapping[str, Any], role: str, origin: Origin,
+               tool: str) -> tuple[Scan, str]:
     scan = Scan()
-    fields = _collect(arguments, scan)
+    fields, environment = _collect(arguments, scan)
     if role == "write":
-        _scan_write(fields, scan, origin)
-        return scan
-    for name, value in arguments.items():  # an env argument applies to the command it runs
-        if str(name).lower() in ENV_KEYS and isinstance(value, Mapping):
-            pairs = {str(key): item for key, item in value.items() if isinstance(item, str)}
-            Analyser(scan, origin, f"arguments.{safe(name, 60)}").environment(pairs)
-    # When the call names its command field, only that field is command text; a free-text
-    # field such as "description" is not. Otherwise every string is inspected.
-    command_fields = [item for item in fields if item.key in COMMAND_KEYS]
-    _scan_commands(command_fields or [item for item in fields if item.key not in ENV_KEYS],
-                   scan, origin)
-    return scan
+        _scan_write(fields, scan, origin, tool)
+    else:
+        Analyser(scan, origin, "arguments.environment").environment(environment)
+        command_fields = [item for item in fields if item.key in COMMAND_KEYS]
+        _scan_commands(command_fields or fields, scan, origin)
+    fingerprint = digest(json.dumps(
+        [(item.path, item.key, item.text, item.argv, item.complete) for item in fields]
+        + [("env", name, value) for name, value in sorted(environment.items())]
+        + [("notes", sorted(scan.notes))],
+        ensure_ascii=False, separators=(",", ":"), default=str,
+    ))
+    return scan, fingerprint
 
 
 # --- records --------------------------------------------------------------------------------
@@ -1856,12 +1864,10 @@ def evaluate(event: dict[str, Any]) -> dict[str, Any]:
         return {"findings": [_summary(event, server, role, OUTCOME_OUT_OF_SCOPE, (), None)]}
 
     origin = Origin(str(event.get("run_id") or ""), str(event.get("session_id") or ""), server)
-    arguments_sha256 = digest(
-        json.dumps(arguments, sort_keys=True, ensure_ascii=False, default=str))
     # The same command means something new once a script has been written, so the write
     # history is part of the duplicate key.
     history = digest("\n".join(sorted(_written_scripts(origin))))
-    scan = _scan_call(arguments, role, origin)
+    scan, arguments_sha256 = _scan_call(arguments, role, origin, tool)
     if _already_reported((origin.run_id, origin.session_id, origin.server, tool,
                           arguments_sha256, history)):
         return {"findings": []}
