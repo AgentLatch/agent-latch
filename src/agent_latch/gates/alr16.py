@@ -36,15 +36,19 @@ command; text removed by payload masking or truncation.
 
 from __future__ import annotations
 
+import ast
 import base64
 import binascii
 import hashlib
 import json
+import ntpath
+import posixpath
 import re
 import unicodedata
 from collections import OrderedDict, deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import Enum
 from threading import Lock
 from typing import Any
 from urllib.parse import urlsplit
@@ -152,6 +156,7 @@ class Command:
     operator: str = ""  # what follows this command: | || && ; & or "" at the end
     # Bodies of $(...) and `...` ("cmd") and of <(...) ("proc") found in this command.
     substitutions: tuple[tuple[str, str], ...] = ()
+    heredoc: str = ""
 
 
 def _closing_paren(text: str, start: int) -> int:
@@ -197,6 +202,54 @@ def lex(text: str) -> tuple[list[Command], bool]:
             tokens.clear()
             substitutions.clear()
 
+    def finish_line() -> None:
+        end_token()
+        delimiters: list[str] = []
+        kept: list[str] = []
+        token_index = 0
+        while token_index < len(tokens):
+            token = tokens[token_index]
+            redirection = re.fullmatch(r"\d*<<(?!=)(.*)", token)
+            if redirection:
+                delimiter = redirection.group(1)
+                if not delimiter and token_index + 1 < len(tokens):
+                    token_index += 1
+                    delimiter = tokens[token_index]
+                if delimiter:
+                    delimiters.append(delimiter.lstrip("-"))
+            else:
+                kept.append(token)
+            token_index += 1
+        tokens[:] = kept
+        if not delimiters:
+            end_command(";")
+            return
+
+        bodies: list[str] = []
+        nonlocal index
+        for delimiter in delimiters:
+            body: list[str] = []
+            while index + 1 < size:
+                line_start = index + 1
+                line_end = text.find("\n", line_start)
+                if line_end < 0:
+                    line_end = size
+                line = text[line_start:line_end].removesuffix("\r")
+                index = line_end
+                if line == delimiter:
+                    break
+                body.append(line)
+                if line_end == size:
+                    break
+            else:
+                body = []
+            bodies.append("\n".join(body))
+        end_token()
+        if tokens:
+            commands.append(Command(tuple(tokens), ";", tuple(substitutions), "\n".join(bodies)))
+            tokens.clear()
+            substitutions.clear()
+
     def substitution(start: int) -> int:
         """Record a $(...), `...` or <(...) body, keep its text in the token, skip past it."""
         nonlocal open_token
@@ -239,8 +292,10 @@ def lex(text: str) -> tuple[list[Command], bool]:
             index += 1
         elif char in " \t":
             end_token()
-        elif char in ";\n\r":
+        elif char in ";\r":
             end_command(";")
+        elif char == "\n":
+            finish_line()
         elif char == "#" and not open_token:
             index = text.find("\n", index)  # comment: skip to the end of the line
             if index < 0:
@@ -295,6 +350,45 @@ WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
 def basename(token: str) -> str:
     """Lower-case last path component, for POSIX and Windows separators."""
     return token.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].lower()
+
+
+def _normalize_path(value: str) -> str:
+    value = value.strip()
+    if not value:
+        return ""
+    drive, _ = ntpath.splitdrive(value)
+    if drive:
+        return ntpath.normcase(ntpath.normpath(value))
+    return posixpath.normpath(value.replace("\\", "/"))
+
+
+def _script_operand(program: str, args: Sequence[str]) -> str:
+    """Return only the parsed script operand, never later arguments to that script."""
+    index = 0
+    while index < len(args):
+        word = args[index]
+        if program in SHELLS:
+            if _SHELL_COMMAND_FLAG.fullmatch(word) or word in ("-", "-s"):
+                return ""
+            if word in ("-o", "+o", "-O"):
+                index += 2
+                continue
+        elif program in POWERSHELLS:
+            name = word.lower().lstrip("-/")
+            if name in ("command", "c", "encodedcommand", "ec"):
+                return ""
+            if name in ("file", "f"):
+                return args[index + 1] if index + 1 < len(args) else ""
+        elif program in CODE_FLAGS:
+            if word in CODE_FLAGS[program] or word == "-m":
+                return ""
+            if word in ("-W", "-X") and index + 1 < len(args):
+                index += 2
+                continue
+        if not word.startswith("-"):
+            return "" if word == "-" else word
+        index += 1
+    return ""
 
 
 def program_name(token: str) -> str:
@@ -468,7 +562,7 @@ _NODE_FLAGS: dict[str, Action] = {
 _CARGO_FLAGS: dict[str, Action] = {
     "--registry": INDEX, "--index": INDEX,
     "--git": Action("vcs", True), "--path": Action("path", True),
-    "--version": PIN, "--vers": PIN,
+    "--version": Action("version", True), "--vers": Action("version", True),
     **_values(
         "--branch", "--tag", "--rev", "--root", "--features", "-F", "--target", "--profile",
         "-j", "--jobs", "--bin", "--example", "--config", "--manifest-path", "-p", "--package",
@@ -568,7 +662,7 @@ ENV_SETTINGS: dict[str, Action] = {
     "NODE_TLS_REJECT_UNAUTHORIZED": TLS_OFF_IF_FALSE,
     "NPM_CONFIG_STRICT_SSL": TLS_OFF_IF_FALSE,
     "GIT_SSL_NO_VERIFY": TLS_OFF_IF_TRUE,
-    "GONOSUMDB": INTEGRITY_OFF_FOR, "GOINSECURE": INTEGRITY_OFF_FOR,
+    "GONOSUMDB": INTEGRITY_OFF_FOR, "GOINSECURE": TLS_OFF_FOR,
     "GONOSUMCHECK": Action("integrity_off", True, "true"),
     "GOSUMDB": Action("integrity_off", True, "off"),
     "PIP_NO_INDEX": Action("no_index", True, "true"),
@@ -587,15 +681,25 @@ SOURCE_CONFIG_FILES = frozenset({
     "sources.list",
 })
 
-# Registries a package manager uses when nothing is configured. Hosts are matched exactly.
-DEFAULT_INDEX_HOSTS = frozenset({
-    "pypi.org", "files.pythonhosted.org", "registry.npmjs.org", "registry.yarnpkg.com",
-    "proxy.golang.org", "crates.io", "index.crates.io", "rubygems.org",
-    "repo.anaconda.com", "conda.anaconda.org",
-})
-DEFAULT_INDEX_NAMES = frozenset({
-    "psgallery", "crates-io", "conda-forge", "defaults", "winget", "msstore", "direct", "off",
-})
+# Defaults are scoped to the package manager/setting; hosts are matched exactly.
+_PYTHON_INDEX_HOSTS = frozenset({"pypi.org", "files.pythonhosted.org"})
+DEFAULT_INDEXES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    **{name: (_PYTHON_INDEX_HOSTS, frozenset())
+       for name in ("pip", "pipx", "uv", "uvx", "poetry", "pipenv")},
+    "npm": (frozenset({"registry.npmjs.org"}), frozenset()),
+    "yarn": (frozenset({"registry.yarnpkg.com"}), frozenset()),
+    "pnpm": (frozenset({"registry.npmjs.org"}), frozenset()),
+    "bun": (frozenset({"registry.npmjs.org"}), frozenset()),
+    "go": (frozenset({"proxy.golang.org"}), frozenset()),
+    "cargo": (frozenset({"crates.io", "index.crates.io"}), frozenset({"crates-io"})),
+    "gem": (frozenset({"rubygems.org"}), frozenset()),
+    "conda": (frozenset({"repo.anaconda.com", "conda.anaconda.org"}),
+              frozenset({"conda-forge", "defaults"})),
+    "mamba": (frozenset({"repo.anaconda.com", "conda.anaconda.org"}),
+              frozenset({"conda-forge", "defaults"})),
+    "winget": (frozenset(), frozenset({"winget", "msstore"})),
+    "install-module": (frozenset(), frozenset({"psgallery"})),
+}
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 # Programs ALR16 recognises besides package managers.
@@ -653,15 +757,26 @@ def _is_plaintext(value: str) -> bool:
     return scheme == "http" and host not in LOOPBACK_HOSTS
 
 
-def _is_default_index(entry: str) -> bool:
-    # Hosts are compared exactly, so pypi.org.example.net is not treated as pypi.org.
+def _index_context(name: str) -> str:
+    lowered = name.lower()
+    if lowered.startswith(("pip_", "uv_")):
+        return "pip" if lowered.startswith("pip_") else "uv"
+    if lowered == "goproxy":
+        return "go"
+    if lowered == "npm_config_registry":
+        return "npm"
+    return lowered
+
+
+def _is_default_index(entry: str, context: str) -> bool:
+    hosts, names = DEFAULT_INDEXES.get(context, (frozenset(), frozenset()))
     host = _url_parts(entry)[1]
     if host:
-        return host in DEFAULT_INDEX_HOSTS
-    return entry.lower() in DEFAULT_INDEX_NAMES
+        return host in hosts
+    return entry.lower() in names
 
 
-def _index_signals(value: str, *, extra: bool) -> list[str]:
+def _index_signals(value: str, *, extra: bool, context: str) -> list[str]:
     """Signals for a package index setting. ``value`` may list several indexes."""
     signals: list[str] = []
     entries = [entry for entry in _LIST_SEPARATOR.split(value.strip()) if entry]
@@ -669,17 +784,17 @@ def _index_signals(value: str, *, extra: bool) -> list[str]:
         signals.append("plaintext_http_source")
     if extra:
         signals.append("extra_index_url")  # a second index is the dependency-confusion shape
-    elif not entries or not all(_is_default_index(entry) for entry in entries):
+    elif not entries or not all(_is_default_index(entry, context) for entry in entries):
         signals.append("custom_index")
     return signals
 
 
-def _effect_signals(action: Action, value: str) -> list[str]:
+def _effect_signals(action: Action, value: str, *, context: str = "") -> list[str]:
     """Signals for one source or verification setting, whatever syntax supplied it."""
     if not _WHEN[action.when](value):
         return []
     if action.effect in ("index", "extra_index"):
-        return _index_signals(value, extra=action.effect == "extra_index")
+        return _index_signals(value, extra=action.effect == "extra_index", context=context)
     signal = _EFFECT_SIGNAL.get(action.effect)
     return [signal] if signal else []
 
@@ -743,12 +858,18 @@ def _pin_state(spec: str, style: str) -> str:
     if style == "gem":
         _, colon, version = spec.partition(":")
         return PINNED if colon and _EXACT_VERSION.fullmatch(version) else UNPINNED
+    if style == "cargo":
+        return PINNED if _FULL_SEMVER.fullmatch(spec) or _COMMIT.fullmatch(spec) else RANGE
     return UNPINNED  # "flag": only a PIN option fixes the version
 
 
-def _spec_signals(spec: str, manager: Manager) -> list[str]:
+def _spec_signals(spec: str, manager: Manager, scan: Scan | None = None) -> list[str]:
     """Signals for one package spec: where it comes from, then whether it is pinned."""
-    target = spec[:MAX_SPEC_CHARS].strip()
+    if len(spec) > MAX_SPEC_CHARS:
+        if scan is not None:
+            scan.notes.add("spec_limit")
+        return []
+    target = spec.strip()
     reference = _DIRECT_REFERENCE.search(target)
     if reference and reference.start() > 0:
         target = reference.group(1)
@@ -832,15 +953,21 @@ _B64_RUN = re.compile(
 _HEX_RUN = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}){24,}(?![0-9A-Fa-f])")
 
 
-def _decode(run: str) -> str | None:
-    """Readable text hidden in a Base64 or hex run, or None."""
+class _DecodeLimit(Enum):
+    TOO_LARGE = "too_large"
+
+
+def _decode(run: str) -> str | _DecodeLimit | None:
+    """Readable text hidden in a Base64 or hex run, a size limit, or invalid text."""
     for decoder in (bytes.fromhex, lambda value: base64.b64decode(value, validate=True)):
         try:
             data = decoder(run)
         except (ValueError, binascii.Error):
             continue
-        if not data or len(data) > MAX_DECODED_CHARS:
+        if not data:
             continue
+        if len(data) > MAX_DECODED_CHARS:
+            return _DecodeLimit.TOO_LARGE
         # PowerShell -EncodedCommand is UTF-16LE: every second byte of ASCII text is zero.
         utf16 = len(data) % 2 == 0 and data[1::2].count(0) == len(data) // 2
         try:
@@ -902,6 +1029,17 @@ def _remember_scripts(origin: Origin, names: Iterable[str]) -> bool:
             _writes.popleft()
             dropped = True
     return dropped
+
+
+def _forget_scripts(origin: Origin, paths: Iterable[str]) -> None:
+    removed = set(paths)
+    if not removed:
+        return
+    with _lock:
+        retained = [(owner, path) for owner, path in _writes
+                    if owner != origin or path not in removed]
+        _writes.clear()
+        _writes.extend(retained)
 
 
 def _written_scripts(origin: Origin) -> frozenset[str]:
@@ -967,8 +1105,48 @@ _CODE_EXEC = re.compile(
 )
 
 
-def _code_installs(code: str) -> bool:
+def _python_code_installs(code: str, scan: Scan | None = None) -> bool:
+    try:
+        tree = ast.parse(code[:MAX_TOTAL_CHARS])
+    except SyntaxError:
+        if scan is not None:
+            scan.notes.add("code_unparseable")
+        return False
+
+    def call_name(node: ast.expr) -> str:
+        parts: list[str] = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        return ".".join(reversed(parts))
+
+    process_calls = {
+        "subprocess.run", "subprocess.Popen", "subprocess.call", "subprocess.check_call",
+        "subprocess.check_output", "os.system", "os.popen",
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        name = call_name(node.func)
+        if name not in process_calls and not name.startswith("pip.main"):
+            continue
+        values = [child.value for child in ast.walk(node.args[0])
+                  if isinstance(child, ast.Constant) and isinstance(child.value, str)]
+        text = " ".join(values)
+        if name.startswith("pip.main"):
+            if any(word.lower() == "install" for word in text.split()):
+                return True
+        elif _CODE_INSTALL.search(text):
+            return True
+    return False
+
+
+def _code_installs(code: str, *, python: bool = False, scan: Scan | None = None) -> bool:
     code = code[:MAX_TOTAL_CHARS]
+    if python:
+        return _python_code_installs(code, scan)
     return bool(_CODE_INSTALL.search(code) and _CODE_EXEC.search(code))
 
 
@@ -1059,11 +1237,17 @@ class Analyser:
             if upstream and _runs_stdin(program, args):
                 self._piped_into_interpreter(upstream, depth)
                 upstream.clear()
+            handled_substitutions: list[tuple[str, str]] = []
             if argv:
                 self._writes_source_config(program, argv, redirect_targets)
-                self._command(program, argv, command, depth)
-            for _, body in command.substitutions:
-                self.text(body, depth + 1)
+                handled_substitutions = self._command(program, argv, command, depth)
+            if command.heredoc and _runs_stdin(program, args):
+                self.text(command.heredoc, depth + 1)
+            for substitution in command.substitutions:
+                if substitution in handled_substitutions:
+                    handled_substitutions.remove(substitution)
+                else:
+                    self.text(substitution[1], depth + 1)
             if command.operator == "|":
                 upstream.append((program, args))
             else:
@@ -1073,7 +1257,7 @@ class Analyser:
         for name, value in assignments.items():
             action = ENV_SETTINGS.get(name.upper())
             if action is not None:
-                self._signal(_effect_signals(action, value), name)
+                self._signal(_effect_signals(action, value, context=_index_context(name)), name)
 
     def hidden(self, text: str, depth: int) -> bool:
         """Analyse decoded text. Anything found inside it is reported as obfuscated."""
@@ -1086,14 +1270,15 @@ class Analyser:
 
     # -- one command ------------------------------------------------------------------------
 
-    def _command(self, program: str, argv: Sequence[str], command: Command, depth: int) -> None:
+    def _command(self, program: str, argv: Sequence[str], command: Command, depth: int
+                 ) -> list[tuple[str, str]]:
         args = argv[1:]
         self._runs_written_script(program, argv)
         self.environment(_exported(argv[0], program, args))
         if program in MANAGERS:
             self._manager(program, args)
         elif program in SHELLS:
-            self._shell(args, command, depth)
+            return self._shell(args, command, depth)
         elif program in POWERSHELLS:
             self._powershell(args, depth)
         elif program == "cmd":
@@ -1111,6 +1296,7 @@ class Analyser:
             self._interpreter(program, args)
         elif program in SOURCE_CONFIG_PROGRAMS:
             self.scan.add("persistent_source_config_change", self.path, program)
+        return []
 
     def _signal(self, signals: Iterable[str], detail: str) -> None:
         for signal in signals:
@@ -1128,11 +1314,10 @@ class Analyser:
     def _runs_written_script(self, program: str, argv: Sequence[str]) -> None:
         if not self._written:
             return
-        candidates = argv[1:] if program in SCRIPT_RUNNERS else argv[:1]
-        for word in candidates:
-            if basename(word) in self._written:
-                self.scan.add("write_then_execute_install", self.path, basename(word))
-                return
+        candidate = _script_operand(program, argv[1:]) if program in SCRIPT_RUNNERS else argv[0]
+        normalized = _normalize_path(candidate) if candidate else ""
+        if normalized and normalized in self._written:
+            self.scan.add("write_then_execute_install", self.path, normalized)
 
     def _writes_source_config(self, program: str, argv: Sequence[str],
                               redirect_targets: Sequence[str]) -> None:
@@ -1145,17 +1330,20 @@ class Analyser:
 
     # -- shells and interpreters ------------------------------------------------------------
 
-    def _shell(self, args: Sequence[str], command: Command, depth: int) -> None:
+    def _shell(self, args: Sequence[str], command: Command, depth: int
+               ) -> list[tuple[str, str]]:
         for index, word in enumerate(args):
             if _SHELL_COMMAND_FLAG.fullmatch(word) or word == "<<<":
                 script = args[index + 1] if index + 1 < len(args) else ""
                 if _fetches(script):
                     self.scan.add("fetch_pipe_to_shell", self.path, "shell")
                 self.text(script, depth + 1)
-                return
+                nested, _ = lex(script)
+                return [item for nested_command in nested for item in nested_command.substitutions]
             if not word.startswith("-"):
                 break  # a script file; _runs_written_script has looked at it
         self._process_substitution(command)
+        return []
 
     def _process_substitution(self, command: Command) -> None:
         for kind, body in command.substitutions:  # bash <(curl ...), source <(curl ...)
@@ -1177,6 +1365,8 @@ class Analyser:
                 decoded = _decode(args[index]) if index < len(args) else None
                 if decoded is None:
                     self.scan.notes.add("encoded_command_unreadable")
+                elif decoded is _DecodeLimit.TOO_LARGE:
+                    self.scan.notes.add("decode_limit")
                 else:
                     self.hidden(decoded, depth)
                 return
@@ -1206,7 +1396,7 @@ class Analyser:
         for index, word in enumerate(args):
             value = args[index + 1] if index + 1 < len(args) else ""
             if word in CODE_FLAGS[program]:
-                if _code_installs(value):
+                if _code_installs(value, python=program in ("python", "py"), scan=self.scan):
                     self.scan.add("install_through_code", self.path, program)
                 return
             if word == "-m" and program in ("python", "py"):
@@ -1219,14 +1409,14 @@ class Analyser:
     # -- package managers -------------------------------------------------------------------
 
     def _manager(self, name: str, args: Sequence[str]) -> None:
-        if name in CONFIG_MANAGERS and self._config_change(args):
+        if name in CONFIG_MANAGERS and self._config_change(name, args):
             return
         manager = MANAGERS[name]
         matched = _match_verb(manager, args)
         if matched is not None:
-            self._install(manager, *matched)
+            self._install(name, manager, *matched)
 
-    def _config_change(self, args: Sequence[str]) -> bool:
+    def _config_change(self, name: str, args: Sequence[str]) -> bool:
         """``pip config set global.index-url URL`` and the npm, yarn and pnpm forms."""
         words = [arg for arg in args if not arg.startswith("-")]
         lowered = [word.lower() for word in words[:2]]
@@ -1240,16 +1430,17 @@ class Analyser:
         if not equals:
             value = " ".join(words[1:])
         action = CONFIG_KEYS.get(key.lower().rsplit(".", 1)[-1])
-        signals = _effect_signals(action, value) if action else []
+        signals = _effect_signals(action, value, context=name) if action else []
         if signals:  # setting the default registry again is not a change worth reporting
             self._signal([*signals, "persistent_source_config_change"], key)
         return True
 
-    def _install(self, manager: Manager, mode: str, before: Sequence[str],
+    def _install(self, manager_name: str, manager: Manager, mode: str, before: Sequence[str],
                  after: Sequence[str]) -> None:
         positionals: list[str] = []
         option_specs: list[str] = []
         requirements: list[str] = []
+        version_selectors: list[str] = []
         directives: set[str] = set()
         # Options given before the verb count; positionals there are option values.
         global_options = [item for item in _options(manager, before) if item[0] is not None]
@@ -1262,10 +1453,12 @@ class Analyser:
                 option_specs.append(value)
             elif action.effect == "requirements":
                 requirements.append(value)
+            elif action.effect == "version":
+                version_selectors.append(value)
             elif action.effect in ("hashed", "locked", "pin", "yes"):
                 directives.add(action.effect)
             else:
-                self._signal(_effect_signals(action, value), action.effect)
+                self._signal(_effect_signals(action, value, context=manager_name), action.effect)
 
         runs_package = mode in (RUN, RUN_LOCAL)
         if runs_package:
@@ -1288,10 +1481,18 @@ class Analyser:
         if len(specs) > MAX_PACKAGES:
             self.scan.notes.add("package_limit")
         version_fixed = bool(directives & {"hashed", "pin"})
+        if manager_name == "cargo" and version_selectors:
+            selector = version_selectors[-1]
+            selector_state = _pin_state(selector, "cargo")
+            version_fixed = selector_state == PINNED
+            if selector_state == RANGE:
+                self.scan.add("version_range", self.path, selector)
         for spec in specs[:MAX_PACKAGES]:
-            for signal in _spec_signals(spec, manager):
+            for signal in _spec_signals(spec, manager, self.scan):
                 if SIGNALS[signal][0] == PINNING:
                     if version_fixed:
+                        continue
+                    if manager_name == "cargo" and version_selectors:
                         continue
                     if runs_package:
                         signal = "ephemeral_execute_unpinned"
@@ -1361,16 +1562,21 @@ class Field:
     argv: tuple[str, ...] | None = None  # set when the value was a complete array of words
 
 
-def _collect(arguments: Mapping[str, Any], scan: Scan) -> list[Field]:
+def _collect(arguments: Mapping[str, Any], scan: Scan
+             ) -> tuple[list[Field], dict[str, str]]:
     """Flatten the arguments into fields, within the per-call budgets."""
     fields: list[Field] = []
+    environment: dict[str, str] = {}
     budget = MAX_TOTAL_CHARS
+    string_count = 0
+    visited = 0
 
-    def take(text: str) -> str:
-        nonlocal budget
-        if len(fields) >= MAX_STRINGS:
+    def take(text: str) -> str | None:
+        nonlocal budget, string_count
+        if string_count >= MAX_STRINGS:
             scan.notes.add("string_limit")
-            return ""
+            return None
+        string_count += 1
         if len(text) > budget:
             scan.notes.add("character_budget")
             text = text[:budget]
@@ -1378,17 +1584,55 @@ def _collect(arguments: Mapping[str, Any], scan: Scan) -> list[Field]:
         return text
 
     def walk(value: Any, path: str, key: str, depth: int) -> None:
+        nonlocal visited
+        visited += 1
+        if visited > MAX_TOTAL_CHARS:
+            scan.notes.add("argument_limit")
+            return
         if isinstance(value, str):
             text = take(value)
             if text:
                 fields.append(Field(path, key, text))
-        elif isinstance(value, list) and value and all(isinstance(item, str) for item in value):
+        elif isinstance(value, list) and value and isinstance(value[0], str):
             lines = key in LINE_LIST_KEYS
-            joined = "\n".join(value) if lines else " ".join(value)
-            text = take(joined)
-            if text:
-                whole = not lines and len(text) == len(joined)
-                fields.append(Field(path, key, text, tuple(value) if whole else None))
+            separator = "\n" if lines else " "
+            parts: list[str] = []
+            original: list[str] = []
+            complete = True
+            items = iter(enumerate(value))
+            for index, item in items:
+                if isinstance(item, str):
+                    text = take(item)
+                    if text is None:
+                        complete = False
+                        break
+                    parts.append(text)
+                    original.append(item)
+                    if text != item:
+                        complete = False
+                        break
+                    if budget == 0:
+                        try:
+                            next(items)
+                        except StopIteration:
+                            pass
+                        else:
+                            scan.notes.add("character_budget")
+                            complete = False
+                        break
+                    continue
+                complete = False
+                if parts:
+                    fields.append(Field(path, key, separator.join(parts)))
+                    parts.clear()
+                walk(item, f"{path}.{index}", key, depth + 1)
+                for later_index, child in items:
+                    walk(child, f"{path}.{later_index}", key, depth + 1)
+                break
+            if parts:
+                joined = separator.join(parts)
+                argv = tuple(original) if complete and not lines else None
+                fields.append(Field(path, key, joined, argv))
         elif isinstance(value, (Mapping, list)):
             if depth >= MAX_ARGUMENT_DEPTH:
                 scan.notes.add("depth_limit")
@@ -1396,11 +1640,34 @@ def _collect(arguments: Mapping[str, Any], scan: Scan) -> list[Field]:
             items = value.items() if isinstance(value, Mapping) else enumerate(value)
             for name, child in items:
                 walk(child, f"{path}.{safe(name, 60)}", key, depth + 1)
+                if visited > MAX_TOTAL_CHARS or budget == 0:
+                    scan.notes.add("argument_limit" if visited > MAX_TOTAL_CHARS
+                                   else "character_budget")
+                    break
         # Numbers, booleans and null carry no command text.
 
     for name, value in arguments.items():
+        if str(name).lower() in ENV_KEYS and isinstance(value, Mapping):
+            for env_name, env_value in value.items():
+                visited += 1
+                if visited > MAX_TOTAL_CHARS:
+                    scan.notes.add("argument_limit")
+                    break
+                if not isinstance(env_value, str):
+                    continue
+                text = take(env_value)
+                if text is None:
+                    break
+                environment[str(env_name)] = text
+                if budget == 0:
+                    scan.notes.add("character_budget")
+                    break
+            continue
         walk(value, f"arguments.{safe(name, 60)}", str(name).lower(), 0)
-    return fields
+        if visited > MAX_TOTAL_CHARS or budget == 0:
+            scan.notes.add("argument_limit" if visited > MAX_TOTAL_CHARS else "character_budget")
+            break
+    return fields, environment
 
 
 def _scan_encoded(text: str, analyser: Analyser) -> None:
@@ -1416,6 +1683,9 @@ def _scan_encoded(text: str, analyser: Analyser) -> None:
                     return
                 examined += 1
                 decoded = _decode(match.group())
+                if decoded is _DecodeLimit.TOO_LARGE:
+                    analyser.scan.notes.add("decode_limit")
+                    continue
                 if decoded is None or decoded in seen:
                     continue
                 seen.add(decoded)
