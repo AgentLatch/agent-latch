@@ -1,7 +1,10 @@
 # Log connectors: design
 
-> **Status: accepted design, not implemented yet.** This document defines how AgentLatch sends
-> runtime events to other destinations. Only what is marked **today** exists in the code. The
+> **Status: accepted design, partly implemented.** This document defines how AgentLatch sends
+> runtime events to other destinations. The contract module `runtime/connectors.py`, the
+> `--connector`, `--connector-option` and `--connector-config` flags, the `connectors` command and
+> the importer's per-connector delivery exist (see `docs/runtime.md`, "Send events to a
+> connector"). No connector package ships yet, and the `StoreConnector` adapter is not built. The
 > existing SQLite store and the `--database` flag stay exactly as they are (see
 > [Keeping today's behavior untouched](#7-keeping-todays-behavior-untouched)).
 
@@ -379,7 +382,9 @@ postgres = "agentlatch_connector_postgres:create"
 `create` is the `ConnectorFactory`. The entry point name (`postgres`) is the **type** the
 operator selects. Two installed packages may not register the same type, and the importer exits
 `2` if they do rather than picking one. `agent-latch-runtime connectors` lists the installed
-types with their package version and `CONNECTOR_API`, without loading them.
+types with their package and version, without loading them. A connector's `CONNECTOR_API` is
+only known once its package is imported, so it is checked when the connector is selected: a value
+outside the supported range exits `2` and says which side to upgrade.
 
 ### 6.2 How configuration reaches a connector
 
@@ -429,9 +434,12 @@ connectors/
     CHANGELOG.md
     src/agentlatch_connector_jsonl_archive/__init__.py
     tests/
-  postgres/                         # later
   otel/                             # later
 ```
+
+The PostgreSQL store is a **paid** connector, so it is not in this folder. It lives in a separate
+private repository with the same layout and follows this contract unchanged. How paid packages are
+licensed and distributed is in [`connector-licensing.md`](connector-licensing.md).
 
 Why one folder rather than separate repositories or the main package:
 
