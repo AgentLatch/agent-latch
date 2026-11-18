@@ -39,6 +39,10 @@ def masked_record(record: Mapping[str, Any], max_chars: int) -> dict[str, Any]:
     list of ``{"path", "kind"}`` entries (paths relative to the payload body, for example
     ``$/arguments/api_key``). The entries name where a secret-like value was and what shape it
     had; they never hold any part of the value. Old records without the key still load.
+
+    At most ``MAX_MASKED_LOCATIONS`` entries are kept. When more spots were masked, the record
+    also carries ``masked_truncated: true`` so a reader can tell "more were masked" from "a
+    literal [REDACTED] marker". The extra spots are not listed.
     """
     locations: list[dict[str, str]] = []
     masked = mask_value(dict(record), max_chars, locations=locations)
@@ -50,6 +54,8 @@ def masked_record(record: Mapping[str, Any], max_chars: int) -> dict[str, Any]:
     ]
     if spots and isinstance(masked.get("payload"), dict):
         masked["payload"]["masked"] = spots[:MAX_MASKED_LOCATIONS]
+        if len(spots) > MAX_MASKED_LOCATIONS:
+            masked["payload"]["masked_truncated"] = True
     return masked
 
 

@@ -291,7 +291,7 @@ def test_operator_allowlist_turns_an_expected_case_into_pass_with_a_note() -> No
 def test_missing_payloads_yield_a_coverage_record_not_a_pass() -> None:
     found = _findings(_event("request", None))
     assert [(f["rule_id"], f["outcome"], f["is_finding"]) for f in found] == [
-        ("ALR10-R90", "INCONCLUSIVE", True)
+        ("ALR10-090", "INCONCLUSIVE", True)
     ]
     assert _findings({"method": "tools/list", "stage": "response", "payload": None}) == []
 

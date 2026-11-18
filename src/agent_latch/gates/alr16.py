@@ -54,6 +54,7 @@ CATEGORIES = ("install_intent", "source_class", "pinning_integrity", "sequence_e
 RULE_IDS = {name: f"ALR16-{i:03d}" for i, name in enumerate(CATEGORIES, 1)}
 RULE_COVERAGE = "ALR16-090"
 RULE_SUMMARY = "ALR16-099"
+POLICY_KEYS = ("suppressions", "gates", "packages", "indexes", "mode")  # operator policy keys read
 
 FLAGS = re.IGNORECASE | re.DOTALL
 

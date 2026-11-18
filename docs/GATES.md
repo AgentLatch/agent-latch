@@ -13,7 +13,7 @@ A gate is a security outcome AgentLatch checks for, such as "destructive actions
 | Gate | Name | Outcome | Detectors | OWASP Agentic | EU AI Act | Status |
 |---|---|---|---|---|---|---|
 | `ALR01` | Prompt integrity | System prompts carry no injected instructions or raw user input | `PRM001`, `PRM002`, `ALR01-S01` | `ASI01` | Art. 15 | partial |
-| `ALR02` | Tool definition integrity | Tool definitions are pinned and changes are detected | none | `ASI02`, `ASI04` | Art. 15 | no checks yet |
+| `ALR02` | Tool definition integrity | Tool definitions are pinned and changes are detected | `ALR02-R01`, `ALR02-R02`, `ALR02-R03` | `ASI02`, `ASI04` | Art. 15 | preview (runtime) |
 | `ALR03` | Tool and agent endpoint trust | Remote tools, MCP servers and peer agents are identified and authenticated | `MAN003`, `ALR03-S01`, `ALR03-001`, `ALR03-002`, `ALR03-003` | `ASI02`, `ASI03`, `ASI04`, `ASI07` | Art. 15 | partial |
 | `ALR04` | Tool schema injection | Tool definitions contain no instruction-like or hidden content | `ALR04-001`, `ALR04-002`, `ALR04-003`, `ALR04-004`, `ALR04-005`, `ALR04-006`, `ALR04-007`, `ALR04-008`, `ALR04-009` | `ASI01`, `ASI02`, `ASI04` | Art. 15 | preview (runtime) |
 | `ALR05` | Untrusted content isolation | Web, HTTP and tool output reaches the model fenced as data | `AG003`, `ALR05-R01`, `ALR05-R02`, `ALR05-R03` | `ASI01` | Art. 15 | partial |
@@ -38,6 +38,9 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `PRM001` | `ALR01` | static | Injected text inside a prompt the author ships breaks the prompt itself | `ASI01` |
 | `PRM002` | `ALR01` | static | User text placed in the system prompt gains system-level authority over the agent's goal | `ASI01` |
 | `ALR01-S01` | `ALR01` | static | Invisible or direction-control characters hide instructions from the reviewer while the model still reads them | `ASI01` |
+| `ALR02-R01` | `ALR02` | runtime | A definition that changes after it was listed lets a server act trusted first and rewrite what the tool tells the model later | `ASI02`, `ASI04` |
+| `ALR02-R02` | `ALR02` | runtime | A definition that differs from the digest the operator reviewed is not the tool that was approved | `ASI02`, `ASI04` |
+| `ALR02-R03` | `ALR02` | runtime | A tool missing from the operator's pins was never reviewed | `ASI02`, `ASI04` |
 | `MAN003` | `ALR03` | manifest | The agent cannot tell a real remote tool from an impostor if the endpoint is unauthenticated | `ASI03`, `ASI02` |
 | `ALR03-S01` | `ALR03` | static | A server on every interface lets any reachable peer call the agent and its tools | `ASI03`, `ASI07` |
 | `ALR03-001` | `ALR03` | runtime | An endpoint that does not identify itself cannot be told apart from an impostor | `ASI02`, `ASI03`, `ASI04`, `ASI07` |
@@ -89,7 +92,7 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `ALR16-003` | `ALR16` | runtime | The install is unpinned, hashless or a lookalike name, so its content is not fixed | `ASI04`, `ASI05` |
 | `ALR16-004` | `ALR16` | runtime | The install arrives through a pipe-to-shell, chained command or write-then-run sequence | `ASI04`, `ASI05` |
 
-Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR03-090` alr03 could not fully identify an endpoint from its handshake (coverage); `ALR03-099` alr03 per-scan summary; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary; `ALR16-090` alr16 could not fully inspect a tool-call argument (coverage); `ALR16-099` alr16 per-scan summary; `ALR05-R90` alr05 could not inspect tool output (no payload recorded, or output was cut); `ALR10-R90` alr10 saw a tool call but no payload record (coverage).
+Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR03-090` alr03 could not fully identify an endpoint from its handshake (coverage); `ALR03-099` alr03 per-scan summary; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary; `ALR16-090` alr16 could not fully inspect a tool-call argument (coverage); `ALR16-099` alr16 per-scan summary; `ALR02-090` alr02 could not compare tool definitions (no payload recorded, or bad pins); `ALR02-099` alr02 per-list summary; `ALR05-090` alr05 could not inspect tool output (no payload recorded, or output was cut); `ALR10-090` alr10 saw a tool call but no payload record (coverage).
 
 ## Framework references
 

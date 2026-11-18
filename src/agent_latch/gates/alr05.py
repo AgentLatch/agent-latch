@@ -2,7 +2,7 @@
 
 Reads ``tools/call`` responses (and tool error messages) from the payload record — the data an
 MCP server returns to the agent — and flags content that appears to direct or override the
-agent's behaviour. Three detectors share the text engine in ``agent_latch.gates._text``:
+agent's behaviour. Three detectors share the text engine in ``agent_latch.runtime.text.engine``:
 
 - ``ALR05-R01`` instruction-like text: override phrases, forged authority or conversation
   turns, requests to hide actions from the user, instructions to read sensitive files.
@@ -16,7 +16,7 @@ risk, so a finding records whether the tool declares ``openWorldHint`` or its na
 outside-content tool (``outside_content_context``). That context is self-declared by the server,
 so it never skips a check and never lowers a finding: severity follows the outcome alone.
 
-Coverage (``ALR05-R90``). Payload records exist only when the proxy runs with ``--payloads``;
+Coverage (``ALR05-090``). Payload records exist only when the proxy runs with ``--payloads``;
 without them there is nothing to scan, and the gate emits one coverage record per run, not per
 event. Output cut by the payload file's per-string limit (``--payload-max-chars``) gets one
 coverage record per tool per run.
@@ -53,7 +53,7 @@ from threading import RLock
 from typing import Any
 
 from agent_latch.catalog import gate
-from agent_latch.gates._text import (
+from agent_latch.runtime.text.engine import (
     BIDI,
     CODE_FENCE,
     CORRELATIONS,
@@ -78,7 +78,7 @@ from agent_latch.gates._text import (
     spans,
     walk,
 )
-from agent_latch.gates._text import verdict as _text_verdict
+from agent_latch.runtime.text.engine import verdict as _text_verdict
 
 GATE_ID = "ALR05"
 # Every ALR05 check cites its gate's OWASP categories (agent_latch.catalog).
@@ -90,7 +90,8 @@ CATEGORIES = (
     "action_steering_output",
 )
 RULE_IDS = {name: f"ALR05-R{i:02d}" for i, name in enumerate(CATEGORIES, 1)}
-RULE_COVERAGE = "ALR05-R90"
+RULE_COVERAGE = "ALR05-090"
+POLICY_KEYS = ("suppressions",)  # top-level operator policy keys this gate reads
 # category -> (fail_at, review_at), tuned on output data (tests/test_alr05_eval.py). Output text is
 # longer and noisier than tool definitions, so these are set separately from ALR04's.
 RULE_THRESHOLDS = {
@@ -117,6 +118,12 @@ CHAT_TURN = re.compile(
 # "open/visit/go to https://..." — the output points the model at a URL.
 OPEN_URL = rx(r"\b(?:open|visit|browse|navigate\s+to|go\s+to|follow\s+(?:this|the)\s+link)\b"
               r".{0,60}(?:https?://|ftp://)")
+# Wording of ordinary advice to a human reader ("send feedback to ... or open https://..."). It
+# only mutes the weak "open a URL" signal, and only when nothing stronger (override or directive
+# wording, secrets) is in the same clause. A destination plus a sensitive object still fires.
+HUMAN_CONTACT = rx(r"\b(?:feedback|questions?|comments?|suggestions?|inquir(?:y|ies)|"
+                   r"support|help(?:\s*desk)?|contact(?:\s+us)?|bug\s+reports?|track(?:ing)?|"
+                   r"refunds?|orders?|tickets?|documentation|docs)\b")
 # Bidi controls that reorder rendering (embeddings, overrides, isolates). Plain direction marks
 # (LRM, RLM, ALM) are excluded: they appear in ordinary mixed-script text.
 _BIDI_STRONG = BIDI - {"\u200e", "\u200f", "\u061c"}
@@ -239,7 +246,10 @@ def gather(field: Field, siblings: list[str], notes: set[str]) -> list[Evidence]
                 add("action_steering_output", "content", False, .72,
                     "possible_sensitive_transfer", source, quoted)
 
-            if OPEN_URL.search(part) and flags & {"directive", "override", "transfer"}:
+            human_advice = (HUMAN_CONTACT.search(part) is not None
+                            and not flags & {"directive", "override", "sensitive", "secrecy"})
+            if (OPEN_URL.search(part) and flags & {"directive", "override", "transfer"}
+                    and not human_advice):
                 add("action_steering_output", "content", False, .70,
                     "url_open_directive", source, quoted)
 

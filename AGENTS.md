@@ -59,7 +59,7 @@ A gate is a security outcome (for example `ALR09` Human approval for sensitive a
 - `docs/GATES.md` is generated: `python -I -m agent_latch.catalog > docs/GATES.md`. A test fails when it is out of date.
 - Framework mappings are informational. Never claim compliance with the EU AI Act, ISO/IEC 42001 or OWASP.
 - `ALR15` (tamper-evident audit trail, `ASI10`) is verified by `runtime/ledger/verify.py`, not by a module in `gates/`. Its detectors are `ALR15-R01` (the six verdicts, for the trace ledger and the event store) and `ALR15-R02` (an event store that does not seal its rows, so nothing can be checked). A gate whose evidence is a whole-file property, like this one, belongs in the catalog and in the report, not in the per-event plugin loader.
-- `agent_latch/gates/` holds runtime gate plugins only (one module per gate, `GATE_ID` = the gate ID). Keep the catalog out of that package: the importer loads every module in it as a plugin.
+- `agent_latch/gates/` holds runtime gate plugins only (one module per gate, `GATE_ID` = the gate ID, `POLICY_KEYS` = the operator policy keys it reads). Keep the catalog and shared helpers out of that package: the importer loads every module in it as a plugin. Shared machinery for gates lives in `agent_latch/runtime/text/` (a test fails if `gates/` holds a non-gate module), and a gate never imports from another gate.
 
 ## Repository layout
 
@@ -88,12 +88,13 @@ src/agent_latch/
   action_summary.py # GitHub Action job summary and SARIF URI rewrite (python -I -m agent_latch.action_summary)
   gates/          # runtime gate plugins discovered by the importer (monitor only, never block)
     __init__.py
-    _text.py      # shared text engine (normalisation, decode layers, phrase families, walk, verdict); not a gate
+    alr02.py      # ALR02: tool-definition change detection and operator pins (preview; reports findings only)
     alr03.py      # ALR03: endpoint trust from the recorded handshake: identification, identity change, name impersonation (preview; reports findings only)
     alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; reports findings only)
     alr05.py      # ALR05: instruction-like content in MCP tool results (preview; review signals only)
     alr10.py      # ALR10: secret-like values crossing the tool boundary (preview; reads masked payloads only)
   runtime/        # MCP traffic recording (preview, monitor only; `[runtime]` extra). Logs go to runtime-logs/, not here.
+    text/engine.py # shared text engine for ALR04/ALR05 (normalisation, decode layers, phrase families, walk, verdict, digest/safe); not a gate
     events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
     redact.py     # hashes, secret masking, short excerpts, mask_value for the opt-in payloads file; masked-location (path+kind) metadata
     trace.py      # TraceLog: one redacted JSONL record per MCP message (agentlatch.runtime.trace/1)
@@ -124,6 +125,8 @@ tests/test_runtime_importer.py # normalizer, importer and import-logs CLI tests 
 tests/test_audit_store.py      # sealed append-only store: tampering, anchor, crash recovery, agent path, second OS user
 tests/store_contract.py        # assert_store_is_append_only: the contract any sealed store must pass
 tests/test_runtime_middleware.py # proxy and demo end-to-end tests (skipped without the [runtime] extra)
+tests/test_alr02.py            # ALR02 tool-definition integrity: change detection, operator pins, coverage
+tests/test_policy_and_masking.py # --policy through import-logs, unknown-key warning, masked_truncated, ALR04/ALR05 over masked payloads, gates/ layout
 tests/test_alr03.py            # ALR03 endpoint-trust gate: identification and identity change
 tests/test_alr04.py            # ALR04 baseline against the synthetic normalized events
 tests/test_alr05.py            # ALR05 tool-output checks: positive, benign and coverage cases
@@ -248,7 +251,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 
 ### Runtime gates
 
-Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per gate, `GATE_ID` = the gate ID, `evaluate(event)`), discovered by the importer and run on every normalized event. They report findings and never block. Today four ship: `alr03.py` (endpoint trust from the recorded handshake: server identification `ALR03-001`, identity change `ALR03-002`, name impersonation `ALR03-003` — non-regex string similarity) `alr04.py` (tool schema injection), `alr05.py` (instruction-like content in tool results) and `alr10.py` (secret-like values crossing the tool boundary, from masked payloads only). Register a runtime gate's detectors in its gate's `detectors` group in `catalog.GATES` (IDs `ALRnn-0nn`), add its coverage/summary IDs to `catalog.DIAGNOSTICS`, and regenerate `docs/GATES.md`.
+Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per gate, `GATE_ID` = the gate ID, `evaluate(event)`), discovered by the importer and run on every normalized event. They report findings and never block. Today six ship: `alr02.py` (tool-definition changes and operator pins: `ALR02-R01` changed during the run, `ALR02-R02` differs from `policy.pinned_tools`, `ALR02-R03` not pinned), `alr16.py` (package installs), `alr03.py` (endpoint trust from the recorded handshake: server identification `ALR03-001`, identity change `ALR03-002`, name impersonation `ALR03-003` — non-regex string similarity) `alr04.py` (tool schema injection), `alr05.py` (instruction-like content in tool results) and `alr10.py` (secret-like values crossing the tool boundary, from masked payloads only). Every gate shares one operator policy file (`import-logs --policy`, top-level keys; the file is operator configuration, never from the monitored project) and lists the keys it reads in `POLICY_KEYS`, so unknown keys can be warned about. Diagnostics follow one pattern: `ALRnn-090` coverage and `ALRnn-099` per-scan summary (never `-R90`). Register a runtime gate's detectors in its gate's `detectors` group in `catalog.GATES` (IDs `ALRnn-0nn`), add its coverage/summary IDs to `catalog.DIAGNOSTICS`, and regenerate `docs/GATES.md`.
 
 ### Adding or changing a rule
 
