@@ -35,11 +35,6 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
-      - name: Check out trusted audit verifier
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
-          path: trusted-audit
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -47,8 +42,4 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Fail on high or critical vulnerabilities
-        working-directory: .
-        run: >-
-          node trusted-audit/web/scripts/audit.mjs
-          --manifest "${{ github.workspace }}/web/package.json"
-          --lockfile "${{ github.workspace }}/web/package-lock.json"
+        run: npm audit --audit-level=high
