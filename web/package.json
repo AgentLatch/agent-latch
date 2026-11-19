@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "audit": "node scripts/audit.mjs"
   },
   "dependencies": {
     "clsx": "2.1.1",
@@ -25,5 +26,8 @@
     "tailwindcss": "3.4.14",
     "typescript": "5.6.3",
     "vite": "6.4.5"
+  },
+  "overrides": {
+    "picomatch": "https://codeload.github.com/micromatch/picomatch/tar.gz/7be3276fb8bd215a8c73fa066bcaf696c244ad88"
   }
 }
