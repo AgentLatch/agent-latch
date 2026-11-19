@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import logging
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -89,12 +90,26 @@ def _parser() -> argparse.ArgumentParser:
 
     proxy = commands.add_parser(
         "proxy",
-        help="run one MCP server behind AgentLatch and record its traffic",
-        description="Run one MCP server behind AgentLatch and record its traffic (monitor only).",
+        help="run one MCP server (or several remote ones) behind AgentLatch and record its traffic",
+        description=(
+            "Run one MCP server behind AgentLatch and record its traffic (monitor only). With"
+            " --http, repeat --upstream-url NAME=URL to front several remote servers in one proxy:"
+            " each is served at /mcp/NAME, and all of them write to the same trace, payloads and"
+            " ledger. Several servers must be remote URLs; a server started from a command needs"
+            " its own proxy."
+        ),
         epilog=_EPILOG,
         formatter_class=RawDescriptionRichHelpFormatter,
     )
-    proxy.add_argument("--upstream-url", metavar="URL", help="proxy a remote MCP server at URL")
+    proxy.add_argument(
+        "--upstream-url",
+        action="append",
+        default=[],
+        metavar="[NAME=]URL",
+        help="proxy a remote MCP server at URL. Repeat it with a NAME= on each (NAME is"
+        " [a-z0-9_-], up to 32 characters) to front several servers with --http: each is served"
+        " at /mcp/NAME and recorded with that name as its server",
+    )
     proxy.add_argument(
         "--http",
         metavar="HOST:PORT",
@@ -319,6 +334,42 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+UPSTREAM_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+RESERVED_NAMES = frozenset({"mcp"})  # /mcp is where a single, unnamed upstream is served
+
+
+def parse_upstreams(values: list[str]) -> tuple[str | None, dict[str, str]]:
+    """``(url, {})`` for one bare URL, else ``(None, {name: url})``. Raises ``ValueError``.
+
+    A value that starts with ``http://`` or ``https://`` is a URL, so an ``=`` in its query
+    string is never read as a name. Anything else must be ``NAME=URL``.
+    """
+    bare: list[str] = []
+    named: dict[str, str] = {}
+    for value in values:
+        if value.startswith(("http://", "https://")):
+            bare.append(value)
+            continue
+        name, sep, url = value.partition("=")
+        if not sep or not url.startswith(("http://", "https://")):
+            raise ValueError(f"--upstream-url {value!r} must be a URL or NAME=URL")
+        if not UPSTREAM_NAME.match(name):
+            raise ValueError(
+                f"--upstream-url name {name!r} must be 1 to 32 characters of [a-z0-9_-],"
+                " starting with a letter or digit"
+            )
+        if name in RESERVED_NAMES:
+            raise ValueError(f"--upstream-url name {name!r} is reserved")
+        if name in named:
+            raise ValueError(f"--upstream-url name {name!r} is used twice")
+        named[name] = url
+    if len(bare) == 1 and not named:
+        return bare[0], {}
+    if bare:
+        raise ValueError("give every --upstream-url a NAME= when there is more than one")
+    return None, named
+
+
 def _default_name(command: list[str], upstream_url: str | None) -> str:
     if upstream_url:
         return urlparse(upstream_url).hostname or "upstream"
@@ -343,9 +394,23 @@ def _proxy(args: argparse.Namespace) -> int:
     command = list(args.command)
     if command and command[0] == "--":
         command = command[1:]
+    try:
+        single_url, mounts = parse_upstreams(args.upstream_url)
+    except ValueError as error:
+        print(f"agent-latch-runtime: {error}", file=sys.stderr)
+        return 2
     if bool(command) == bool(args.upstream_url):
         print("agent-latch-runtime: give the server command after --, or --upstream-url",
               file=sys.stderr)
+        return 2
+    if mounts and not args.http:
+        print(
+            "agent-latch-runtime: NAME=URL upstreams are served at /mcp/NAME, so they need --http",
+            file=sys.stderr,
+        )
+        return 2
+    if mounts and args.name:
+        print("agent-latch-runtime: --name applies to a single unnamed upstream", file=sys.stderr)
         return 2
     try:
         http = _parse_http(args.http) if args.http else None
@@ -364,7 +429,7 @@ def _proxy(args: argparse.Namespace) -> int:
 
     # stdout carries the MCP protocol in stdio mode, so logging goes to stderr.
     logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
-    name = args.name or _default_name(command, args.upstream_url)
+    name = args.name or (",".join(mounts) if mounts else _default_name(command, single_url))
     if args.ledger is not None and args.trace is None:
         print(
             "agent-latch-runtime: --ledger needs --trace; nothing would be sealed otherwise",
@@ -383,7 +448,7 @@ def _proxy(args: argparse.Namespace) -> int:
             args.trace,
             summary=None if args.quiet else sys.stderr,
             excerpt_chars=args.excerpt_chars,
-            transport="http" if args.upstream_url else "stdio",
+            transport="http" if single_url or mounts else "stdio",
             ledger=ledger,
             warn=None if args.quiet else sys.stderr,
         )
@@ -401,12 +466,27 @@ def _proxy(args: argparse.Namespace) -> int:
             print(f"agent-latch-runtime: cannot open payloads file: {error}", file=sys.stderr)
             return 2
     try:
+        tap = PayloadTap([payloads]) if payloads is not None else None
+        if mounts and http:
+            import uvicorn
+
+            from agent_latch.runtime.proxy import build_mount_app
+
+            app = build_mount_app(mounts=mounts, trace=trace, tap=tap)
+            print(
+                f"agent-latch-runtime: monitoring {name!r} at "
+                + ", ".join(f"http://{http[0]}:{http[1]}/mcp/{item}" for item in mounts)
+                + " (preview; records traffic, never blocks)",
+                file=sys.stderr,
+            )
+            uvicorn.run(app, host=http[0], port=http[1], log_level="warning", lifespan="on")
+            return 0
         server = build_proxy(
             name=name,
             trace=trace,
             command=command,
-            upstream_url=args.upstream_url,
-            tap=PayloadTap([payloads]) if payloads is not None else None,
+            upstream_url=single_url,
+            tap=tap,
         )
         print(
             f"agent-latch-runtime: monitoring {name!r} (preview; records traffic, never blocks)",

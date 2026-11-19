@@ -532,6 +532,7 @@ Scenario 21 calls `schema_fixture`. That tool's description tells the agent to r
 | The prompt each scenario gave the agent, the calls it made and its answer | `runtime-logs/agent-runs.jsonl`, written by the script itself (the proxy never sees prompts to the model) |
 | Each request's arguments, joined with its response, as the proxy saw them | `runtime-logs/normalized.jsonl`, one JSON object per event |
 | A quick table of every event | `runtime-logs/events.csv` |
+| The gate findings: as a table, and as SARIF 2.1.0 for GitHub or a dashboard | `runtime-logs/gate-results.csv` (print it with `agent-latch --runtime-result`), and `runtime-logs/gate-results.sarif`, written by every `import-logs` run |
 | The same events in SQLite, when Terminal 2 was started with `--database` | `runtime-logs/runtime.db` |
 
 The fake key and password show as `[REDACTED]` in every file, `agent-runs.jsonl` included: the script masks its log and console output with the proxy's own redaction before writing, and refuses to run if it can't load it. Masking is pattern-based and can miss unusual secret formats, so keep `runtime-logs/` local and private.

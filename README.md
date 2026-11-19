@@ -236,11 +236,13 @@ agent-latch-runtime proxy --trace runtime-logs/trace.jsonl --payloads runtime-lo
 ```
 
 ```sh
-# Terminal 2: one line per message, plus events.csv and gate-results.csv in runtime-logs/.
+# Terminal 2: one line per message, plus events.csv, gate-results.csv and gate-results.sarif (all gates, SARIF 2.1.0) in runtime-logs/.
 agent-latch-runtime import-logs
 ```
 
 Run both from the same folder, in the environment where AgentLatch is installed. `mcp-server/.venv` does not provide `agent-latch-runtime`. To also keep a queryable local copy, add `--database runtime-logs/runtime.db` to `import-logs` (SQLite, nothing is uploaded).
+
+Several remote servers in one proxy: serve it with `--http` and repeat `--upstream-url NAME=URL` (for example `--upstream-url fetch=https://a.example/mcp --upstream-url git=https://b.example/mcp`). Each server is reachable at `/mcp/NAME`, and all of them write to the same trace, payloads and ledger, so there is one ordered trail for the whole agent. Servers started from a command still need one proxy each. See [the runtime guide](docs/runtime.md#connect-an-app).
 
 **See the result:**
 
@@ -393,7 +395,7 @@ flowchart LR
         proxy --> server["MCP server"]
         proxy --> logs["Masked logs<br/>trace.jsonl · payloads.jsonl"]
         logs --> importer["agent-latch-runtime import-logs"]
-        importer --> events["One event per message<br/>events.csv · normalized.jsonl<br/>optional --database (local SQLite)"]
+        importer --> events["One event per message<br/>events.csv · normalized.jsonl<br/>gate-results.csv · gate-results.sarif<br/>optional --database (local SQLite)"]
     end
 ```
 
