@@ -28,14 +28,20 @@ import pytest
 from agent_latch import catalog
 from agent_latch.gates import alr04
 
-FIXTURES = json.loads(
-    (Path(__file__).parent / "runtime_fixtures" / "alr04_events.json").read_text("utf-8")
-)
+FIXTURE_PATH = Path(__file__).parent / "runtime_fixtures" / "alr04_events.json"
+FIXTURES = json.loads(FIXTURE_PATH.read_text("utf-8"))
 CASES = FIXTURES["cases"]
 CHECKED = [case for case in CASES if case["corpus"] in ("benign", "malicious", "evasion")]
 WORDING = [case for case in CASES if case["corpus"] == "wording"]
 BLIND_SPOTS = [case for case in CASES if case["corpus"] == "blind_spot"]
 RANKS = (alr04.HIGH, alr04.MEDIUM, alr04.LOW)
+
+
+def test_alr04_fixture_is_present_and_well_shaped():
+    assert FIXTURE_PATH.is_file()
+    assert FIXTURES["schema"] == "agentlatch.tests.alr04/2"
+    assert isinstance(FIXTURES["about"], str)
+    assert isinstance(CASES, list) and CASES
 
 
 @pytest.fixture(autouse=True)
