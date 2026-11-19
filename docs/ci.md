@@ -40,6 +40,15 @@ To bypass the hook for one commit: `git commit --no-verify`. Use it sparingly.
 
 ## GitHub Actions
 
+### Repository security scans
+
+This repository runs two additional GitHub Actions security checks:
+
+- `.github/workflows/codeql.yml` analyzes Python and JavaScript/TypeScript on pull requests, pushes to `main`, and weekly. Results upload to GitHub code scanning. It needs `security-events: write`; code scanning is available for this public repository.
+- `.github/workflows/gitleaks.yml` scans the complete Git history on pull requests, pushes to `main`, and weekly. It downloads the pinned Gitleaks CLI release, verifies its SHA-256, then scans locally with output redaction. It does not validate credentials against external services or upload findings.
+
+`.gitleaksignore` contains only exact fingerprints for synthetic test fixtures already present in history. Do not add broad path exclusions. If Gitleaks reports a real credential, revoke or rotate it; redaction in CI logs does not make an exposed credential safe.
+
 This repository is also a GitHub Action. Add `.github/workflows/agent-latch.yml` to your repository:
 
 ```yaml
