@@ -94,6 +94,7 @@ src/agent_latch/
     alr04.py      # ALR04: instruction-like content in MCP tool definitions (preview; reports findings only)
     alr05.py      # ALR05: instruction-like content in MCP tool results (preview; review signals only)
     alr10.py      # ALR10: secret-like values crossing the tool boundary (preview; reads masked payloads only)
+    alr16.py      # ALR16: package installs invoked through tool arguments (preview; reports findings only)
   runtime/        # MCP traffic recording (preview, monitor only; `[runtime]` extra). Logs go to runtime-logs/, not here.
     tool_baseline.py # ALR02: tool fingerprints (canonical JSON, SHA-256), baseline load, candidate capture, approve, location check (stdlib only)
     events.py     # ToolCall, ToolOutput, ToolInfo, PayloadEvent (agentlatch.runtime.payload/1)
@@ -197,7 +198,7 @@ agent-latch-runtime connectors
 agent-latch-runtime anchor (--ledger FILE | --database FILE [--accept-unchecked-rows]) --to PATH [--quiet]
 agent-latch-runtime verify [PATH | --ledger FILE | --database FILE] [--all] [--trace FILE] [--anchor PATH]
 agent-latch-runtime audit-tool --database FILE [--name NAME]
-agent-latch-runtime baseline capture [--dir DIR] [--payloads FILE] [--server NAME] [--output FILE]
+agent-latch-runtime baseline capture [--dir DIR] [--payloads FILE] [--server NAME] [--output FILE] [--force]
 agent-latch-runtime baseline approve CANDIDATE --to FILE [--protect DIR]... [--yes] [--force]
 agent-latch-runtime demo [--dir DIR] [--scenario default|poisoned-output|secret-leak|tool-drift]
 ```
@@ -253,7 +254,7 @@ Full behavior and blind spots: `docs/RULES.md`.
 
 ### Runtime gates
 
-Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per gate, `GATE_ID` = the gate ID, `evaluate(event)`), discovered by the importer and run on every normalized event. They report findings and never block. Today five ship: `alr02.py` (tool definition integrity: changed `ALR02-001`, added `ALR02-002`, removed `ALR02-003` against a baseline from `--policy` key `alr02_baseline`; coverage `ALR02-090` is inconclusive, never a pass), `alr03.py` (endpoint trust from the recorded handshake: server identification `ALR03-001`, identity change `ALR03-002`, name impersonation `ALR03-003` — non-regex string similarity) `alr04.py` (tool schema injection), `alr05.py` (instruction-like content in tool results) and `alr10.py` (secret-like values crossing the tool boundary, from masked payloads only). Register a runtime gate's detectors in its gate's `detectors` group in `catalog.GATES` (IDs `ALRnn-0nn`), add its coverage/summary IDs to `catalog.DIAGNOSTICS`, and regenerate `docs/GATES.md`.
+Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per gate, `GATE_ID` = the gate ID, `evaluate(event)`), discovered by the importer and run on every normalized event. They report findings and never block. Today six ship: `alr02.py` (tool definition integrity: changed `ALR02-001`, added `ALR02-002`, removed `ALR02-003` against a baseline from `--policy` key `alr02_baseline`; coverage `ALR02-090` is inconclusive, never a pass), `alr03.py` (endpoint trust from the recorded handshake: server identification `ALR03-001`, identity change `ALR03-002`, name impersonation `ALR03-003` — non-regex string similarity) `alr04.py` (tool schema injection), `alr05.py` (instruction-like content in tool results) `alr10.py` (secret-like values crossing the tool boundary, from masked payloads only) and `alr16.py` (package installs invoked through tool arguments: `ALR16-001` to `ALR16-004`, gate `ALR16`, see `catalog.GATES`). Register a runtime gate's detectors in its gate's `detectors` group in `catalog.GATES` (IDs `ALRnn-0nn`), add its coverage/summary IDs to `catalog.DIAGNOSTICS`, and regenerate `docs/GATES.md`.
 
 ### Adding or changing a rule
 

@@ -44,6 +44,7 @@ from agent_latch.runtime.ledger.verify import (
     trace_for,
 )
 from agent_latch.runtime.payloads import DEFAULT_PAYLOAD_MAX_CHARS, PayloadFile, PayloadTap
+from agent_latch.runtime.redact import safe_text
 from agent_latch.runtime.sqlite_store import (
     SQLiteEventReader,
     SQLiteEventStore,
@@ -52,8 +53,9 @@ from agent_latch.runtime.sqlite_store import (
 from agent_latch.runtime.store_check import check_store
 from agent_latch.runtime.tool_baseline import (
     BaselineError,
-    approve_candidate,
+    approve_document,
     capture_candidate,
+    check_candidate,
     location_problem,
     read_document,
     write_private,
@@ -326,6 +328,8 @@ def _parser() -> argparse.ArgumentParser:
     capture.add_argument("--server", metavar="NAME", help="only this server label")
     capture.add_argument("--output", type=Path, metavar="FILE",
                          help="candidate file (default DIR/alr02-candidate.json)")
+    capture.add_argument("--force", action="store_true",
+                         help="replace the candidate file if it already exists")
     approve = steps.add_parser("approve", help="approve a reviewed candidate as the baseline")
     approve.add_argument("candidate", type=Path, help="candidate file written by 'capture'")
     approve.add_argument("--to", type=Path, required=True, metavar="FILE",
@@ -487,9 +491,12 @@ def _import_logs(args: argparse.Namespace) -> int:
                 directory,
             )
         policy = load_policy(args.policy) if args.policy else None
+        # What the monitored process writes: the log folder, and each output with its folder (a
+        # name without a suffix, or one not created yet, still protects its parent). The operator's
+        # policy file is trusted configuration, so a baseline may sit beside it.
+        written = [trace, payloads, args.output_csv, events_csv, args.normalized_out, args.database]
         _check_baseline_location(policy, [
-            directory, trace, payloads, args.output_csv, events_csv, args.normalized_out,
-            args.database, args.policy,
+            directory, *(item for path in written if path for item in (path, path.parent)),
         ])
         gates = discover_gates(policy)
         store = SQLiteEventStore(args.database) if args.database else None
@@ -540,8 +547,13 @@ def _check_baseline_location(policy: dict | None, protected: list[Path | None]) 
     configured = (policy or {}).get("alr02_baseline")
     if not isinstance(configured, str) or not configured.strip():
         return
-    roots = (policy or {}).get("alr02_project_root") or []
-    roots = [roots] if isinstance(roots, str) else [r for r in roots if isinstance(r, str)]
+    roots = (policy or {}).get("alr02_project_root")
+    if roots is None:
+        roots = []
+    elif isinstance(roots, str):
+        roots = [roots]
+    elif not (isinstance(roots, list) and all(isinstance(r, str) for r in roots)):
+        raise ValueError("alr02_project_root must be a path or a list of paths")
     problem = location_problem(Path(configured).expanduser(), protected, extra_roots=roots)
     if problem:
         raise ValueError(f"ALR02 baseline refused: {problem}")
@@ -552,15 +564,20 @@ def _baseline(args: argparse.Namespace) -> int:
         if args.baseline_command == "capture":
             payloads = args.payloads or args.dir / "payloads.jsonl"
             output = args.output or args.dir / "alr02-candidate.json"
+            if output.resolve() == payloads.resolve():
+                raise BaselineError("same_file", "the candidate cannot overwrite the payloads log")
             document = capture_candidate(payloads, server=args.server)
-            write_private(output, document, replace=True)
+            write_private(output, document, replace=args.force)
             print(f"agent-latch-runtime: wrote baseline CANDIDATE {output} (not trusted)",
                   file=sys.stderr)
             _print_candidate(document)
             print("Review it, then approve it with: agent-latch-runtime baseline approve"
                   f" {output} --to PATH_OUTSIDE_LOGS_AND_PROJECT", file=sys.stderr)
             return 0
+        # One document is read, validated, shown and then written, so what the operator approves
+        # is exactly what becomes the baseline, even if the file changes in between.
         document = read_document(args.candidate)
+        check_candidate(document)
         _print_candidate(document)
         if not args.yes:
             if not sys.stdin.isatty():
@@ -569,7 +586,9 @@ def _baseline(args: argparse.Namespace) -> int:
             if input("Approve this tool surface as the baseline? [y/N] ").strip().lower() != "y":
                 print("agent-latch-runtime: not approved", file=sys.stderr)
                 return 2
-        approve_candidate(args.candidate, args.to, args.protect, replace=args.force)
+        approve_document(
+            document, args.candidate.parent, args.to, args.protect, replace=args.force
+        )
         print(f"agent-latch-runtime: approved baseline written to {args.to}."
               ' Use it with --policy: alr02_baseline: "<that path>"', file=sys.stderr)
         return 0
@@ -580,9 +599,10 @@ def _baseline(args: argparse.Namespace) -> int:
 
 def _print_candidate(document: dict) -> None:
     for label, entry in document.get("servers", {}).items():
-        print(f"server {label}: {entry.get('tool_count')} tool(s)", file=sys.stderr)
+        # Names come from a server: shown capped and escaped, never changed for lookup or hashing.
+        print(f"server {safe_text(label)}: {entry.get('tool_count')} tool(s)", file=sys.stderr)
         for name, digest in entry.get("tools", {}).items():
-            print(f"  {name}  {digest[:16]}", file=sys.stderr)
+            print(f"  {safe_text(name)}  {digest[:16]}", file=sys.stderr)
 
 
 def _connectors(args: argparse.Namespace) -> int:
