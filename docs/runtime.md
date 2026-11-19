@@ -288,7 +288,7 @@ A trace record waits for its payload record (matched on session, request, server
 
 When the comparison cannot be made, ALR02 writes `ALR02-090` (INCONCLUSIVE, shown as a finding, never a pass) and compares nothing, so a partial list never reports tools as removed. Reasons: `baseline_not_configured`, `no_baseline_for_server`, `baseline_not_approved`, `baseline_unreadable`, `baseline_invalid`, `payload_unavailable` (no `--payloads`), `ambiguous_server_identity` (empty label, or two declared server names under one label), `ambiguous_tool_reference` (duplicate names), `malformed_definition`, `snapshot_incomplete_pagination` (the list has a next page), `snapshot_truncated` (text cut by `--payload-max-chars`), `snapshot_too_large`.
 
-*Baseline.* Only a file you approved counts, and only through `--policy` (`alr02_baseline: /path/outside/the/project/baseline.json`). Traffic, the monitored project and the logs cannot create, approve or overwrite it, and `import-logs` exits `2` if the baseline sits in a folder the monitored process writes (the log folder, the folders of the trace, payloads and output files, the database) or under a path listed in the policy key `alr02_project_root`. Capture and approve in two steps:
+*Baseline.* Only a file you approved counts, and only through `--policy` (`alr02_baseline: /path/outside/the/project/baseline.json`). Traffic, the monitored project and the logs cannot create, approve or overwrite it, and `import-logs` exits `2` if the baseline sits in the log folder or in the folder of the trace, payloads, output or database files, or under a path listed in the policy key `alr02_project_root` (a path or a list of paths). Those checks look at paths only: passing them does not prove the monitored process cannot write the baseline, so keep the baseline and the policy file where it has no write access (another OS user, a read-only mount, file permissions). Capture and approve in two steps:
 
 <!-- coderabbit-ai-generated:v1 -->
 
@@ -303,7 +303,13 @@ agent-latch-runtime baseline approve runtime-logs/alr02-candidate.json --to ~/ag
 
 <!-- /coderabbit-ai-generated:v1 -->
 
-`capture` refuses a server whose newest list is incomplete. `approve` shows the tool names and short hashes, asks for confirmation (or takes `--yes`), refuses a destination inside the candidate's folder or a `--protect DIR`, refuses to replace a file without `--force`, and writes with mode `0600`. Review the tool list against the server itself before you approve: the candidate holds hashes only. The first capture is a snapshot of what the server says now, not proof that it was ever safe. Blind spots: the payload file masks secret-like values and cuts long strings before ALR02 sees them, so a change inside a masked value is invisible; a server can show different lists to different clients; only `tools/list` is compared. `agent-latch-runtime demo --scenario tool-drift` runs the whole flow on the bundled synthetic server: unchanged, changed description, changed schema, added tool, removed tool, no baseline, an incomplete list, and a matching list with instruction-like text that ALR04 still reports. ALR02 never blocks a call and makes no network request.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:5af529115047629cb5ccefff3118ab523239afa6efb8b1b13f5eee169b76b68c -->
+
+`capture` refuses a server whose newest list is incomplete or unreadable, will not write over the payloads log, and replaces an existing candidate only with `--force`. `approve` reads the candidate once, shows the tool names and short hashes, asks for confirmation (or takes `--yes`), refuses a destination inside the candidate's folder or a `--protect DIR`, refuses to replace a file without `--force`, and writes with mode `0600`. Review the tool list against the server itself before you approve: the candidate holds hashes only. `import-logs` skips results already in its output CSV, so after approving, set `alr02_baseline` in the policy and run `import-logs` again with a new `--output-csv` path (the earlier report stays as it was). The first capture is a snapshot of what the server says now, not proof that it was ever safe. Blind spots: the payload file masks secret-like values and cuts long strings before ALR02 sees them, so a change inside a masked value is invisible; a server can show different lists to different clients; only `tools/list` is compared; the proxy tracks upstream pages and marks the assembled list incomplete when pagination stops on a repeated cursor, so ALR02 reports ALR02-090 and compares nothing; and ALR02 keeps its handshake and already-reported memory in the importer process only (see [Restarting the importer](#restarting-the-importer)). `agent-latch-runtime demo --scenario tool-drift` runs the whole flow on the bundled synthetic server: unchanged, changed description, changed schema, added tool, removed tool, no baseline, an incomplete list, and a matching list with instruction-like text that ALR04 still reports. ALR02 never blocks a call and makes no network request.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 **ALR04 (preview).** Inspects tool definitions for content (ALR02 above checks for change). It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. ALR04 never blocks a call.
 
@@ -359,8 +365,8 @@ agent-latch-runtime import-logs \
 ### Restarting the importer
 
 A restarted `import-logs` skips every event whose gate rows are already in `gate-results.csv`.
-Gates that keep state between events, such as ALR03, therefore do not see those earlier events
-again. ALR03's identity baseline lives only in memory for one importer run (its
+Gates that keep state between events, such as ALR03 and ALR02 (which remembers the server names
+a label declared in its handshake), therefore do not see those earlier events again. ALR03's identity baseline lives only in memory for one importer run (its
 `cross_run_baseline` check already reports `PARTIAL` for this reason), so after a restart the first
 handshake the importer evaluates, possibly one recorded while it was stopped, becomes the new
 baseline, and an identity change across the stop can be missed. This is a property of any importer

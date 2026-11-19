@@ -79,7 +79,7 @@ class PayloadTap:
             self._tools[(server, tool.name)] = tool
         return self._emit(
             session_id, request_id, client_id, server, "tools/list", "response",
-            {"tools": [_definition(tool) | {"name": tool.name} for tool in tools],
+            {"tools": [_definition(tool, full=True) | {"name": tool.name} for tool in tools],
              **({"next_cursor": True} if incomplete else {})},
         )
 
@@ -227,17 +227,20 @@ class PayloadFile:
             self._file = None
 
 
-def _definition(tool: ToolInfo) -> dict[str, Any]:
+def _definition(tool: ToolInfo, *, full: bool = False) -> dict[str, Any]:
     definition: dict[str, Any] = {
         "description": tool.description,
         "input_schema": dict(tool.input_schema),
         "annotations": dict(tool.annotations),
     }
-    # Only when the server sends them, so records for plain tools keep their shape.
+    if not full:
+        return definition  # the definition cached on a tools/call keeps its original shape
+    # tools/list only, and only what the server sends (ALR02 fingerprints these fields). An empty
+    # object is a value; an absent or null field is left out.
     if tool.title is not None:
         definition["title"] = tool.title
     if tool.output_schema is not None:
         definition["output_schema"] = dict(tool.output_schema)
-    if tool.meta:
+    if tool.meta is not None:
         definition["meta"] = dict(tool.meta)
     return definition

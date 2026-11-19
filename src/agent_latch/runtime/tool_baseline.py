@@ -135,32 +135,47 @@ def _has_truncation(value: Any, budget: list[int]) -> bool:
     return False
 
 
+def _shape_ok(tool: Mapping[str, Any]) -> bool:
+    """Advertised fields have the types MCP gives them; null and absent are the same."""
+    for canonical, aliases in _FIELD_ALIASES:
+        expected = str if canonical in ("title", "description") else Mapping
+        for alias in aliases:
+            value = tool.get(alias)
+            if value is not None and not isinstance(value, expected):
+                return False
+    return True
+
+
 def snapshot_from_tools(server: str, tools: Sequence[Any], *, next_cursor: bool = False) -> Snapshot:
-    """Fingerprint a ``tools/list`` payload. Nothing is raised: problems are recorded."""
+    """Fingerprint a ``tools/list`` payload. Nothing is raised: problems are recorded.
+
+    A definition that is malformed, cannot be encoded, or was cut or is too big to read in full is
+    left out and recorded, never fingerprinted: its hash would not describe what the server sent.
+    """
     fingerprints: dict[str, str] = {}
+    seen: set[str] = set()
     duplicates: list[str] = []
     malformed = 0
     truncated = False
     for tool in tools[:MAX_TOOLS]:
         name = tool.get("name") if isinstance(tool, Mapping) else None
-        if not isinstance(name, str) or not name.strip() or len(name) > MAX_NAME_CHARS:
+        if (not isinstance(name, str) or not name.strip() or len(name) > MAX_NAME_CHARS
+                or not _shape_ok(tool)):
             malformed += 1
             continue
-        if name in fingerprints:
+        if name in seen:
             duplicates.append(name)
             continue
-        invalid = False
-        for canonical, aliases in _FIELD_ALIASES:
-            expected = str if canonical in {"title", "description"} else Mapping
-            if any(tool.get(alias) is not None and not isinstance(tool[alias], expected)
-                   for alias in aliases):
-                invalid = True
-        if invalid:
-            malformed += 1
-            continue
-        if _has_truncation(tool, [200_000]):
+        seen.add(name)
+        try:
+            if _has_truncation(tool, [200_000]):
+                truncated = True
+                continue
+            fingerprints[name] = tool_fingerprint(server, name, tool)
+        except RecursionError:
             truncated = True
-        fingerprints[name] = tool_fingerprint(server, name, tool)
+        except (UnicodeEncodeError, ValueError, TypeError):
+            malformed += 1
     return Snapshot(
         server, fingerprints, malformed, tuple(duplicates), truncated,
         too_large=len(tools) > MAX_TOOLS, next_cursor=next_cursor,
@@ -197,19 +212,37 @@ def _parse_servers(document: Mapping[str, Any]) -> dict[str, ServerBaseline]:
             raise BaselineError("baseline_invalid", "a server entry is malformed")
         if not all(isinstance(n, str) and n and _is_sha(h) for n, h in tools.items()):
             raise BaselineError("baseline_invalid", f"a tool entry for {label!r} is malformed")
-        digest = snapshot_digest(label, tools)
+        try:
+            digest = snapshot_digest(label, tools)
+        except UnicodeEncodeError as error:
+            raise BaselineError("baseline_invalid", "a name cannot be encoded") from error
         if entry.get("snapshot_sha256") != digest:
             raise BaselineError("baseline_invalid", f"snapshot hash of {label!r} does not match")
         parsed[label] = ServerBaseline(dict(tools), digest)
     return parsed
 
 
+Stamp = tuple[int, int, int, int, int]
+
+
+def file_stamp(info: os.stat_result) -> Stamp:
+    """Identity of one file instance: replacing it changes the stamp even if size and mtime match."""
+    return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size)
+
+
 def read_document(path: Path, *, stream: BinaryIO | None = None) -> dict[str, Any]:
+    return read_document_stamped(path, stream=stream)[0]
+
+
+def read_document_stamped(path: Path, *, stream: BinaryIO | None = None) -> tuple[dict[str, Any], Stamp]:
+    """The parsed document and the stamp of the very file those bytes came from."""
     try:
         if stream is None:
             with path.open("rb") as opened:
+                stamp = file_stamp(os.fstat(opened.fileno()))
                 raw = opened.read(MAX_BASELINE_BYTES + 1)
         else:
+            stamp = file_stamp(os.fstat(stream.fileno()))
             raw = stream.read(MAX_BASELINE_BYTES + 1)
     except OSError as error:
         raise BaselineError("baseline_unreadable", f"cannot read {path.name}") from error
@@ -221,18 +254,22 @@ def read_document(path: Path, *, stream: BinaryIO | None = None) -> dict[str, An
         raise BaselineError("baseline_invalid", f"{path.name} is not valid JSON") from error
     if not isinstance(document, dict) or document.get("schema") != BASELINE_SCHEMA:
         raise BaselineError("baseline_invalid", f"{path.name} is not an ALR02 baseline")
-    return document
+    return document, stamp
 
 
 def load_baseline(path: Path, *, stream: BinaryIO | None = None) -> Baseline:
     """Read an approved baseline. A candidate, or any other status, is refused."""
-    document = read_document(path, stream=stream)
+    return load_baseline_stamped(path, stream=stream)[0]
+
+
+def load_baseline_stamped(path: Path, *, stream: BinaryIO | None = None) -> tuple[Baseline, Stamp]:
+    document, stamp = read_document_stamped(path, stream=stream)
     if document.get("status") != STATUS_APPROVED:
         raise BaselineError(
             "baseline_not_approved",
             f"{path.name} has status {str(document.get('status'))[:20]!r}, not 'approved'",
         )
-    return Baseline(path, _parse_servers(document))
+    return Baseline(path, _parse_servers(document)), stamp
 
 
 # --- where a baseline may live -------------------------------------------------------------------
@@ -313,6 +350,8 @@ def capture_candidate(payloads: Path, *, server: str | None = None) -> dict[str,
                 continue
             tools = body.get("tools") if isinstance(body, dict) else None
             if not isinstance(tools, list):
+                # The newest response is unreadable: it replaces an older good one, so the
+                # candidate is refused instead of describing a list the server no longer sends.
                 latest[label] = Snapshot(label, {}, malformed=1)
                 continue
             cursor = bool(body.get("next_cursor") or body.get("nextCursor"))
@@ -344,42 +383,61 @@ def write_private(path: Path, document: Mapping[str, Any], *, replace: bool = Fa
         if replace:
             os.replace(temp, path)
         else:
-            try:
-                os.link(temp, path)  # atomic creation: never overwrite a concurrent writer
-            except FileExistsError as error:
-                raise BaselineError("exists", f"{path} already exists; use --force to replace it") from error
-            Path(temp).unlink()
+            _publish_new(Path(temp), path)
     except BaseException:
         Path(temp).unlink(missing_ok=True)
         raise
+
+
+def _publish_new(temp: Path, path: Path) -> None:
+    """Put ``temp`` at ``path`` only if nothing is there, atomically, so two approvals cannot
+    overwrite each other."""
+    try:
+        os.link(temp, path)
+    except FileExistsError as error:
+        raise BaselineError("exists", f"{path} already exists; use --force to replace it") from error
+    except OSError:
+        # No hard links here: create exclusively and copy.
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError as error:
+            raise BaselineError(
+                "exists", f"{path} already exists; use --force to replace it"
+            ) from error
+        with os.fdopen(fd, "wb") as out:
+            out.write(temp.read_bytes())
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def check_candidate(document: Mapping[str, Any]) -> dict[str, ServerBaseline]:
+    """The servers of a candidate document, or ``BaselineError`` if it is not a valid candidate."""
+    if document.get("status") != STATUS_CANDIDATE:
+        raise BaselineError("not_a_candidate", "this file is not a candidate")
+    return _parse_servers(document)
 
 
 def approve_candidate(
     candidate: Path, destination: Path, protected: Iterable[Path | None] = (), *,
     replace: bool = False,
 ) -> dict[str, Any]:
-    """Turn a reviewed candidate into an approved baseline at ``destination``.
+    """Turn a reviewed candidate file into an approved baseline at ``destination``."""
+    return approve_document(
+        read_document(candidate), candidate.parent, destination, protected, replace=replace
+    )
+
+
+def approve_document(
+    document: Mapping[str, Any], candidate_dir: Path, destination: Path,
+    protected: Iterable[Path | None] = (), *, replace: bool = False,
+) -> dict[str, Any]:
+    """Approve one candidate document, the same in-memory one the operator was shown.
 
     The destination must be outside ``protected`` and the candidate's own folder. Returns the
     approved document.
     """
-    document = read_document(candidate)
-    return approve_document(document, candidate, destination, protected, replace=replace)
-
-
-def validate_candidate(document: Mapping[str, Any]) -> dict[str, ServerBaseline]:
-    if document.get("status") != STATUS_CANDIDATE:
-        raise BaselineError("not_a_candidate", "document is not a candidate")
-    return _parse_servers(document)
-
-
-def approve_document(
-    document: Mapping[str, Any], candidate: Path, destination: Path,
-    protected: Iterable[Path | None] = (), *, replace: bool = False,
-) -> dict[str, Any]:
-    """Approve the exact document already validated and displayed by the operator."""
-    servers = validate_candidate(document)
-    problem = location_problem(destination, [candidate.parent, *protected])
+    servers = check_candidate(document)
+    problem = location_problem(destination, [candidate_dir, *protected])
     if problem:
         raise BaselineError("unsafe_location", problem)
     approved = _document(

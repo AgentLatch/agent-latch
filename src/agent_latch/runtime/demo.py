@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import TextIO
 
-from agent_latch.gates import alr02
+from agent_latch.gates import alr02, alr04
 from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates
 from agent_latch.runtime.tool_baseline import approve_candidate, capture_candidate, write_private
 
@@ -85,6 +85,9 @@ def run_demo(directory: Path, *, out: TextIO | None = None, scenario: str = "def
     out = out if out is not None else sys.stderr
     if scenario not in SCENARIOS:
         raise ValueError(f"unknown demo scenario {scenario!r}; choose from {', '.join(SCENARIOS)}")
+    # Gates remember what they saw in this process; a fresh demo must not inherit it.
+    alr04.reset_state()
+    alr02.reset_state()
     if scenario == "tool-drift":
         _run_tool_drift(directory, out)
         return
@@ -141,7 +144,7 @@ def _record_run(directory: Path, tools_mode: str, max_chars: int | None, label: 
         raise RuntimeError(f"run {label} recorded no payloads")
 
 
-def _import_run(directory: Path, baseline: Path | None) -> list[str]:
+def _import_run(directory: Path, baseline: Path | None, label: str) -> list[str]:
     alr02.reset_state()
     policy = {"alr02_baseline": str(baseline)} if baseline else {}
     RuntimeLogImporter(
@@ -154,7 +157,11 @@ def _import_run(directory: Path, baseline: Path | None) -> list[str]:
         for row in csv.DictReader(stream):
             if row["gate_id"] not in ("ALR02", "ALR04"):
                 continue
-            for item in json.loads(row["result_json"]).get("findings", []):
+            result = json.loads(row["result_json"])
+            if result.get("status") != "ok":
+                error = (result.get("error") or {}).get("type", "unknown")
+                raise RuntimeError(f"{label}: gate {row['gate_id']} failed ({error})")
+            for item in result.get("findings", []):
                 if item.get("rule_id") == "ALR04-099" or item.get("is_finding") is False:
                     if item.get("rule_id") == alr02.RULE_SUMMARY:
                         lines.append(f"{item['rule_id']} {item['outcome']}: compared, "
@@ -168,10 +175,21 @@ def _import_run(directory: Path, baseline: Path | None) -> list[str]:
     return lines
 
 
+def _outside_folder(directory: Path) -> tempfile.TemporaryDirectory[str]:
+    """A temporary folder that is not inside the demo folder, so the baselines are out of reach
+    of the logs even when TMPDIR points into it."""
+    resolved = directory.resolve()
+    for base in (tempfile.gettempdir(), str(Path.home())):
+        where = Path(base).resolve()
+        if where != resolved and resolved not in where.parents:
+            return tempfile.TemporaryDirectory(prefix="agentlatch-alr02-", dir=where)
+    raise RuntimeError("no temporary folder outside the demo folder; point TMPDIR elsewhere")
+
+
 def _run_tool_drift(directory: Path, out: TextIO) -> None:
     """ALR02 demo: approve a baseline, then list tools again under eight conditions."""
     out.write("agent-latch-runtime: demo: tool-drift, synthetic server, no network\n")
-    with tempfile.TemporaryDirectory(prefix="agentlatch-alr02-") as outside:
+    with _outside_folder(directory) as outside:
         baselines: dict[str, Path] = {}
         for name, mode in (("approved", ""), ("poisoned", "poisoned")):
             source = directory / f"baseline-source-{name}"
@@ -184,7 +202,7 @@ def _run_tool_drift(directory: Path, out: TextIO) -> None:
         out.write("agent-latch-runtime: demo: baseline approved outside the logs; runs:\n")
         for folder, mode, baseline, max_chars in _DRIFT_RUNS:
             _record_run(directory / folder, mode, max_chars, folder)
-            lines = _import_run(directory / folder, baselines.get(baseline or ""))
+            lines = _import_run(directory / folder, baselines.get(baseline or ""), folder)
             out.write(f"  {folder}\n")
             out.writelines(f"    {line}\n" for line in lines or ["(no ALR02 or ALR04 records)"])
             out.flush()

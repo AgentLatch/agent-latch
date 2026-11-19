@@ -59,6 +59,7 @@ from agent_latch.runtime.tool_baseline import (
     Baseline,
     BaselineError,
     Snapshot,
+    file_stamp,
     load_baseline,
     snapshot_from_tools,
 )
@@ -80,7 +81,9 @@ MAX_SERVERS = 1024
 
 _LOCK = RLock()
 _declared: dict[str, set[str]] = {}  # server label -> names it declared in `initialize`
-_reported: set[tuple[str, str, str, str]] = set()  # (server, tool, change, observed hash)
+# (run + baseline, server, tool, change, observed hash): a change is reported once per run and
+# baseline, so a new baseline or run starts fresh.
+_reported: set[tuple[str, str, str, str, str]] = set()
 _cache: dict[str, tuple[tuple[int, ...], Baseline]] = {}
 
 
@@ -124,7 +127,10 @@ def _coverage(event: Mapping[str, Any], reasons: list[str], server: str = "",
     }
     if snapshot is not None and snapshot.tools:
         # Hashes only: enough to capture a candidate or to see the list is the same one.
-        record["snapshot_sha256"] = snapshot.digest
+        try:
+            record["snapshot_sha256"] = snapshot.digest
+        except UnicodeEncodeError:
+            pass  # a label that cannot be encoded has no digest; the reasons still say why
         record["tool_count"] = len(snapshot.tools)
     return record
 
@@ -171,7 +177,7 @@ def _load(policy: Mapping[str, Any] | None) -> Baseline:
     try:
         with path.open("rb") as stream:
             info = os.fstat(stream.fileno())
-            stamp = (info.st_dev, info.st_ino, info.st_ctime_ns, info.st_mtime_ns, info.st_size)
+            stamp = file_stamp(info)
             with _LOCK:
                 cached = _cache.get(key)
                 if cached and cached[0] == stamp:
@@ -184,7 +190,7 @@ def _load(policy: Mapping[str, Any] | None) -> Baseline:
     return baseline
 
 
-def _remember(key: tuple[str, str, str, str]) -> bool:
+def _remember(key: tuple[str, str, str, str, str]) -> bool:
     """True when this exact change was already reported (a client listing tools again)."""
     with _LOCK:
         if key in _reported:
@@ -203,11 +209,14 @@ def _note_handshake(event: Mapping[str, Any]) -> None:
     if isinstance(label, str) and isinstance(name, str) and name:
         with _LOCK:
             if label in _declared or len(_declared) < MAX_SERVERS:
-                _declared.setdefault(label, set()).add(safe(name, 200))
+                names = _declared.setdefault(label, set())
+                if len(names) < 2:  # one name or several is all the check needs to tell apart
+                    names.add(safe(name, 200))
 
 
 def compare(server: str, snapshot: Snapshot, baseline: Mapping[str, str],
-            event: Mapping[str, Any], policy: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+            event: Mapping[str, Any], policy: Mapping[str, Any] | None,
+            context: str = "") -> list[dict[str, Any]]:
     """Drift records, then the summary, for a complete snapshot against its baseline entry."""
     counts = {"unchanged": 0, CHANGED: 0, ADDED: 0, REMOVED: 0}
     records: list[dict[str, Any]] = []
@@ -218,12 +227,12 @@ def compare(server: str, snapshot: Snapshot, baseline: Mapping[str, str],
             counts["unchanged"] += 1
             continue
         counts[change] += 1
-        if not _remember((server, tool, change, observed)):
+        if not _remember((context, server, tool, change, observed)):
             records.append(_finding(change, server, tool, event, expected, observed, policy))
     for tool, expected in sorted(baseline.items()):
         if tool not in snapshot.tools:
             counts[REMOVED] += 1
-            if not _remember((server, tool, REMOVED, expected)):
+            if not _remember((context, server, tool, REMOVED, expected)):
                 records.append(_finding(REMOVED, server, tool, event, expected, None, policy))
     records.append(_summary(event, server, counts, snapshot))
     return records
@@ -243,7 +252,8 @@ def evaluate(event: dict[str, Any], *, policy: Mapping[str, Any] | None = None) 
         return {"findings": []}
 
     label = event.get("server")
-    server = label.strip() if isinstance(label, str) else ""
+    # The exact proxy label is the key everywhere; trimming is only used to reject a blank one.
+    server = label if isinstance(label, str) and label.strip() else ""
     payload = event.get("payload")
     if not server:
         return {"findings": [_coverage(event, ["ambiguous_server_identity"])]}
@@ -270,4 +280,5 @@ def evaluate(event: dict[str, Any], *, policy: Mapping[str, Any] | None = None) 
             reasons.insert(0, "no_baseline_for_server")
     if reasons or entry is None:
         return {"findings": [_coverage(event, reasons, server, snapshot)]}
-    return {"findings": compare(server, snapshot, entry.tools, event, policy)}
+    context = f"{event.get('run_id')}:{entry.digest}"
+    return {"findings": compare(server, snapshot, entry.tools, event, policy, context)}

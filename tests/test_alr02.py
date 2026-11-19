@@ -356,7 +356,10 @@ def test_capture_then_approve_then_compare(tmp_path: Path, capsys: pytest.Captur
     assert runtime_main(["baseline", "approve", str(candidate), "--yes", "--to", str(target)]) == 0
     assert "approved" in capsys.readouterr().err
     assert runtime_main(["baseline", "approve", str(candidate), "--yes", "--to", str(target)]) == 2
-    assert drift(alr02.evaluate(event(SURFACE), policy={"alr02_baseline": str(target)})) == []
+    result = alr02.evaluate(event(SURFACE), policy={"alr02_baseline": str(target)})
+    assert drift(result) == []
+    summary = records(result)["ALR02-099"]
+    assert summary["outcome"] == "PASS" and summary["counts"]["unchanged"] == 3
     assert (target.stat().st_mode & 0o777) == 0o600
 
     # An approved baseline is not a candidate, so it cannot be approved again.
@@ -375,6 +378,164 @@ def test_capture_refuses_an_incomplete_newest_list(tmp_path: Path) -> None:
     with pytest.raises(tb.BaselineError) as caught:
         tb.capture_candidate(payloads)
     assert caught.value.code == "snapshot_incomplete"
+
+
+# --- review fixes -------------------------------------------------------------------------------
+
+
+def test_field_shapes_are_checked_before_fingerprinting() -> None:
+    bad = [tool("a", output_schema="not an object"), tool("b", title=5), tool("c", annotations=[]),
+           tool("ok", output_schema=None)]
+    snap = tb.snapshot_from_tools("srv", bad)
+    assert list(snap.tools) == ["ok"] and snap.malformed == 3
+    assert "malformed_definition" in snap.problems
+
+
+def test_text_that_cannot_be_encoded_is_malformed_not_a_crash(tmp_path: Path) -> None:
+    snap = tb.snapshot_from_tools("srv", [tool("a", "bad \ud800 text"), tool("b")])
+    assert list(snap.tools) == ["b"] and snap.malformed == 1
+    policy = approved(tmp_path)
+    path = Path(policy["alr02_baseline"])
+    path.write_text(path.read_text().replace('"search"', '"se\\ud800arch"'), encoding="utf-8")
+    (item,) = alr02.evaluate(event(SURFACE), policy=policy)["findings"]
+    assert item["coverage_notes"][0] == "baseline_invalid"
+
+
+def test_a_cut_definition_is_never_fingerprinted() -> None:
+    snap = tb.snapshot_from_tools("srv", [tool("a", "x…[9 more chars]"), tool("b")])
+    assert list(snap.tools) == ["b"] and snap.truncated
+
+
+def test_a_replaced_baseline_is_reloaded_even_with_the_same_size_and_mtime(tmp_path: Path) -> None:
+    import os
+
+    policy = approved(tmp_path)
+    path = Path(policy["alr02_baseline"])
+    before = path.stat()
+    assert drift(alr02.evaluate(event(SURFACE), policy=policy)) == []
+    swapped = [tool("search", "Look something up!"), *SURFACE[1:]]  # same length description
+    other = tmp_path / "other.json"
+    tb.write_private(other, tb._document(
+        tb.STATUS_APPROVED, {"srv": tb.snapshot_from_tools("srv", swapped).tools}))
+    os.replace(other, path)
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert [d["change_type"] for d in drift(alr02.evaluate(event(SURFACE), policy=policy))] == [
+        "changed"]
+
+
+def test_the_exact_proxy_label_is_the_key(tmp_path: Path) -> None:
+    policy = approved(tmp_path, server="srv ")
+    assert drift(alr02.evaluate(event(SURFACE, server="srv "), policy=policy)) == []
+    (item,) = alr02.evaluate(event(SURFACE, server="srv"), policy=policy)["findings"]
+    assert item["coverage_notes"] == ["no_baseline_for_server"]
+
+
+def test_declared_names_per_label_stay_bounded() -> None:
+    for i in range(50):
+        alr02.evaluate({"method": "initialize", "stage": "response", "server": "srv",
+                        "payload": {"server_info": {"name": f"name-{i}"}}})
+    assert len(alr02._declared["srv"]) == 2
+
+
+def test_a_change_is_reported_again_for_a_new_run_or_baseline(tmp_path: Path) -> None:
+    policy = approved(tmp_path)
+    altered = [tool("search", "changed"), *SURFACE[1:]]
+    assert len(drift(alr02.evaluate(event(altered), policy=policy))) == 1
+    assert len(drift(alr02.evaluate(event(altered) | {"run_id": "run-2"}, policy=policy))) == 1
+
+
+def test_tool_list_payloads_carry_the_extra_fields_but_tool_calls_do_not() -> None:
+    from agent_latch.runtime.events import ToolCall, ToolInfo
+    from agent_latch.runtime.payloads import PayloadTap
+
+    seen = []
+    tap = PayloadTap([seen.append])
+    info = ToolInfo("t", "srv", "d", {}, {}, title="T", output_schema={"type": "string"}, meta={})
+    tap.tools_listed(session_id="s", request_id="1", client_id=None, server="srv", tools=[info])
+    tap.call_request(ToolCall("s", "2", None, "t", "srv", {}, "now"))
+    listed = seen[0].payload["tools"][0]
+    assert listed["title"] == "T" and listed["output_schema"] == {"type": "string"}
+    assert listed["meta"] == {}  # an empty object is a value, not an absent field
+    assert set(seen[1].payload["tool_definition"]) == {"description", "input_schema", "annotations"}
+
+
+def test_write_private_never_replaces_without_being_told(tmp_path: Path) -> None:
+    target = tmp_path / "b.json"
+    tb.write_private(target, {"a": 1})
+    with pytest.raises(tb.BaselineError):
+        tb.write_private(target, {"a": 2})
+    assert json.loads(target.read_text()) == {"a": 1}
+    tb.write_private(target, {"a": 3}, replace=True)
+    assert json.loads(target.read_text()) == {"a": 3}
+    assert list(tmp_path.glob(".alr02-*")) == []
+
+
+def test_capture_refuses_when_the_newest_response_is_unreadable(tmp_path: Path) -> None:
+    payloads = tmp_path / "payloads.jsonl"
+    lines = [
+        {"method": "tools/list", "stage": "response", "server": "srv", "payload": {"tools": SURFACE}},
+        {"method": "tools/list", "stage": "response", "server": "srv", "payload": {"tools": None}},
+    ]
+    payloads.write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
+    with pytest.raises(tb.BaselineError) as caught:
+        tb.capture_candidate(payloads)
+    assert caught.value.code == "snapshot_incomplete"
+
+
+def test_capture_output_rules(tmp_path: Path) -> None:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    payloads = logs / "payloads.jsonl"
+    payloads.write_text(json.dumps({
+        "method": "tools/list", "stage": "response", "server": "srv", "payload": {"tools": SURFACE},
+    }) + "\n", encoding="utf-8")
+    before = payloads.read_text()
+    assert runtime_main(["baseline", "capture", "--dir", str(logs), "--output", str(payloads)]) == 2
+    assert payloads.read_text() == before  # the log is never overwritten, even with --force
+    assert runtime_main(["baseline", "capture", "--dir", str(logs), "--output", str(payloads),
+                         "--force"]) == 2
+    assert runtime_main(["baseline", "capture", "--dir", str(logs)]) == 0
+    assert runtime_main(["baseline", "capture", "--dir", str(logs)]) == 2  # exists
+    assert runtime_main(["baseline", "capture", "--dir", str(logs), "--force"]) == 0
+
+
+def test_approve_rejects_a_candidate_without_servers(tmp_path: Path) -> None:
+    broken = tmp_path / "logs" / "c.json"
+    tb.write_private(broken, {"schema": tb.BASELINE_SCHEMA, "status": "candidate", "servers": None})
+    assert runtime_main(["baseline", "approve", str(broken), "--yes",
+                         "--to", str(tmp_path / "ok" / "b.json")]) == 2
+    assert not (tmp_path / "ok").exists()
+
+
+def test_a_baseline_beside_the_policy_file_is_allowed_and_a_bad_root_is_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    logs = tmp_path / "runtime-logs"
+    logs.mkdir()
+    (logs / "trace.jsonl").write_text("", encoding="utf-8")
+    operator = tmp_path / "operator"
+    policy_data = approved(tmp_path)  # writes operator/baseline.json
+    policy = operator / "policy.yaml"
+    policy.write_text(f"alr02_baseline: {policy_data['alr02_baseline']}\n", encoding="utf-8")
+    assert runtime_main(["import-logs", "--dir", str(logs), "--once", "--quiet",
+                         "--policy", str(policy)]) == 0
+    policy.write_text(f"alr02_baseline: {policy_data['alr02_baseline']}\nalr02_project_root: 5\n",
+                      encoding="utf-8")
+    assert runtime_main(["import-logs", "--dir", str(logs), "--once", "--quiet",
+                         "--policy", str(policy)]) == 2
+    assert "alr02_project_root" in capsys.readouterr().err
+
+
+def test_a_trace_name_without_a_suffix_still_protects_its_folder(tmp_path: Path) -> None:
+    logs = tmp_path / "elsewhere"
+    logs.mkdir()
+    (logs / "trace").write_text("", encoding="utf-8")
+    inside = logs / "baseline.json"
+    tb.write_private(inside, tb._document(tb.STATUS_APPROVED, {"srv": {}}))
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(f"alr02_baseline: {inside}\n", encoding="utf-8")
+    assert runtime_main(["import-logs", "--trace", str(logs / "trace"), "--once", "--quiet",
+                         "--policy", str(policy)]) == 2
 
 
 # --- end to end with the bundled demo server -----------------------------------------------------
