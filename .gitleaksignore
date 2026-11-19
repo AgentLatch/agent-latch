@@ -1,0 +1,8 @@
+# Exact fingerprints for synthetic ALR10 test data; new findings at these paths remain visible.
+6e1a926da8aaa29282a406e677c0bcf378d6af1d:tests/runtime_fixtures/alr10_heldout.json:private-key:165
+6e1a926da8aaa29282a406e677c0bcf378d6af1d:tests/runtime_fixtures/alr10_heldout.json:generic-api-key:53
+804ba4d224e1b31a4922b93098c4a9e7676ab1cf:tests/runtime_fixtures/alr10_heldout.json:private-key:165
+804ba4d224e1b31a4922b93098c4a9e7676ab1cf:tests/runtime_fixtures/alr10_heldout.json:generic-api-key:53
+d260ed5aa2fba649aec5a1deabae129f7bd4f778:tests/runtime_fixtures/alr10_heldout.json:private-key:165
+d260ed5aa2fba649aec5a1deabae129f7bd4f778:tests/runtime_fixtures/alr10_heldout.json:generic-api-key:53
+e9287e10c33b955af61d685a807950464b762cd8:tests/test_scanner.py:generic-api-key:640
