@@ -17,19 +17,39 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 import pytest
 
 from agent_latch import catalog
 from agent_latch.gates import alr16
 
-FIXTURES = json.loads(
-    (Path(__file__).parent / "runtime_fixtures" / "alr16_events.json").read_text("utf-8")
-)
+FIXTURE_PATH = Path(__file__).parent / "runtime_fixtures" / "alr16_events.json"
+FIXTURES = json.loads(FIXTURE_PATH.read_text("utf-8"))
 CASES = FIXTURES["cases"]
 CHECKED = [case for case in CASES if case["corpus"] != "blind_spot"]
 BLIND_SPOTS = [case for case in CASES if case["corpus"] == "blind_spot"]
+
+
+class Step(TypedDict):
+    tool: str
+    arguments: dict[str, Any]
+    definition: NotRequired[Any]
+
+
+class Expected(TypedDict):
+    signals: dict[str, str]
+    observed: bool
+    not_inspected: list[str]
+
+
+class Case(TypedDict):
+    id: str
+    corpus: str
+    split: str
+    steps: list[Step]
+    expect: Expected
+    reason: NotRequired[str]
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +78,7 @@ def run(command: str, **kwargs: Any) -> list[dict[str, Any]]:
     return alr16.evaluate(event("run_command", {"command": command}, **kwargs))["findings"]
 
 
-def run_case(case: dict[str, Any]) -> list[dict[str, Any]]:
+def run_case(case: Case) -> list[dict[str, Any]]:
     """Evaluate every step of a fixture case in one session; return the last step's records."""
     records: list[dict[str, Any]] = []
     for order, step in enumerate(case["steps"], 1):
@@ -91,7 +111,7 @@ def observed(records: list[dict[str, Any]]) -> bool:
 
 
 @pytest.mark.parametrize("case", CHECKED, ids=lambda case: case["id"])
-def test_corpus(case):
+def test_corpus(case: Case) -> None:
     records = run_case(case)
     expect = case["expect"]
     assert signals(records) == expect["signals"]
@@ -100,9 +120,30 @@ def test_corpus(case):
 
 
 @pytest.mark.parametrize("case", BLIND_SPOTS, ids=lambda case: case["id"])
-def test_declared_blind_spots(case, request):
+def test_declared_blind_spots(case: Case, request: pytest.FixtureRequest) -> None:
+    records = run_case(case)
+    expect = case["expect"]
+    actual = (signals(records), observed(records), not_inspected(records))
+    expected = (expect["signals"], expect["observed"], expect["not_inspected"])
     request.applymarker(pytest.mark.xfail(strict=True, reason=case["reason"]))
-    assert signals(run_case(case)) == case["expect"]["signals"]
+    assert actual == expected
+
+
+def test_schema_only_tool_scope_disappears_without_schema() -> None:
+    case = next(case for case in CASES if case["id"] == "evasion-tool-known-only-by-payload-schema")
+    step = case["steps"][0]
+    records = alr16.evaluate(event(step["tool"], step["arguments"]))["findings"]
+    assert len(records) == 1
+    assert records[0]["outcome"] == alr16.OUTCOME_OUT_OF_SCOPE
+
+
+def test_python_install_detection_uses_call_nodes_not_string_literals() -> None:
+    assert signals(run(
+        "python -c 'message = \"subprocess.run pip install evil\"'"
+    )) == {}
+    assert signals(run(
+        "python -c 'import subprocess; subprocess.run([\"pip\", \"install\", \"evil\"])'"
+    )) == {"install_through_code": "medium"}
 
 
 def test_benign_corpus_has_no_findings_at_all():

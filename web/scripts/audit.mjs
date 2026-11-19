@@ -1,92 +1,68 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const advisory = "https://github.com/advisories/GHSA-fc5q-39xc-vjpf";
-const fixCommit = "7be3276fb8bd215a8c73fa066bcaf696c244ad88";
-const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
-const override = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))
-  .overrides?.picomatch;
-const picomatchEntries = Object.entries(lock.packages)
-  .filter(([name]) => name.endsWith("node_modules/picomatch"));
+const pinnedPicomatch =
+  "https://codeload.github.com/micromatch/picomatch/tar.gz/7be3276fb8bd215a8c73fa066bcaf696c244ad88";
+const scriptDir = dirname(fileURLToPath(import.meta.url));
 
-if (override !== `https://codeload.github.com/micromatch/picomatch/tar.gz/${fixCommit}`
-  || picomatchEntries.length === 0
-  || picomatchEntries.some(([, entry]) => !entry.resolved?.includes(fixCommit))) {
-  console.error("The picomatch audit exception requires the pinned upstream fix commit in the manifest and lockfile.");
-  process.exit(1);
+function option(name, fallback) {
+  const index = process.argv.indexOf(name);
+  return index < 0 ? fallback : resolve(process.argv[index + 1]);
 }
 
-const npmCli = process.env.npm_execpath;
-if (!npmCli) {
-  console.error("Run this audit through `npm run audit` so npm_execpath is available.");
-  process.exit(1);
-}
+const manifestPath = option("--manifest", resolve(scriptDir, "../package.json"));
+const lockPath = option("--lockfile", resolve(scriptDir, "../package-lock.json"));
+if (existsSync(join(dirname(manifestPath), "npm-shrinkwrap.json"))) {
+  console.error("npm-shrinkwrap.json is not supported; npm would audit it instead of package-lock.json.");
+  process.exitCode = 1;
+} else {
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+  const picomatchEntries = Object.entries(lock.packages ?? {})
+    .filter(([name]) => name.endsWith("node_modules/picomatch"));
 
-const result = spawnSync(process.execPath, [resolve(npmCli), "audit", "--audit-level=high", "--json"], {
-  encoding: "utf8",
-  maxBuffer: 10 * 1024 * 1024,
-});
-if (result.error) throw result.error;
-if (result.status === 0) {
-  const report = JSON.parse(result.stdout);
-  const counts = report.metadata?.vulnerabilities;
-  console.log(
-    `npm audit: passed (${counts?.total ?? 0} advisory paths; none at high or critical).`,
-  );
-  process.exit(0);
-}
-
-let report;
-try {
-  report = JSON.parse(result.stdout);
-} catch {
-  process.stderr.write(result.stderr || result.stdout);
-  process.exit(result.status || 1);
-}
-if (!report || !report.vulnerabilities || !report.metadata?.vulnerabilities) {
-  process.stderr.write(result.stderr || result.stdout);
-  process.exit(result.status || 1);
-}
-
-const vulnerabilities = report.vulnerabilities ?? {};
-const allowed = new Set();
-for (const [name, vulnerability] of Object.entries(vulnerabilities)) {
-  if (name === "picomatch" && vulnerability.via?.length === 1
-    && vulnerability.via[0]?.url === advisory) {
-    allowed.add(name);
-  }
-}
-
-// npm reports each transitive package as vulnerable; allow only dependency paths that lead
-// exclusively to the patched picomatch advisory above.
-let changed = true;
-while (changed) {
-  changed = false;
-  for (const [name, vulnerability] of Object.entries(vulnerabilities)) {
-    if (allowed.has(name) || !vulnerability.via?.length) continue;
-    if (vulnerability.via.every((item) => typeof item === "string" && allowed.has(item))) {
-      allowed.add(name);
-      changed = true;
+  if (manifest.overrides?.picomatch !== pinnedPicomatch
+    || picomatchEntries.length === 0
+    || picomatchEntries.some(([, entry]) => entry.resolved !== pinnedPicomatch)) {
+    console.error("The picomatch manifest override and every lock entry must use the exact pinned tarball URL.");
+    process.exitCode = 1;
+  } else {
+    const auditDir = mkdtempSync(join(tmpdir(), "agentlatch-npm-audit-"));
+    try {
+      copyFileSync(manifestPath, join(auditDir, "package.json"));
+      copyFileSync(lockPath, join(auditDir, "package-lock.json"));
+      const npmArgs = ["audit", "--audit-level=high", "--json"];
+      const npmCli = process.env.npm_execpath;
+      const result = npmCli
+        ? spawnSync(process.execPath, [resolve(npmCli), ...npmArgs], {
+          cwd: auditDir, encoding: "utf8", maxBuffer: 10 * 1024 * 1024,
+        })
+        : spawnSync("npm", npmArgs, {
+          cwd: auditDir, encoding: "utf8", maxBuffer: 10 * 1024 * 1024,
+        });
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        process.stderr.write(result.stdout || result.stderr);
+        process.exitCode = result.status || 1;
+      } else {
+        const report = JSON.parse(result.stdout);
+        const counts = report.metadata?.vulnerabilities;
+        console.log(
+          `npm audit: passed (${counts?.total ?? 0} advisory paths; none at high or critical).`,
+        );
+        process.exitCode = 0;
+      }
+    } finally {
+      rmSync(auditDir, { recursive: true, force: true });
     }
   }
-}
-
-const rank = { low: 0, moderate: 1, high: 2, critical: 3 };
-const blocking = Object.entries(vulnerabilities).filter(([name, vulnerability]) =>
-  !allowed.has(name) && rank[vulnerability.severity] >= rank.high);
-
-if (blocking.length) {
-  process.stderr.write(result.stdout);
-  process.exit(result.status || 1);
-}
-
-if (allowed.size) {
-  const counts = report.metadata?.vulnerabilities;
-  console.warn(
-    `npm audit: passed; ${counts?.high ?? 0} high-severity advisory paths are limited to `
-    + `${advisory}, with picomatch pinned to upstream fix ${fixCommit}.`,
-  );
-} else {
-  console.log("npm audit: passed (no high or critical vulnerabilities).");
 }

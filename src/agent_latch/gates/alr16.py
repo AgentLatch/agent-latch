@@ -690,7 +690,7 @@ DEFAULT_INDEXES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "yarn": (frozenset({"registry.yarnpkg.com"}), frozenset()),
     "pnpm": (frozenset({"registry.npmjs.org"}), frozenset()),
     "bun": (frozenset({"registry.npmjs.org"}), frozenset()),
-    "go": (frozenset({"proxy.golang.org"}), frozenset()),
+    "go": (frozenset({"proxy.golang.org"}), frozenset({"direct", "off"})),
     "cargo": (frozenset({"crates.io", "index.crates.io"}), frozenset({"crates-io"})),
     "gem": (frozenset({"rubygems.org"}), frozenset()),
     "conda": (frozenset({"repo.anaconda.com", "conda.anaconda.org"}),
@@ -1106,9 +1106,11 @@ _CODE_EXEC = re.compile(
 
 
 def _python_code_installs(code: str, scan: Scan | None = None) -> bool:
+    if not _CODE_INSTALL.search(code) or not _CODE_EXEC.search(code):
+        return False
     try:
         tree = ast.parse(code[:MAX_TOTAL_CHARS])
-    except SyntaxError:
+    except (MemoryError, RecursionError, SyntaxError):
         if scan is not None:
             scan.notes.add("code_unparseable")
         return False
