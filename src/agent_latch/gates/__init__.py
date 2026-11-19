@@ -6,7 +6,7 @@ operator policy keys (``import-logs --policy``) it reads. Only gates live in thi
 machinery is in ``agent_latch.runtime.text``. The importer supplies each gate with
 the same payload-event JSON object and writes a common result envelope to its CSV output.
 
-``alr02`` through ``alr16`` ship with the package. All are
+``alr03`` through ``alr16`` ship with the package. All are
 monitor-only previews: they report findings and never block. The runtime report lists findings only.
 
 ``agent-latch --runtime-result`` prints every gate's alerts from ``gate-results.csv``. A finding

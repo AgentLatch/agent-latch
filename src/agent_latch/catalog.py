@@ -103,16 +103,7 @@ GATES: tuple[Gate, ...] = (
         "Tool definitions are pinned and changes are detected",
         ("ASI02", "ASI04"),
         ("Art. 15",),
-        detectors=(
-            ("ALR02-R01", "runtime",
-             ("A definition that changes after it was listed lets a server act trusted first "
-              "and rewrite what the tool tells the model later")),
-            ("ALR02-R02", "runtime",
-             ("A definition that differs from the digest the operator reviewed is not the tool "
-              "that was approved")),
-            ("ALR02-R03", "runtime",
-             "A tool missing from the operator's pins was never reviewed"),
-        ),
+        detectors=(),
     ),
     Gate(
         "ALR03",
@@ -348,8 +339,6 @@ DIAGNOSTICS: dict[str, str] = {
     "ALR04-099": "ALR04 per-scan summary",
     "ALR16-090": "ALR16 could not fully inspect a tool-call argument (coverage)",
     "ALR16-099": "ALR16 per-scan summary",
-    "ALR02-090": "ALR02 could not compare tool definitions (no payload recorded, or bad pins)",
-    "ALR02-099": "ALR02 per-list summary",
     "ALR05-090": "ALR05 could not inspect tool output (no payload recorded, or output was cut)",
     "ALR10-090": "ALR10 saw a tool call but no payload record (coverage)",
 }

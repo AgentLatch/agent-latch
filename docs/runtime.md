@@ -189,7 +189,7 @@ The `secret-leak` scenario shows the ALR10 checks instead: the client calls `sea
 
 1. **Normalizes** it: the trace record and its payload record are joined into one event (below).
 2. **Shows** it: one line on stderr, one row in `events.csv`, and the full event (arguments, payload and response) in `normalized.jsonl`.
-3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR02, ALR03, ALR04, ALR05, ALR10 and ALR16 ship with the package, so this file is created. They record findings and do not block or change the call.
+3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR03, ALR04, ALR05, ALR10 and ALR16 ship with the package, so this file is created. They record findings and do not block or change the call.
 
 With no file options it reads and writes in `runtime-logs/`:
 
@@ -215,10 +215,9 @@ For a full live run with a real CrewAI agent and this repo's MCP gateway, follow
 
 | Key | Gate | Shape | Effect |
 |---|---|---|---|
-| `suppressions` | ALR02, ALR03, ALR04, ALR05, ALR16 | `{RULE_ID: reason}` | The named rule (for example `ALR05-R01`) is still recorded but no longer counts as a finding (`suppressed: true`, with your reason). Other rules are unaffected. |
+| `suppressions` | ALR03, ALR04, ALR05, ALR16 | `{RULE_ID: reason}` | The named rule (for example `ALR05-R01`) is still recorded but no longer counts as a finding (`suppressed: true`, with your reason). Other rules are unaffected. |
 | `allowed_secret_tools` | ALR10 | `[{server, tool}]` | A secret crossing that server/tool pair is recorded as an expected `PASS` with a note. A tool name that merely looks like a login tool never lowers a finding; only this list does. |
 | `allowed_tool_dependencies` | ALR04 | `[{...}]` | Tool-to-tool references the operator has reviewed. |
-| `pinned_tools` | ALR02 | `[{server, tool, sha256}]` | The digest the operator reviewed for a tool definition. A different listed definition is `ALR02-R02`; an unlisted tool on a pinned server is `ALR02-R03`. Get the digests from `python -m agent_latch.gates.alr02 normalized.jsonl`. |
 | `gates`, `packages`, `indexes`, `mode` | ALR16 | see the ALR16 notes | Trusted package sources and install rules. |
 
 ```yaml
@@ -227,8 +226,6 @@ suppressions:
   ALR05-R01: reviewed with the weather vendor, 2026-11
 allowed_secret_tools:
   - {server: github, tool: search_issues}
-pinned_tools:
-  - {server: demo, tool: get_weather, sha256: 4f2c...64 hex characters...}
 ```
 
 ```sh
@@ -318,8 +315,6 @@ rule, `tool@server` and the decision reason, and the command exits `1` when a to
 results carry logical locations (`server/tool`) and fingerprints, because a runtime finding has no
 source file. The labelled corpus the tests use is `tests/runtime_fixtures/alr04_unit/`, whose
 payloads are synthetic and declare their expected outcome before the gate runs.
-**ALR02 (preview).** It compares tool definitions from `tools/list` responses. `ALR02-R01` fails when a tool listed earlier in the run now has a different description, input schema or annotations (a server that behaves until it is trusted, then changes what the tool tells the model); it needs no policy. `ALR02-R02` fails when the listed definition differs from the SHA-256 the operator pinned in `pinned_tools`, and `ALR02-R03` asks for review when a tool is missing from the pins of a server the operator did pin. Findings carry field names and hashes, never the definition text, and the digest is the same whether the definition comes from MCP (`inputSchema`) or the proxy log (`input_schema`). Definitions exist only with `--payloads`; without them the gate emits one coverage record per run (`ALR02-090`), and malformed pins are reported once (`ALR02-090`, reason `pinned_tools_invalid`), not skipped. `ALR02-099` is a per-list summary. State is kept for one importer run, so a change between two runs is caught only if it was pinned; a pinned tool that disappears is not reported. It does not read what a definition says (that is ALR04) or judge who the server is (ALR03). Findings carry the OWASP categories ASI02 and ASI04 as context. ALR02 never blocks a call.
-
 **ALR03 (preview).** Reads the connection handshake (`initialize` / `server/discover`), which the middleware records as an `initialize` event carrying the client and server name/version and the protocol version. It reports a finding when a server does not identify itself (rule ALR03-001), when a server's name or version changes versus an earlier connection in the same run (ALR03-002), and when a server's declared name or title is a look-alike of the proxy label or of a name seen earlier in the run (ALR03-003, typosquat/homoglyph impersonation — string similarity only: confusable folding, edit distance and bigram overlap; no regular expressions). It does not authenticate the transport (that is ALR12) or pin the tool list (ALR02), and identity is self-declared, so a PASS is not proof a server is trustworthy. Findings carry the OWASP categories ASI02, ASI03, ASI04, and ASI07. ALR03 never blocks a connection.
 
 **ALR04 (preview).** It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. The rules can miss reworded instructions, and they do not look at tool results or what the agent does next. ALR04 never blocks a call.
@@ -429,7 +424,7 @@ Start here: [the audit ledger](ledger.md) (the model and the verdicts), [setup](
 ## Limits
 
 - It sees only servers whose config entry goes through the proxy. Other servers, the app's built-in tools (for example Claude Code's shell and file edits) and the user's prompts to the model don't pass through it.
-- It records traffic and runs the bundled gates: ALR02 on tool-definition changes, ALR03 on the handshake, ALR04 on tool definitions, ALR05 on tool output and ALR10 on tool-call payloads. It reports findings and does not block calls.
+- It records traffic and runs the bundled gates: ALR03 on the handshake, ALR04 on tool definitions, ALR05 on tool output and ALR10 on tool-call payloads. It reports findings and does not block calls.
 - The audit ledger proves a log was not changed after it was recorded. It says nothing about whether what was recorded was safe, and a chain without an anchor cannot catch a full rewrite. See [the audit ledger](ledger.md).
 - It sees MCP traffic only, not the agent's requests to its model, so it records what the agent did, not the prompt or reasoning behind it.
 - Payload records cover `initialize` (the handshake), `tools/list`, `tools/call` and `prompts/get`. Other MCP messages (`resources/list`, `resources/read`, notifications, sampling) pass through without a record, and `prompts/list` is only in the trace. Tool results keep text content only: image, audio and embedded-resource blocks are left out. A failed `prompts/get` writes no record.
