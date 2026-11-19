@@ -52,10 +52,11 @@ from agent_latch.runtime.sqlite_store import (
 from agent_latch.runtime.store_check import check_store
 from agent_latch.runtime.tool_baseline import (
     BaselineError,
-    approve_candidate,
+    approve_document,
     capture_candidate,
     location_problem,
     read_document,
+    validate_candidate,
     write_private,
 )
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
@@ -323,6 +324,7 @@ def _parser() -> argparse.ArgumentParser:
                          help=f"folder with payloads.jsonl (default {DEFAULT_LOG_DIR})")
     capture.add_argument("--payloads", type=Path, metavar="FILE",
                          help="payloads file (default DIR/payloads.jsonl)")
+    capture.add_argument("--force", action="store_true", help="replace an existing candidate")
     capture.add_argument("--server", metavar="NAME", help="only this server label")
     capture.add_argument("--output", type=Path, metavar="FILE",
                          help="candidate file (default DIR/alr02-candidate.json)")
@@ -489,8 +491,8 @@ def _import_logs(args: argparse.Namespace) -> int:
         policy = load_policy(args.policy) if args.policy else None
         _check_baseline_location(policy, [
             directory, trace, payloads, args.output_csv, events_csv, args.normalized_out,
-            args.database, args.policy,
-        ])
+            args.database,
+        ], protected_directories=[trace.resolve().parent])
         gates = discover_gates(policy)
         store = SQLiteEventStore(args.database) if args.database else None
         importer = RuntimeLogImporter(
@@ -535,14 +537,20 @@ def _import_logs(args: argparse.Namespace) -> int:
     return 0
 
 
-def _check_baseline_location(policy: dict | None, protected: list[Path | None]) -> None:
+def _check_baseline_location(
+    policy: dict | None, protected: list[Path | None], *,
+    protected_directories: tuple[Path, ...] | list[Path] = (),
+) -> None:
     """ALR02: refuse a baseline the monitored process could have written. Raises ValueError."""
     configured = (policy or {}).get("alr02_baseline")
     if not isinstance(configured, str) or not configured.strip():
         return
     roots = (policy or {}).get("alr02_project_root") or []
     roots = [roots] if isinstance(roots, str) else [r for r in roots if isinstance(r, str)]
-    problem = location_problem(Path(configured).expanduser(), protected, extra_roots=roots)
+    problem = location_problem(
+        Path(configured).expanduser(), protected, extra_roots=roots,
+        protected_directories=protected_directories,
+    )
     if problem:
         raise ValueError(f"ALR02 baseline refused: {problem}")
 
@@ -552,8 +560,12 @@ def _baseline(args: argparse.Namespace) -> int:
         if args.baseline_command == "capture":
             payloads = args.payloads or args.dir / "payloads.jsonl"
             output = args.output or args.dir / "alr02-candidate.json"
+            if output.resolve() == payloads.resolve() or (
+                output.exists() and payloads.exists() and output.samefile(payloads)
+            ):
+                raise BaselineError("unsafe_output", "candidate output aliases the payloads log")
             document = capture_candidate(payloads, server=args.server)
-            write_private(output, document, replace=True)
+            write_private(output, document, replace=args.force)
             print(f"agent-latch-runtime: wrote baseline CANDIDATE {output} (not trusted)",
                   file=sys.stderr)
             _print_candidate(document)
@@ -561,6 +573,7 @@ def _baseline(args: argparse.Namespace) -> int:
                   f" {output} --to PATH_OUTSIDE_LOGS_AND_PROJECT", file=sys.stderr)
             return 0
         document = read_document(args.candidate)
+        validate_candidate(document)
         _print_candidate(document)
         if not args.yes:
             if not sys.stdin.isatty():
@@ -569,7 +582,7 @@ def _baseline(args: argparse.Namespace) -> int:
             if input("Approve this tool surface as the baseline? [y/N] ").strip().lower() != "y":
                 print("agent-latch-runtime: not approved", file=sys.stderr)
                 return 2
-        approve_candidate(args.candidate, args.to, args.protect, replace=args.force)
+        approve_document(document, args.candidate, args.to, args.protect, replace=args.force)
         print(f"agent-latch-runtime: approved baseline written to {args.to}."
               ' Use it with --policy: alr02_baseline: "<that path>"', file=sys.stderr)
         return 0
@@ -579,10 +592,12 @@ def _baseline(args: argparse.Namespace) -> int:
 
 
 def _print_candidate(document: dict) -> None:
+    from agent_latch.runtime.redact import safe_text
+
     for label, entry in document.get("servers", {}).items():
-        print(f"server {label}: {entry.get('tool_count')} tool(s)", file=sys.stderr)
+        print(f"server {safe_text(label, 200)}: {entry.get('tool_count')} tool(s)", file=sys.stderr)
         for name, digest in entry.get("tools", {}).items():
-            print(f"  {name}  {digest[:16]}", file=sys.stderr)
+            print(f"  {safe_text(name, 200)}  {digest[:16]}", file=sys.stderr)
 
 
 def _connectors(args: argparse.Namespace) -> int:

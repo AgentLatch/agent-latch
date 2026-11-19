@@ -290,10 +290,18 @@ When the comparison cannot be made, ALR02 writes `ALR02-090` (INCONCLUSIVE, show
 
 *Baseline.* Only a file you approved counts, and only through `--policy` (`alr02_baseline: /path/outside/the/project/baseline.json`). Traffic, the monitored project and the logs cannot create, approve or overwrite it, and `import-logs` exits `2` if the baseline sits in a folder the monitored process writes (the log folder, the folders of the trace, payloads and output files, the database) or under a path listed in the policy key `alr02_project_root`. Capture and approve in two steps:
 
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:0f12c3f72c3c228ee3e22402301b94cd87dac8628f0cd26148f522c4cbb68a8e -->
+
 ```bash
 agent-latch-runtime baseline capture --dir runtime-logs        # writes a CANDIDATE: names and hashes, not trusted
+# Capture refuses existing output unless --force is given; it always refuses the input log.
+
 agent-latch-runtime baseline approve runtime-logs/alr02-candidate.json --to ~/agentlatch/baseline.json
 ```
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 `capture` refuses a server whose newest list is incomplete. `approve` shows the tool names and short hashes, asks for confirmation (or takes `--yes`), refuses a destination inside the candidate's folder or a `--protect DIR`, refuses to replace a file without `--force`, and writes with mode `0600`. Review the tool list against the server itself before you approve: the candidate holds hashes only. The first capture is a snapshot of what the server says now, not proof that it was ever safe. Blind spots: the payload file masks secret-like values and cuts long strings before ALR02 sees them, so a change inside a masked value is invisible; a server can show different lists to different clients; only `tools/list` is compared. `agent-latch-runtime demo --scenario tool-drift` runs the whole flow on the bundled synthetic server: unchanged, changed description, changed schema, added tool, removed tool, no baseline, an incomplete list, and a matching list with instruction-like text that ALR04 still reports. ALR02 never blocks a call and makes no network request.
 

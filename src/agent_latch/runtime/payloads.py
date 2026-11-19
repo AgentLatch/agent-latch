@@ -73,12 +73,14 @@ class PayloadTap:
         client_id: str | None,
         server: str,
         tools: Sequence[ToolInfo],
+        incomplete: bool = False,
     ) -> PayloadEvent:
         for tool in tools:
             self._tools[(server, tool.name)] = tool
         return self._emit(
             session_id, request_id, client_id, server, "tools/list", "response",
-            {"tools": [_definition(tool) | {"name": tool.name} for tool in tools]},
+            {"tools": [_definition(tool) | {"name": tool.name} for tool in tools],
+             **({"next_cursor": True} if incomplete else {})},
         )
 
     def initialized(

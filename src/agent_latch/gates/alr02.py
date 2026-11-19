@@ -47,6 +47,7 @@ baseline covers the servers it names, so a server missing from it is reported as
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from threading import RLock
@@ -80,7 +81,7 @@ MAX_SERVERS = 1024
 _LOCK = RLock()
 _declared: dict[str, set[str]] = {}  # server label -> names it declared in `initialize`
 _reported: set[tuple[str, str, str, str]] = set()  # (server, tool, change, observed hash)
-_cache: dict[str, tuple[tuple[int, int], Baseline]] = {}
+_cache: dict[str, tuple[tuple[int, ...], Baseline]] = {}
 
 
 def reset_state() -> None:
@@ -166,17 +167,18 @@ def _load(policy: Mapping[str, Any] | None) -> Baseline:
     if not isinstance(configured, str) or not configured.strip():
         raise BaselineError("baseline_not_configured", "no baseline in the operator policy")
     path = Path(configured).expanduser()
+    key = str(path.resolve())
     try:
-        info = path.stat()
+        with path.open("rb") as stream:
+            info = os.fstat(stream.fileno())
+            stamp = (info.st_dev, info.st_ino, info.st_ctime_ns, info.st_mtime_ns, info.st_size)
+            with _LOCK:
+                cached = _cache.get(key)
+                if cached and cached[0] == stamp:
+                    return cached[1]
+            baseline = load_baseline(path, stream=stream)
     except OSError as error:
         raise BaselineError("baseline_unreadable", "the baseline file cannot be read") from error
-    stamp = (info.st_mtime_ns, info.st_size)
-    key = str(path.resolve())
-    with _LOCK:
-        cached = _cache.get(key)
-        if cached and cached[0] == stamp:
-            return cached[1]
-    baseline = load_baseline(path)  # raises BaselineError for a candidate or a bad file
     with _LOCK:
         _cache[key] = (stamp, baseline)
     return baseline

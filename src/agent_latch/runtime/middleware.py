@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from typing import Any
 
 import mcp.types as mt
@@ -23,6 +24,9 @@ from agent_latch.runtime.events import ToolCall, ToolInfo, ToolOutput, utc_now
 from agent_latch.runtime.payloads import PayloadTap
 from agent_latch.runtime.redact import safe_text
 from agent_latch.runtime.trace import TraceLog
+
+# Request-local mutable state also propagates through upstream task boundaries.
+listing_incomplete: ContextVar[list[bool] | None] = ContextVar("listing_incomplete", default=None)
 
 log = logging.getLogger("agent_latch.runtime")
 
@@ -107,7 +111,12 @@ class AgentLatchMiddleware(Middleware):
         context: MiddlewareContext[mt.ListToolsRequest],
         call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
     ) -> Sequence[Tool]:
-        tools = await call_next(context)
+        status = [False]
+        token = listing_incomplete.set(status)
+        try:
+            tools = await call_next(context)
+        finally:
+            listing_incomplete.reset(token)
         session_id, request_id = _ids(context)
         infos = [
             ToolInfo(
@@ -123,7 +132,8 @@ class AgentLatchMiddleware(Middleware):
             for tool in tools
         ]
         _record(lambda: self.trace.tools_listed(
-            session_id=session_id, request_id=request_id, server=self.server, tools=infos
+            session_id=session_id, request_id=request_id, server=self.server, tools=infos,
+            incomplete=status[0]
         ))
         tap = self.tap
         if tap is not None:
@@ -133,6 +143,7 @@ class AgentLatchMiddleware(Middleware):
                 client_id=_client_id(context),
                 server=self.server,
                 tools=infos,
+                incomplete=status[0],
             ))
         return tools
 

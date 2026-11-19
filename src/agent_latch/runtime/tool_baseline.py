@@ -30,7 +30,7 @@ import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from agent_latch.runtime.events import utc_now
 from agent_latch.runtime.ledger.canonical import dumps
@@ -149,6 +149,15 @@ def snapshot_from_tools(server: str, tools: Sequence[Any], *, next_cursor: bool 
         if name in fingerprints:
             duplicates.append(name)
             continue
+        invalid = False
+        for canonical, aliases in _FIELD_ALIASES:
+            expected = str if canonical in {"title", "description"} else Mapping
+            if any(tool.get(alias) is not None and not isinstance(tool[alias], expected)
+                   for alias in aliases):
+                invalid = True
+        if invalid:
+            malformed += 1
+            continue
         if _has_truncation(tool, [200_000]):
             truncated = True
         fingerprints[name] = tool_fingerprint(server, name, tool)
@@ -195,9 +204,12 @@ def _parse_servers(document: Mapping[str, Any]) -> dict[str, ServerBaseline]:
     return parsed
 
 
-def read_document(path: Path) -> dict[str, Any]:
+def read_document(path: Path, *, stream: BinaryIO | None = None) -> dict[str, Any]:
     try:
-        with path.open("rb") as stream:
+        if stream is None:
+            with path.open("rb") as opened:
+                raw = opened.read(MAX_BASELINE_BYTES + 1)
+        else:
             raw = stream.read(MAX_BASELINE_BYTES + 1)
     except OSError as error:
         raise BaselineError("baseline_unreadable", f"cannot read {path.name}") from error
@@ -212,9 +224,9 @@ def read_document(path: Path) -> dict[str, Any]:
     return document
 
 
-def load_baseline(path: Path) -> Baseline:
+def load_baseline(path: Path, *, stream: BinaryIO | None = None) -> Baseline:
     """Read an approved baseline. A candidate, or any other status, is refused."""
-    document = read_document(path)
+    document = read_document(path, stream=stream)
     if document.get("status") != STATUS_APPROVED:
         raise BaselineError(
             "baseline_not_approved",
@@ -231,7 +243,8 @@ def _inside(path: Path, folder: Path) -> bool:
 
 
 def location_problem(
-    baseline: Path, protected: Iterable[Path | None], *, extra_roots: Iterable[str] = ()
+    baseline: Path, protected: Iterable[Path | None], *, extra_roots: Iterable[str] = (),
+    protected_directories: Iterable[Path] = (),
 ) -> str | None:
     """Why ``baseline`` may not be trusted, or None. ``protected`` are folders (or files whose
     folder counts) that the monitored process writes: logs, payloads, stores, outputs.
@@ -244,6 +257,9 @@ def location_problem(
         if folder.is_file() or (not folder.exists() and folder.suffix):
             folder = folder.parent
         if _inside(target, folder):
+            return f"{baseline} is inside {folder}, which the monitored process can write"
+    for folder in protected_directories:
+        if _inside(target, folder.resolve()):
             return f"{baseline} is inside {folder}, which the monitored process can write"
     for root in extra_roots:
         if root and _inside(target, Path(root).resolve()):
@@ -291,12 +307,13 @@ def capture_candidate(payloads: Path, *, server: str | None = None) -> dict[str,
                     and record.get("stage") == "response"):
                 continue
             label, body = record.get("server"), record.get("payload")
-            if not isinstance(label, str) or not label.strip() or not isinstance(body, dict):
+            if not isinstance(label, str) or not label.strip():
                 continue
             if server is not None and label != server:
                 continue
-            tools = body.get("tools")
+            tools = body.get("tools") if isinstance(body, dict) else None
             if not isinstance(tools, list):
+                latest[label] = Snapshot(label, {}, malformed=1)
                 continue
             cursor = bool(body.get("next_cursor") or body.get("nextCursor"))
             latest[label] = snapshot_from_tools(label, tools, next_cursor=cursor)
@@ -324,7 +341,14 @@ def write_private(path: Path, document: Mapping[str, Any], *, replace: bool = Fa
             json.dump(document, stream, indent=2, sort_keys=True)
             stream.write("\n")
         os.chmod(temp, 0o600)
-        os.replace(temp, path)
+        if replace:
+            os.replace(temp, path)
+        else:
+            try:
+                os.link(temp, path)  # atomic creation: never overwrite a concurrent writer
+            except FileExistsError as error:
+                raise BaselineError("exists", f"{path} already exists; use --force to replace it") from error
+            Path(temp).unlink()
     except BaseException:
         Path(temp).unlink(missing_ok=True)
         raise
@@ -340,9 +364,21 @@ def approve_candidate(
     approved document.
     """
     document = read_document(candidate)
+    return approve_document(document, candidate, destination, protected, replace=replace)
+
+
+def validate_candidate(document: Mapping[str, Any]) -> dict[str, ServerBaseline]:
     if document.get("status") != STATUS_CANDIDATE:
-        raise BaselineError("not_a_candidate", f"{candidate.name} is not a candidate")
-    servers = _parse_servers(document)
+        raise BaselineError("not_a_candidate", "document is not a candidate")
+    return _parse_servers(document)
+
+
+def approve_document(
+    document: Mapping[str, Any], candidate: Path, destination: Path,
+    protected: Iterable[Path | None] = (), *, replace: bool = False,
+) -> dict[str, Any]:
+    """Approve the exact document already validated and displayed by the operator."""
+    servers = validate_candidate(document)
     problem = location_problem(destination, [candidate.parent, *protected])
     if problem:
         raise BaselineError("unsafe_location", problem)

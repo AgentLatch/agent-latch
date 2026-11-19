@@ -95,12 +95,14 @@ class TraceLog:
     # Record builders. Each returns the written record, which keeps tests simple.
 
     def tools_listed(
-        self, *, session_id: str, request_id: str, server: str, tools: Sequence[ToolInfo]
+        self, *, session_id: str, request_id: str, server: str, tools: Sequence[ToolInfo],
+        incomplete: bool = False,
     ) -> dict[str, Any]:
         return self.write({
             "session_id": session_id,
             "request_id": request_id,
             "server": server,
+            **({"next_cursor": True} if incomplete else {}),
             "method": "tools/list",
             "stage": "response",
             "tools": [

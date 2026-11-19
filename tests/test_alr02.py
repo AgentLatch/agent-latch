@@ -405,3 +405,205 @@ def test_tool_drift_demo_shows_every_outcome(tmp_path: Path) -> None:
     poisoned = sections["8-poisoned-but-matching"]
     assert poisoned[0].startswith("ALR02-099 PASS")
     assert any(line.startswith("ALR04-00") and "FAIL" in line for line in poisoned)
+
+
+def test_cache_invalidates_same_size_mtime_replacement(tmp_path: Path) -> None:
+    import os
+
+    policy = approved(tmp_path)
+    path = Path(policy['alr02_baseline'])
+    first = alr02._load(policy)
+    stamp = path.stat()
+    replacement = path.with_suffix('.new')
+    replacement.write_bytes(path.read_bytes().replace(b'approved', b'rejected'))
+    os.utime(replacement, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    replacement.replace(path)
+    with pytest.raises(tb.BaselineError, match='not .approved.'):
+        alr02._load(policy)
+    assert first.servers
+
+
+@pytest.mark.parametrize('field,value', [
+    ('title', []), ('description', {}), ('inputSchema', []),
+    ('output_schema', 'bad'), ('annotations', False), ('_meta', 1),
+])
+def test_malformed_fields_are_excluded(field: str, value: Any) -> None:
+    snap = tb.snapshot_from_tools('srv', [tool('x', **{field: value})])
+    assert snap.malformed == 1 and snap.tools == {}
+
+
+@pytest.mark.parametrize('body', [None, [], {}, {'tools': 'bad'}])
+def test_invalid_latest_response_replaces_previous_snapshot(tmp_path: Path, body: Any) -> None:
+    path = tmp_path / 'payloads'
+    good = event(SURFACE)
+    bad = good | {'payload': body}
+    path.write_text('\n'.join(map(json.dumps, [good, bad])))
+    with pytest.raises(tb.BaselineError, match='malformed_definition'):
+        tb.capture_candidate(path)
+    path.write_text('\n'.join(map(json.dumps, [good, bad, good])))
+    assert tb.capture_candidate(path)['servers']['srv']['tool_count'] == 3
+
+
+def test_capture_requires_force_and_refuses_log_alias(tmp_path: Path) -> None:
+    payloads = tmp_path / 'payloads.jsonl'
+    payloads.write_text(json.dumps(event(SURFACE)) + '\n')
+    original = payloads.read_bytes()
+    alias = tmp_path / 'alias'
+    alias.hardlink_to(payloads)
+    base = ['baseline', 'capture', '--payloads', str(payloads), '--output']
+    assert runtime_main([*base, str(alias), '--force']) == 2
+    assert payloads.read_bytes() == original
+    output = tmp_path / 'candidate'
+    assert runtime_main([*base, str(output)]) == 0
+    assert runtime_main([*base, str(output)]) == 2
+    assert runtime_main([*base, str(output), '--force']) == 0
+
+
+def test_approval_uses_displayed_document(tmp_path: Path, monkeypatch, capsys) -> None:
+    candidate = tmp_path / 'logs' / 'candidate'
+    original = tb._document(tb.STATUS_CANDIDATE, {'srv': tb.snapshot_from_tools('srv', SURFACE).tools})
+    tb.write_private(candidate, original)
+    destination = tmp_path / 'trusted' / 'baseline'
+
+    def confirm(_):
+        tb.write_private(candidate, tb._document(tb.STATUS_CANDIDATE, {'other': {}}), replace=True)
+        return 'y'
+
+    monkeypatch.setattr('sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('builtins.input', confirm)
+    assert runtime_main(['baseline', 'approve', str(candidate), '--to', str(destination)]) == 0
+    assert tb.load_baseline(destination).servers.keys() == {'srv'}
+    assert 'server srv' in capsys.readouterr().err
+
+
+def test_preview_escapes_and_bounds_identifiers(capsys) -> None:
+    from agent_latch.runtime.cli import _print_candidate
+
+    _print_candidate({'servers': {'\x1b\n' + 's' * 1000: {
+        'tool_count': 1, 'tools': {'\r\x1b' + 't' * 1000: 'a' * 64},
+    }}})
+    output = capsys.readouterr().err
+    assert '\x1b' not in output and '\r' not in output
+    assert '\\x1b' in output and len(output) < 500
+
+
+@pytest.mark.parametrize('trace_name', ['trace', 'logs.trace'])
+def test_trace_parent_protected_before_and_after_creation(tmp_path: Path, trace_name: str) -> None:
+    from agent_latch.runtime.cli import main
+
+    logs = tmp_path / 'runtime'
+    logs.mkdir()
+    custom = tmp_path / 'custom'
+    custom.mkdir()
+    trace = custom / trace_name
+    policy = approved(tmp_path)
+    baseline = custom / 'baseline.json'
+    baseline.write_bytes(Path(policy['alr02_baseline']).read_bytes())
+    config = tmp_path / 'operator' / 'policy.yaml'
+    config.write_text(f'alr02_baseline: {baseline}\n')
+    args = ['import-logs', '--dir', str(logs), '--trace', str(trace),
+            '--policy', str(config), '--once', '--quiet']
+    assert main(args) == 2
+    trace.touch()
+    assert main(args) == 2
+
+
+def test_policy_can_live_beside_baseline(tmp_path: Path) -> None:
+    policy = approved(tmp_path)
+    config = tmp_path / 'operator' / 'policy.yaml'
+    config.write_text(f"alr02_baseline: {policy['alr02_baseline']}\n")
+    logs = tmp_path / 'runtime'
+    logs.mkdir()
+    (logs / 'trace.jsonl').touch()
+    assert runtime_main(['import-logs', '--dir', str(logs), '--policy', str(config),
+                         '--once', '--quiet']) == 0
+
+
+@pytest.mark.parametrize('cursors,incomplete', [(['c', 'c'], True), (['c', None], False)])
+def test_upstream_page_status_reaches_recording(tmp_path: Path, monkeypatch, cursors, incomplete):
+    import asyncio
+
+    pytest.importorskip("fastmcp")
+    import mcp.types as mt
+    from fastmcp.server.providers.proxy import ProxyClient
+
+    from agent_latch.runtime.middleware import listing_incomplete
+    from agent_latch.runtime.payloads import PayloadTap
+    from agent_latch.runtime.proxy import RecordingProxyClient
+
+    pages = iter(cursors)
+
+    async def page(self, **kwargs):
+        return mt.ListToolsResult(tools=[], nextCursor=next(pages))
+
+    monkeypatch.setattr(ProxyClient, 'list_tools_mcp', page)
+    status = [False]
+    token = listing_incomplete.set(status)
+    try:
+        assert asyncio.run(RecordingProxyClient('http://example.invalid/mcp').list_tools()) == []
+    finally:
+        listing_incomplete.reset(token)
+    assert status == [incomplete]
+    emitted = []
+    tap = PayloadTap([emitted.append])
+    tap.tools_listed(session_id='s', request_id='r', client_id=None, server='srv',
+                     tools=[], incomplete=status[0])
+    from fastmcp import Client, FastMCP
+    from fastmcp.server import create_proxy
+
+    from agent_latch.runtime.middleware import AgentLatchMiddleware
+    from agent_latch.runtime.trace import TraceLog
+
+    pages = iter(cursors)
+    emitted.clear()
+    trace = TraceLog(tmp_path / "trace.jsonl", summary=io.StringIO())
+    proxy = create_proxy(RecordingProxyClient(FastMCP("backend")))
+    proxy.add_middleware(AgentLatchMiddleware(trace, server="srv", tap=tap))
+
+    async def exercise():
+        async with Client(proxy) as client:
+            return await client.list_tools()
+
+    assert asyncio.run(exercise()) == []
+    trace.close()
+    recorded = next(item for item in emitted if item.method == "tools/list")
+    result = alr02.evaluate(event([], **{k: v for k, v in recorded.payload.items()
+                                       if k != 'tools'}), policy=approved(tmp_path))
+    if incomplete:
+        assert not drift(result)
+        assert result['findings'][0]['rule_id'] == 'ALR02-090'
+    else:
+        assert len(drift(result)) == 3
+
+
+def test_cache_stamp_and_content_use_same_open_file(tmp_path: Path, monkeypatch) -> None:
+    policy = approved(tmp_path)
+    path = Path(policy['alr02_baseline'])
+    original_loader = alr02.load_baseline
+
+    def replace_before_read(opened_path, *, stream):
+        replacement = path.with_suffix('.new')
+        tb.write_private(replacement, tb._document(tb.STATUS_APPROVED, {'other': {}}))
+        replacement.replace(path)
+        return original_loader(opened_path, stream=stream)
+
+    monkeypatch.setattr(alr02, 'load_baseline', replace_before_read)
+    assert alr02._load(policy).servers.keys() == {'srv'}
+    monkeypatch.setattr(alr02, 'load_baseline', original_loader)
+    assert alr02._load(policy).servers.keys() == {'other'}
+
+
+def test_private_write_refuses_concurrent_creation(tmp_path: Path, monkeypatch) -> None:
+    import os
+
+    path = tmp_path / 'output'
+    original_link = os.link
+
+    def race(source, destination):
+        path.write_text('concurrent output')
+        original_link(source, destination)
+
+    monkeypatch.setattr(os, 'link', race)
+    with pytest.raises(tb.BaselineError, match='already exists'):
+        tb.write_private(path, {})
+    assert path.read_text() == 'concurrent output'
