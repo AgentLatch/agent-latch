@@ -15,7 +15,7 @@ A gate is a security outcome AgentLatch checks for, such as "destructive actions
 | `ALR01` | Prompt integrity | System prompts carry no injected instructions or raw user input | `PRM001`, `PRM002`, `ALR01-S01` | `ASI01` | Art. 15 | partial |
 | `ALR02` | Tool definition integrity | Tool definitions are pinned and changes are detected | none | `ASI02`, `ASI04` | Art. 15 | no checks yet |
 | `ALR03` | Tool and agent endpoint trust | Remote tools, MCP servers and peer agents are identified and authenticated | `MAN003`, `ALR03-S01`, `ALR03-001`, `ALR03-002`, `ALR03-003` | `ASI02`, `ASI03`, `ASI04`, `ASI07` | Art. 15 | partial |
-| `ALR04` | Tool schema injection | Tool definitions contain no instruction-like or hidden content | `ALR04-001`, `ALR04-002`, `ALR04-003`, `ALR04-004`, `ALR04-005`, `ALR04-006`, `ALR04-007`, `ALR04-008`, `ALR04-009` | `ASI01`, `ASI02`, `ASI04` | Art. 15 | preview (runtime) |
+| `ALR04` | Tool schema injection | Tool definitions contain no instruction-like or hidden content | `ALR04-001`, `ALR04-002`, `ALR04-003`, `ALR04-004`, `ALR04-005`, `ALR04-006`, `ALR04-007`, `ALR04-008`, `ALR04-009`, `ALR04-R01`, `ALR04-R02`, `ALR04-R03` | `ASI01`, `ASI02`, `ASI04` | Art. 15 | preview (runtime) |
 | `ALR05` | Untrusted content isolation | Web, HTTP and tool output reaches the model fenced as data | `AG003`, `ALR05-R01`, `ALR05-R02`, `ALR05-R03` | `ASI01` | Art. 15 | partial |
 | `ALR06` | Code execution containment | No unsandboxed eval, shell or model-driven code execution | `PY001`, `PY002`, `AG002`, `ALR06-S01`, `ALR06-S02` | `ASI02`, `ASI05` | Art. 15 | partial |
 | `ALR07` | Least-privilege tools | Tools and delegation are scoped, not wildcard or unrestricted | `AG001`, `AG005`, `MAN002` | `ASI02`, `ASI03`, `ASI05` | Art. 15 | partial |
@@ -52,6 +52,9 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `ALR04-007` | `ALR04` | runtime | Instructions are hidden with encoding or invisible characters | `ASI01`, `ASI02`, `ASI04` |
 | `ALR04-008` | `ALR04` | runtime | The tool definition pushes the model to always pick this tool | `ASI01`, `ASI02`, `ASI04` |
 | `ALR04-009` | `ALR04` | runtime | The tool definition demands a harmful step before it can be used | `ASI01`, `ASI02`, `ASI04` |
+| `ALR04-R01` | `ALR04` | runtime | The tool definition accepts parameters that contradict its declared behavior | `ASI01`, `ASI02`, `ASI04` |
+| `ALR04-R02` | `ALR04` | runtime | The tool definition collects conversation context or credential parameters | `ASI01`, `ASI02`, `ASI04` |
+| `ALR04-R03` | `ALR04` | runtime | The tool name collides with or resembles a tool registered by another server | `ASI01`, `ASI02`, `ASI04` |
 | `AG003` | `ALR05` | static | Content from outside reaches the model as if it were instructions, not data | `ASI01` |
 | `ALR05-R01` | `ALR05` | runtime | Output that reads as instructions for the model is indistinguishable from data unless the host fences it | `ASI01` |
 | `ALR05-R02` | `ALR05` | runtime | Instructions hidden in invisible characters or encoding still reach the model | `ASI01` |

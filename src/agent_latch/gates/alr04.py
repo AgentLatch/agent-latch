@@ -57,6 +57,7 @@ from urllib.parse import unquote
 
 from agent_latch.catalog import gate
 from agent_latch.owasp import category_entries
+from agent_latch.runtime.redact import mask_secrets
 
 GATE_ID = "ALR04"
 OWASP = list(gate(GATE_ID).owasp)
@@ -179,10 +180,15 @@ _PLAIN_SEGMENT = re.compile(r"[$@\w.-]{1,48}", re.ASCII)
 
 
 def safe_pointer(path: str, limit: int = 220) -> str:
-    """A field pointer for a report. Schema keys are server-controlled text, so only short
-    identifier-like segments are shown; any other key is replaced by a hash of itself."""
-    segments = [segment if _PLAIN_SEGMENT.fullmatch(segment) else f"key~{digest(segment)[:12]}"
-                for segment in path.split("/")]
+    """Keep scanner-owned path components readable and hash arbitrary schema keys."""
+    raw_segments = path.split("/")
+    segments: list[str] = []
+    for index, segment in enumerate(raw_segments):
+        schema_key = index > 0 and raw_segments[index - 1] == "properties"
+        walked_key = index + 1 < len(raw_segments) and raw_segments[index + 1] == "@key"
+        if schema_key or walked_key or segment != "@key" and not _PLAIN_SEGMENT.fullmatch(segment):
+            segment = f"key~{digest(segment)[:12]}"
+        segments.append(segment)
     return "/".join(segments)[:limit]
 
 
@@ -684,8 +690,13 @@ def _overrides(clause: Clause) -> bool:
     # own instructions. "All rules" alone could be a firewall's.
     strong = seq(clause, (STRONG_MOD, 0), (PROTECTED, 3)) \
         or seq(clause, (WEAK_MOD, 0), (STRONG_NOUN, 3))
-    if strong and (seq(clause, (OVERRIDE_OPS, 0), (PROTECTED, 6))
-                   or seq(clause, (PROTECTED, 0), (BE, 3), (OVERRIDE_OPS, 2))  # passive voice
+    override_positions = [index for index, token in enumerate(clause.tokens)
+                          if token in OVERRIDE_OPS]
+    affirmative = any(not any(token in NEG for token in clause.tokens[:index])
+                      for index in override_positions)
+    if strong and ((affirmative and seq(clause, (OVERRIDE_OPS, 0), (PROTECTED, 6)))
+                   or (affirmative and seq(clause, (PROTECTED, 0), (BE, 3),
+                                           (OVERRIDE_OPS, 2)))  # passive voice
                    or seq(clause, (NEG, 0), (FOLLOW, 2), (PROTECTED, 6))):
         return True
     qualified = strong or seq(clause, (WEAK_MOD, 0), (PROTECTED, 3))
@@ -898,6 +909,7 @@ class Prop:
     tokens: frozenset[str]
     kinds: frozenset[str]
     description: str
+    direction: str
 
 
 def parameter_kinds(name: str, spec: Mapping[str, Any]) -> frozenset[str]:
@@ -919,7 +931,13 @@ def parameter_kinds(name: str, spec: Mapping[str, Any]) -> frozenset[str]:
         kinds.add(FETCH)
     if heads & BODY_HEADS:
         kinds.add(BODY)
-    if spec.get("type") in TEXT_TYPES:
+    types = spec.get("type")
+    candidate_types = {None} if "type" not in spec else (
+        {types} if isinstance(types, str) else
+        set(types) if isinstance(types, list) and all(isinstance(item, str) for item in types)
+        else set()
+    )
+    if candidate_types & TEXT_TYPES:
         if heads & CONVERSATION_HEADS or any(pair <= every for pair in CONVERSATION_PAIRS):
             kinds.add(CONTEXT_STRONG)
         elif heads & CONTEXT_HEADS:
@@ -951,20 +969,23 @@ def schema_properties(tool: Mapping[str, Any], notes: set[str]) -> list[Prop]:
     payload tap's ``input_schema`` and MCP's ``inputSchema``.
     """
     out: list[Prop] = []
-    stack = [(tool[key], tool[key], f"$/{key}", 0) for key in reversed(SCHEMA_KEYS)
+    stack = [(tool[key], tool[key], f"$/{key}", 0,
+              "input" if key in ("input_schema", "inputSchema") else "output")
+             for key in reversed(SCHEMA_KEYS)
              if isinstance(tool.get(key), Mapping)]
-    followed: set[str] = set()
+    followed: set[tuple[int, str]] = set()
     while stack:
-        root, node, pointer, depth = stack.pop()
-        if depth > MAX_SCHEMA_DEPTH or len(out) >= MAX_PROPERTIES:
+        root, node, pointer, depth, direction = stack.pop()
+        if depth > MAX_SCHEMA_DEPTH:
             notes.add("schema_limit")
             break
         reference = node.get("$ref")
-        if isinstance(reference, str) and reference not in followed:
-            followed.add(reference)  # each reference once, so a cycle cannot loop
+        ref_key = (id(root), reference) if isinstance(reference, str) else None
+        if ref_key is not None and ref_key not in followed:
+            followed.add(ref_key)  # each reference once per schema root, so cycles cannot loop
             target = _resolve(root, reference)
             if isinstance(target, Mapping):
-                stack.append((root, target, pointer, depth + 1))
+                stack.append((root, target, pointer, depth + 1, direction))
         children = [(key, node.get(key)) for key in _SUBSCHEMAS]
         for key in _SUBSCHEMA_LISTS:
             entries = node.get(key)
@@ -975,17 +996,22 @@ def schema_properties(tool: Mapping[str, Any], notes: set[str]) -> list[Prop]:
             for name, spec in properties.items():
                 if not isinstance(spec, Mapping):
                     continue
-                children.append((f"properties/{name}", spec))
+                if len(out) >= MAX_PROPERTIES:
+                    notes.add("schema_limit")
+                    return out
+                name_segment = str(name).replace("~", "~0").replace("/", "~1")
+                children.append((f"properties/{name_segment}", spec))
                 description = spec.get("description")
                 out.append(Prop(
-                    f"{pointer}/properties/{name}", frozenset(name_tokens(name)),
+                    f"{pointer}/properties/{name_segment}", frozenset(name_tokens(name)),
                     parameter_kinds(str(name), spec),
                     description[:MAX_FIELD_CHARS] if isinstance(description, str) else "",
+                    direction,
                 ))
         for key, child in reversed(children):
             if isinstance(child, Mapping):
-                stack.append((root, child, f"{pointer}/{key}", depth + 1))
-    return out[:MAX_PROPERTIES]
+                stack.append((root, child, f"{pointer}/{key}", depth + 1, direction))
+    return out
 
 
 def is_narrow(tokens: Sequence[str]) -> bool:
@@ -1009,7 +1035,8 @@ def _capability_signals(tool: Mapping[str, Any], props: Sequence[Prop]) -> list[
         or bool(READ_ONLY_CLAIM.search(prose[:MAX_FIELD_CHARS]))
     read_only = declared or (bool(tokens) and tokens[0] in READ_VERBS)
     narrow = is_narrow(tokens)
-    kinds = frozenset().union(*(prop.kinds for prop in props))
+    input_props = [prop for prop in props if prop.direction == "input"]
+    input_kinds = frozenset().union(*(prop.kinds for prop in input_props))
     out: list[Signal] = []
 
     def add(name: str, prop: Prop) -> None:
@@ -1021,7 +1048,8 @@ def _capability_signals(tool: Mapping[str, Any], props: Sequence[Prop]) -> list[
         about_sink = prop.tokens & (SINK_HEADS | TRANSFER_MODS) & set(tokens)
         if EGRESS in prop.kinds and read_only and not about_sink:
             add("read_only_with_egress_sink", prop)
-        if FETCH in prop.kinds and declared and BODY in kinds:
+        if FETCH in prop.kinds and prop.direction == "input" and declared \
+                and BODY in input_kinds:
             add("read_only_with_body_to_url", prop)
         if prop.kinds & {WRITE, DESTROY} and declared:
             add("read_only_with_write", prop)
@@ -1174,12 +1202,19 @@ def _record(event: Mapping[str, Any], rule_id: str, family: str, outcome: str, *
             is_finding: bool = False, **extra: Any) -> dict[str, Any]:
     return {
         "gate_id": GATE_ID, "rule_id": rule_id, "family": family,
-        "entity": {"server": safe(server), "tool": safe(tool)},
+        "entity": {"server": safe(server), "tool": _disclosed_tool_label(tool)},
         "record_id": _pointer(event), "outcome": outcome, "is_finding": is_finding,
         "suppressed": False, "severity": severity, "owasp": OWASP,
         "evidence": [], "evidence_count": 0, "coverage_notes": [], "message": message,
         **extra,
     }
+
+
+def _disclosed_tool_label(tool: str) -> str:
+    """Keep ordinary labels readable; replace a secret-bearing label with an opaque ID."""
+    if mask_secrets(tool) != tool:
+        return f"tool~{digest(tool)[:12]}"
+    return safe(tool)
 
 
 def _not_inspected(event: Mapping[str, Any], reasons: set[str], *, server: str = "",
@@ -1224,6 +1259,7 @@ def _finding_records(event: Mapping[str, Any], scan: ToolScan, server: str, tool
 
 _lock = RLock()
 _scanned: OrderedDict[tuple[str, str, str, str], None] = OrderedDict()
+_registry_scanned: OrderedDict[tuple[tuple[str, str, str, str], str], None] = OrderedDict()
 _registry: OrderedDict[str, dict[str, dict[str, str]]] = OrderedDict()  # run -> server -> names
 
 
@@ -1231,6 +1267,7 @@ def reset_state() -> None:
     """Forget scanned definitions and remembered tool names (tests, or a new importer run)."""
     with _lock:
         _scanned.clear()
+        _registry_scanned.clear()
         _registry.clear()
 
 
@@ -1243,6 +1280,25 @@ def _remember(key: tuple[str, str, str, str]) -> bool:
         _scanned[key] = None
         while len(_scanned) > MAX_REMEMBERED:
             _scanned.popitem(last=False)
+        return False
+
+
+def _is_scanned(key: tuple[str, str, str, str]) -> bool:
+    with _lock:
+        if key not in _scanned:
+            return False
+        _scanned.move_to_end(key)
+        return True
+
+
+def _remember_registry(key: tuple[tuple[str, str, str, str], str]) -> bool:
+    with _lock:
+        if key in _registry_scanned:
+            _registry_scanned.move_to_end(key)
+            return True
+        _registry_scanned[key] = None
+        while len(_registry_scanned) > MAX_REMEMBERED:
+            _registry_scanned.popitem(last=False)
         return False
 
 
@@ -1350,11 +1406,30 @@ def evaluate(event: dict[str, Any]) -> dict[str, Any]:
             skipped += len(definitions) - index
             break
         name, sha = names[index], definition_hash(tool)
-        if _remember((run_id, server, name, sha)):
-            already += 1
-            continue
+        definition_key = (run_id, server, name, sha)
         ctx = ToolContext(name, siblings, foreign, foreign_names)
+        registry_state = digest(json.dumps(
+            [sorted(names), sorted(foreign_names.items())], ensure_ascii=False))
+        if _is_scanned(definition_key):
+            already += 1
+            if _remember_registry((definition_key, registry_state)):
+                continue
+            scan = ToolScan(signals=_registry_signals(name, ctx))
+            if not scan.signals:
+                continue
+            records = _finding_records(event, scan, server, name, sha)
+            out += records
+            scanned += 1
+            tool_ranks = [r["severity"] for r in records if r["outcome"] == OUTCOME_FINDING]
+            flagged += bool(tool_ranks)
+            ranks += tool_ranks
+            continue
         scan = scan_tool(tool, ctx, budget)
+        if "text_budget" not in scan.notes:
+            if _remember(definition_key):
+                already += 1
+                continue
+            _remember_registry((definition_key, registry_state))
         # A tool cut short by what is left of the event budget ends the event's reading.
         cut_by_event = "text_budget" in scan.notes and budget < MAX_TOOL_CHARS
         budget = 0 if cut_by_event else budget - scan.chars
@@ -1492,6 +1567,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("paths", nargs="+", type=Path, help="JSON payload files, or folders")
     parser.add_argument("--sarif", type=Path, help="write a SARIF 2.1.0 log to this file")
     args = parser.parse_args(argv)
+    missing = [path for path in args.paths if not path.exists()]
+    if missing:
+        for path in missing:
+            print(f"Error: input path does not exist: {path}", file=sys.stderr)
+        return 2
     files = [file for path in args.paths
              for file in ([path] if path.is_file() else sorted(path.glob("*.json")))]
     if not files:

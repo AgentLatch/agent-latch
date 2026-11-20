@@ -47,8 +47,9 @@ import re
 import unicodedata
 from collections import OrderedDict, deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
+from itertools import chain
 from threading import Lock
 from typing import Any
 from urllib.parse import urlsplit
@@ -157,6 +158,7 @@ class Command:
     # Bodies of $(...) and `...` ("cmd") and of <(...) ("proc") found in this command.
     substitutions: tuple[tuple[str, str], ...] = ()
     heredoc: str = ""
+    heredoc_delimiters: tuple[str, ...] = ()
 
 
 def _closing_paren(text: str, start: int) -> int:
@@ -187,6 +189,7 @@ def lex(text: str) -> tuple[list[Command], bool]:
     open_token = False  # a token has started; it may still be empty, as in ''
     quote = ""
     index, size = 0, len(text)
+    line_command_start = 0
 
     def end_token() -> None:
         nonlocal open_token
@@ -198,36 +201,38 @@ def lex(text: str) -> tuple[list[Command], bool]:
     def end_command(operator: str) -> None:
         end_token()
         if tokens:
-            commands.append(Command(tuple(tokens), operator, tuple(substitutions)))
+            kept: list[str] = []
+            delimiters: list[str] = []
+            token_index = 0
+            while token_index < len(tokens):
+                token = tokens[token_index]
+                redirection = re.fullmatch(r"\d*<<(?!=|<)(.*)", token)
+                if redirection:
+                    delimiter = redirection.group(1)
+                    if not delimiter and token_index + 1 < len(tokens):
+                        token_index += 1
+                        delimiter = tokens[token_index]
+                    if delimiter:
+                        delimiters.append(delimiter.lstrip("-"))
+                else:
+                    kept.append(token)
+                token_index += 1
+            commands.append(Command(tuple(kept), operator, tuple(substitutions),
+                                    heredoc_delimiters=tuple(delimiters)))
             tokens.clear()
             substitutions.clear()
 
     def finish_line() -> None:
-        end_token()
-        delimiters: list[str] = []
-        kept: list[str] = []
-        token_index = 0
-        while token_index < len(tokens):
-            token = tokens[token_index]
-            redirection = re.fullmatch(r"\d*<<(?!=)(.*)", token)
-            if redirection:
-                delimiter = redirection.group(1)
-                if not delimiter and token_index + 1 < len(tokens):
-                    token_index += 1
-                    delimiter = tokens[token_index]
-                if delimiter:
-                    delimiters.append(delimiter.lstrip("-"))
-            else:
-                kept.append(token)
-            token_index += 1
-        tokens[:] = kept
-        if not delimiters:
-            end_command(";")
+        nonlocal index, line_command_start
+        end_command(";")
+        replacements: dict[int, list[str]] = {}
+        heredocs = [(command_index, delimiter)
+                    for command_index in range(line_command_start, len(commands))
+                    for delimiter in commands[command_index].heredoc_delimiters]
+        if not heredocs:
+            line_command_start = len(commands)
             return
-
-        bodies: list[str] = []
-        nonlocal index
-        for delimiter in delimiters:
+        for command_index, delimiter in heredocs:
             body: list[str] = []
             while index + 1 < size:
                 line_start = index + 1
@@ -241,14 +246,13 @@ def lex(text: str) -> tuple[list[Command], bool]:
                 body.append(line)
                 if line_end == size:
                     break
-            else:
-                body = []
-            bodies.append("\n".join(body))
-        end_token()
-        if tokens:
-            commands.append(Command(tuple(tokens), ";", tuple(substitutions), "\n".join(bodies)))
-            tokens.clear()
-            substitutions.clear()
+            replacements.setdefault(command_index, []).append("\n".join(body))
+        for command_index, bodies in replacements.items():
+            commands[command_index] = replace(
+                commands[command_index], heredoc="\n".join(bodies),
+                heredoc_delimiters=(),
+            )
+        line_command_start = len(commands)
 
     def substitution(start: int) -> int:
         """Record a $(...), `...` or <(...) body, keep its text in the token, skip past it."""
@@ -776,7 +780,8 @@ def _is_default_index(entry: str, context: str) -> bool:
     return entry.lower() in names
 
 
-def _index_signals(value: str, *, extra: bool, context: str) -> list[str]:
+def _index_signals(value: str, *, extra: bool, context: str,
+                   allowed_indexes: frozenset[str] = frozenset()) -> list[str]:
     """Signals for a package index setting. ``value`` may list several indexes."""
     signals: list[str] = []
     entries = [entry for entry in _LIST_SEPARATOR.split(value.strip()) if entry]
@@ -784,17 +789,29 @@ def _index_signals(value: str, *, extra: bool, context: str) -> list[str]:
         signals.append("plaintext_http_source")
     if extra:
         signals.append("extra_index_url")  # a second index is the dependency-confusion shape
-    elif not entries or not all(_is_default_index(entry, context) for entry in entries):
+    elif not entries or not all(
+            _is_default_index(entry, context) or _is_approved_index(entry, allowed_indexes)
+            for entry in entries):
         signals.append("custom_index")
     return signals
 
 
-def _effect_signals(action: Action, value: str, *, context: str = "") -> list[str]:
+def _is_approved_index(entry: str, approved: frozenset[str]) -> bool:
+    candidates = {entry.strip().lower().rstrip("/")}
+    host = _url_parts(entry)[1]
+    if host:
+        candidates.add(host)
+    return bool(candidates & approved)
+
+
+def _effect_signals(action: Action, value: str, *, context: str = "",
+                    allowed_indexes: frozenset[str] = frozenset()) -> list[str]:
     """Signals for one source or verification setting, whatever syntax supplied it."""
     if not _WHEN[action.when](value):
         return []
     if action.effect in ("index", "extra_index"):
-        return _index_signals(value, extra=action.effect == "extra_index", context=context)
+        return _index_signals(value, extra=action.effect == "extra_index", context=context,
+                              allowed_indexes=allowed_indexes)
     signal = _EFFECT_SIGNAL.get(action.effect)
     return [signal] if signal else []
 
@@ -853,7 +870,13 @@ def _pin_state(spec: str, style: str) -> str:
         if clause is None:
             return UNPINNED
         operator, version = clause.groups()
-        exact = operator in ("=", "==") and _EXACT_VERSION.fullmatch(version)
+        exact = operator == "==" and _EXACT_VERSION.fullmatch(version)
+        return PINNED if exact else RANGE
+    if style == "cargo_requirement":
+        _, separator, version = spec.rpartition("@")
+        if not separator:
+            return UNPINNED
+        exact = version.startswith("=") and _EXACT_VERSION.fullmatch(version[1:])
         return PINNED if exact else RANGE
     if style == "gem":
         _, colon, version = spec.partition(":")
@@ -998,6 +1021,7 @@ class Origin:
 _lock = Lock()
 _seen: OrderedDict[tuple[str, ...], None] = OrderedDict()
 _writes: deque[tuple[Origin, str]] = deque()
+_write_revisions: OrderedDict[Origin, int] = OrderedDict()
 
 
 def reset_state() -> None:
@@ -1005,6 +1029,7 @@ def reset_state() -> None:
     with _lock:
         _seen.clear()
         _writes.clear()
+        _write_revisions.clear()
 
 
 def _already_reported(key: tuple[str, ...]) -> bool:
@@ -1031,15 +1056,17 @@ def _remember_scripts(origin: Origin, names: Iterable[str]) -> bool:
     return dropped
 
 
-def _forget_scripts(origin: Origin, paths: Iterable[str]) -> None:
-    removed = set(paths)
-    if not removed:
-        return
+def _advance_write_revision(origin: Origin) -> None:
     with _lock:
-        retained = [(owner, path) for owner, path in _writes
-                    if owner != origin or path not in removed]
-        _writes.clear()
-        _writes.extend(retained)
+        _write_revisions[origin] = _write_revisions.get(origin, 0) + 1
+        _write_revisions.move_to_end(origin)
+        while len(_write_revisions) > MAX_REMEMBERED:
+            _write_revisions.popitem(last=False)
+
+
+def _write_revision(origin: Origin) -> int:
+    with _lock:
+        return _write_revisions.get(origin, 0)
 
 
 def _written_scripts(origin: Origin) -> frozenset[str]:
@@ -1065,6 +1092,7 @@ class Scan:
     notes: set[str] = field(default_factory=set)
     installs: int = 0
     modes: set[str] = field(default_factory=set)
+    allowed_indexes: frozenset[str] = frozenset()
 
     @property
     def found(self) -> bool:
@@ -1077,7 +1105,16 @@ class Scan:
             return
         if len(self.evidence) >= MAX_EVIDENCE:
             self.notes.add("evidence_limit")
-            return
+            retained = sorted(self.evidence, key=lambda evidence: (
+                _RANK_ORDER[SIGNALS[evidence.signal][1]], evidence.signal,
+                evidence.path, evidence.sha256))
+            worst = retained[-1]
+            new_rank = (_RANK_ORDER[SIGNALS[item.signal][1]], item.signal, item.path, item.sha256)
+            worst_rank = (_RANK_ORDER[SIGNALS[worst.signal][1]], worst.signal,
+                          worst.path, worst.sha256)
+            if new_rank >= worst_rank:
+                return
+            del self.evidence[worst]
         self.evidence[item] = None
 
 
@@ -1230,7 +1267,7 @@ class Analyser:
         # Stages of the current pipeline whose output has not been consumed by an interpreter.
         # Each stage is looked at once, so a long pipeline costs linear time.
         upstream: list[tuple[str, list[str]]] = []
-        for command in commands:
+        for command_index, command in enumerate(commands):
             words, redirect_targets = split_redirections(command.tokens)
             argv, assignments = strip_prefixes(words)
             self.environment(assignments)
@@ -1243,7 +1280,19 @@ class Analyser:
             if argv:
                 self._writes_source_config(program, argv, redirect_targets)
                 handled_substitutions = self._command(program, argv, command, depth)
-            if command.heredoc and _runs_stdin(program, args):
+            feeds_interpreter = _runs_stdin(program, args)
+            following = command_index + 1
+            while not feeds_interpreter and command.operator == "|" and following < len(commands):
+                next_command = commands[following]
+                next_words, _ = split_redirections(next_command.tokens)
+                next_argv, _ = strip_prefixes(next_words)
+                next_program = program_name(next_argv[0]) if next_argv else ""
+                feeds_interpreter = _runs_stdin(next_program, next_argv[1:])
+                if not feeds_interpreter and next_command.operator == "|":
+                    following += 1
+                else:
+                    break
+            if command.heredoc and feeds_interpreter:
                 self.text(command.heredoc, depth + 1)
             for substitution in command.substitutions:
                 if substitution in handled_substitutions:
@@ -1259,11 +1308,13 @@ class Analyser:
         for name, value in assignments.items():
             action = ENV_SETTINGS.get(name.upper())
             if action is not None:
-                self._signal(_effect_signals(action, value, context=_index_context(name)), name)
+                self._signal(_effect_signals(
+                    action, value, context=_index_context(name),
+                    allowed_indexes=self.scan.allowed_indexes), name)
 
     def hidden(self, text: str, depth: int) -> bool:
         """Analyse decoded text. Anything found inside it is reported as obfuscated."""
-        nested = Analyser(Scan(), self.origin, self.path)
+        nested = Analyser(Scan(allowed_indexes=self.scan.allowed_indexes), self.origin, self.path)
         nested.text(text, depth + 1)
         self.scan.notes |= nested.scan.notes
         if nested.scan.found:
@@ -1416,7 +1467,11 @@ class Analyser:
         manager = MANAGERS[name]
         matched = _match_verb(manager, args)
         if matched is not None:
-            self._install(name, manager, *matched)
+            mode, before, after = matched
+            verb_path = tuple(word.lower() for word in args[len(before):len(before) + 1])
+            pin_style = "cargo_requirement" if name == "cargo" and verb_path == ("add",) \
+                else manager.pin_style
+            self._install(name, manager, mode, before, after, pin_style=pin_style)
 
     def _config_change(self, name: str, args: Sequence[str]) -> bool:
         """``pip config set global.index-url URL`` and the npm, yarn and pnpm forms."""
@@ -1432,13 +1487,15 @@ class Analyser:
         if not equals:
             value = " ".join(words[1:])
         action = CONFIG_KEYS.get(key.lower().rsplit(".", 1)[-1])
-        signals = _effect_signals(action, value, context=name) if action else []
+        signals = _effect_signals(
+            action, value, context=name, allowed_indexes=self.scan.allowed_indexes
+        ) if action else []
         if signals:  # setting the default registry again is not a change worth reporting
-            self._signal([*signals, "persistent_source_config_change"], key)
+            self._signal([*signals, "persistent_source_config_change"], f"{key}|{value}")
         return True
 
     def _install(self, manager_name: str, manager: Manager, mode: str, before: Sequence[str],
-                 after: Sequence[str]) -> None:
+                 after: Sequence[str], *, pin_style: str | None = None) -> None:
         positionals: list[str] = []
         option_specs: list[str] = []
         requirements: list[str] = []
@@ -1460,7 +1517,9 @@ class Analyser:
             elif action.effect in ("hashed", "locked", "pin", "yes"):
                 directives.add(action.effect)
             else:
-                self._signal(_effect_signals(action, value, context=manager_name), action.effect)
+                self._signal(_effect_signals(
+                    action, value, context=manager_name,
+                    allowed_indexes=self.scan.allowed_indexes), value)
 
         runs_package = mode in (RUN, RUN_LOCAL)
         if runs_package:
@@ -1490,7 +1549,8 @@ class Analyser:
             if selector_state == RANGE:
                 self.scan.add("version_range", self.path, selector)
         for spec in specs[:MAX_PACKAGES]:
-            for signal in _spec_signals(spec, manager, self.scan):
+            spec_manager = replace(manager, pin_style=pin_style or manager.pin_style)
+            for signal in _spec_signals(spec, spec_manager, self.scan):
                 if SIGNALS[signal][0] == PINNING:
                     if version_fixed:
                         continue
@@ -1574,6 +1634,37 @@ def _collect(arguments: Mapping[str, Any], scan: Scan
     string_count = 0
     exhausted = False
 
+    def has_text(value: Any) -> bool:
+        pending = [value]
+        visited = 0
+        while pending:
+            if visited >= MAX_STRINGS * 4:
+                return True
+            current = pending.pop()
+            if isinstance(current, Iterator):
+                try:
+                    child = next(current)
+                except StopIteration:
+                    continue
+                pending.extend((current, child))
+                continue
+            visited += 1
+            if isinstance(current, str):
+                if current:
+                    return True
+            elif isinstance(current, Mapping):
+                pending.append(iter(current.values()))
+            elif isinstance(current, list):
+                pending.append(iter(current))
+        return False
+
+    def note_remaining(values: Iterable[Any]) -> bool:
+        for value in values:
+            if has_text(value):
+                scan.notes.add("character_budget")
+                return True
+        return False
+
     def take(text: str) -> tuple[str, bool]:
         nonlocal budget, string_count, exhausted
         if string_count >= MAX_STRINGS:
@@ -1595,6 +1686,10 @@ def _collect(arguments: Mapping[str, Any], scan: Scan
     def walk(value: Any, path: str, key: str, depth: int) -> None:
         nonlocal budget, exhausted
         if exhausted:
+            if has_text(value):
+                scan.notes.add("character_budget")
+            return
+        if exhausted:
             return
         if isinstance(value, str):
             text, complete = take(value)
@@ -1607,6 +1702,10 @@ def _collect(arguments: Mapping[str, Any], scan: Scan
             original: list[str] = []
             complete = True
             for index, item in enumerate(value):
+                if exhausted:
+                    if note_remaining(value[index:]):
+                        complete = False
+                    break
                 if not isinstance(item, str):
                     complete = False
                     break
@@ -1624,9 +1723,9 @@ def _collect(arguments: Mapping[str, Any], scan: Scan
                 if not full:
                     complete = False
                     break
-                if exhausted and index + 1 < len(value):
-                    scan.notes.add("character_budget")
-                    complete = False
+                if exhausted:
+                    if index + 1 < len(value) and note_remaining(value[index + 1:]):
+                        complete = False
                     break
             if parts:
                 fields.append(Field(
@@ -1640,30 +1739,35 @@ def _collect(arguments: Mapping[str, Any], scan: Scan
             if depth >= MAX_ARGUMENT_DEPTH:
                 scan.notes.add("depth_limit")
                 return
-            items = value.items() if isinstance(value, Mapping) else enumerate(value)
+            items = iter(value.items() if isinstance(value, Mapping) else enumerate(value))
             for name, child in items:
-                child_path = f"{path}.{safe(name, 60)}"
+                if exhausted:
+                    note_remaining(chain((child,), (item[1] for item in items)))
+                    break
+                child_path = f"{path}.key~{digest(str(name))[:12]}"
                 if key in ENV_KEYS and isinstance(child, str):
                     text, _ = take(child)
                     environment[str(name)] = text
                 else:
                     walk(child, child_path, key, depth + 1)
-                if exhausted:
-                    break
 
-    for name, value in arguments.items():
+    argument_items = iter(arguments.items())
+    for name, value in argument_items:
+        if exhausted:
+            note_remaining(chain((value,), (item[1] for item in argument_items)))
+            break
         key = str(name).lower()
         if key in ENV_KEYS and isinstance(value, Mapping):
-            for env_name, env_value in value.items():
+            env_items = iter(value.items())
+            for env_name, env_value in env_items:
                 if exhausted:
+                    note_remaining(chain((env_value,), (item[1] for item in env_items)))
                     break
                 if isinstance(env_value, str):
                     text, _ = take(env_value)
                     environment[str(env_name)] = text
         else:
             walk(value, f"arguments.{safe(name, 60)}", key, 0)
-        if exhausted:
-            break
     return fields, environment
 
 
@@ -1706,15 +1810,17 @@ def _scan_commands(fields: Sequence[Field], scan: Scan, origin: Origin) -> None:
         _scan_encoded(item.text, analyser)
 
 
-def _scan_write(fields: Sequence[Field], scan: Scan, origin: Origin, tool: str) -> None:
+def _scan_write(fields: Sequence[Field], scan: Scan, origin: Origin) -> None:
     """A file write is not an install. Remember the file if its content contains one."""
     names = [_normalize_path(item.text) for item in fields
              if item.key in PATH_KEYS and item.complete]
+    if names:
+        _advance_write_revision(origin)
     contents = [item for item in fields if item.key not in PATH_KEYS]
     suspicious = False
     python_content = any(posixpath.splitext(name)[1].lower() == ".py" for name in names)
     for item in contents:
-        nested = Analyser(Scan(), origin, item.path)
+        nested = Analyser(Scan(allowed_indexes=scan.allowed_indexes), origin, item.path)
         nested.text(item.text)
         scan.notes |= nested.scan.notes
         suspicious = suspicious or nested.scan.found or _code_installs(
@@ -1725,23 +1831,12 @@ def _scan_write(fields: Sequence[Field], scan: Scan, origin: Origin, tool: str) 
             scan.add("persistent_source_config_change", "arguments", basename(name))
     if suspicious and _remember_scripts(origin, [name for name in names if name]):
         scan.notes.add("write_history_limit")
-    words = {word.lower() for word in _NAME_WORDS.split(tool) if word}
-    complete_replacement = bool(words & {"write", "save", "create", "put"}) \
-        and not bool(words & {"append", "edit", "patch", "insert"})
-    inspected = [item for item in contents if item.key in {
-        "content", "contents", "text", "body", "new_content", "data",
-    }]
-    if (complete_replacement and names and inspected and not suspicious
-            and all(item.complete for item in inspected) and not scan.notes):
-        _forget_scripts(origin, names)
-
-
 def _scan_call(arguments: Mapping[str, Any], role: str, origin: Origin,
-               tool: str) -> tuple[Scan, str]:
-    scan = Scan()
+               allowed_indexes: frozenset[str] = frozenset()) -> tuple[Scan, str]:
+    scan = Scan(allowed_indexes=allowed_indexes)
     fields, environment = _collect(arguments, scan)
     if role == "write":
-        _scan_write(fields, scan, origin, tool)
+        _scan_write(fields, scan, origin)
     else:
         Analyser(scan, origin, "arguments.environment").environment(environment)
         command_fields = [item for item in fields if item.key in COMMAND_KEYS]
@@ -1826,8 +1921,8 @@ def _summary(event: Mapping[str, Any], server: str, role: str, outcome: str,
 def startup_capabilities() -> list[dict[str, str]]:
     """What this gate can and cannot check, for a dispatcher to report up front."""
     unsupported = {
-        "operator_policy": "No policy input exists yet, so allowlists, denylists, approved "
-                           "indexes and typosquat checks are not applied.",
+        "operator_policy": "Only indexes listed in the trusted operator policy are treated "
+                           "as approved; allowlists, denylists and typosquat checks are absent.",
         "startup_command": "The proxy does not record the MCP server's launch command.",
         "response_corroboration": "tools/call responses are not inspected; request intent only.",
         "registry_contact_or_digest": "No network or digest verification; the registry "
@@ -1845,7 +1940,8 @@ def startup_capabilities() -> list[dict[str, str]]:
     ]
 
 
-def evaluate(event: dict[str, Any]) -> dict[str, Any]:
+def evaluate(event: dict[str, Any], *, policy: Mapping[str, Any] | None = None
+             ) -> dict[str, Any]:
     """Findings for one normalized importer event."""
     if not isinstance(event, Mapping):
         return {"findings": [_not_inspected({}, {"malformed_event"})]}
@@ -1866,10 +1962,19 @@ def evaluate(event: dict[str, Any]) -> dict[str, Any]:
         return {"findings": [_summary(event, server, role, OUTCOME_OUT_OF_SCOPE, (), None)]}
 
     origin = Origin(str(event.get("run_id") or ""), str(event.get("session_id") or ""), server)
-    # The same command means something new once a script has been written, so the write
-    # history is part of the duplicate key.
-    history = digest("\n".join(sorted(_written_scripts(origin))))
-    scan, arguments_sha256 = _scan_call(arguments, role, origin, tool)
+    history = digest(f"{_write_revision(origin)}|"
+                     + "\n".join(sorted(_written_scripts(origin))))
+    approved_indexes: set[str] = set()
+    if isinstance(policy, Mapping) and isinstance(policy.get("indexes"), list):
+        for value in policy["indexes"]:
+            if isinstance(value, str) and value.strip():
+                normalized = value.strip().lower().rstrip("/")
+                approved_indexes.add(normalized)
+                host = _url_parts(value)[1]
+                if host:
+                    approved_indexes.add(host)
+    scan, arguments_sha256 = _scan_call(
+        arguments, role, origin, frozenset(approved_indexes))
     if _already_reported((origin.run_id, origin.session_id, origin.server, tool,
                           arguments_sha256, history)):
         return {"findings": []}

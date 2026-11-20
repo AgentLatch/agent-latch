@@ -453,6 +453,14 @@ sequenceDiagram
 
 Rule behavior and known blind spots are documented in [docs/RULES.md](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md).
 
+The monitor-only ALR04 runtime detector IDs are:
+
+| Rule | Gate | Detection | OWASP Agentic mapping |
+|---|---|---|---|
+| `ALR04-R01` | `ALR04` | Tool claims read-only or offline behavior while its input schema accepts a risky capability | ASI01; ASI02; ASI04 |
+| `ALR04-R02` | `ALR04` | Tool input schema accepts conversation context or credential parameters | ASI01; ASI02; ASI04 |
+| `ALR04-R03` | `ALR04` | Tool name collides with or resembles one listed by another server in the run | ASI01; ASI02; ASI04 |
+
 Every rule belongs to one **gate**: the security outcome it checks, such as `ALR09` Human approval for sensitive actions. Reports show a rule with its gate, for example `AG006 (ALR09)`. SARIF and JSON keep the full rule ID (`AGENTLATCH-AG006`), and suppressions accept either form. [docs/GATES.md](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md) lists every gate, its detectors (static rules and runtime checks such as ALR04), and how it maps to OWASP and the EU AI Act. These mappings are informational, not a compliance claim.
 
 ## OWASP Agentic Top 10 coverage
