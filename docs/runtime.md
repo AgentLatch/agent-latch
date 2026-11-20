@@ -290,10 +290,6 @@ When the comparison cannot be made, ALR02 writes `ALR02-090` (INCONCLUSIVE, show
 
 *Baseline.* Only a file you approved counts, and only through `--policy` (`alr02_baseline: /path/outside/the/project/baseline.json`). Traffic, the monitored project and the logs cannot create, approve or overwrite it, and `import-logs` exits `2` if the baseline sits in the log folder or in the folder of the trace, payloads, output or database files, or under a path listed in the policy key `alr02_project_root` (a path or a list of paths). Those checks look at paths only: passing them does not prove the monitored process cannot write the baseline, so keep the baseline and the policy file where it has no write access (another OS user, a read-only mount, file permissions). Capture and approve in two steps:
 
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:0f12c3f72c3c228ee3e22402301b94cd87dac8628f0cd26148f522c4cbb68a8e -->
-
 ```bash
 agent-latch-runtime baseline capture --dir runtime-logs        # writes a CANDIDATE: names and hashes, not trusted
 # Capture refuses existing output unless --force is given; it always refuses the input log.
@@ -301,15 +297,7 @@ agent-latch-runtime baseline capture --dir runtime-logs        # writes a CANDID
 agent-latch-runtime baseline approve runtime-logs/alr02-candidate.json --to ~/agentlatch/baseline.json
 ```
 
-<!-- /coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:5af529115047629cb5ccefff3118ab523239afa6efb8b1b13f5eee169b76b68c -->
-
 `capture` refuses a server whose newest list is incomplete or unreadable, will not write over the payloads log, and replaces an existing candidate only with `--force`. `approve` reads the candidate once, shows the tool names and short hashes, asks for confirmation (or takes `--yes`), refuses a destination inside the candidate's folder or a `--protect DIR`, refuses to replace a file without `--force`, and writes with mode `0600`. Review the tool list against the server itself before you approve: the candidate holds hashes only. `import-logs` skips results already in its output CSV, so after approving, set `alr02_baseline` in the policy and run `import-logs` again with a new `--output-csv` path (the earlier report stays as it was). The first capture is a snapshot of what the server says now, not proof that it was ever safe. Blind spots: the payload file masks secret-like values and cuts long strings before ALR02 sees them, so a change inside a masked value is invisible; a server can show different lists to different clients; only `tools/list` is compared; the proxy tracks upstream pages and marks the assembled list incomplete when pagination stops on a repeated cursor, so ALR02 reports ALR02-090 and compares nothing; and ALR02 keeps its handshake and already-reported memory in the importer process only (see [Restarting the importer](#restarting-the-importer)). `agent-latch-runtime demo --scenario tool-drift` runs the whole flow on the bundled synthetic server: unchanged, changed description, changed schema, added tool, removed tool, no baseline, an incomplete list, and a matching list with instruction-like text that ALR04 still reports. ALR02 never blocks a call and makes no network request.
-
-<!-- /coderabbit-ai-generated:v1 -->
 
 **ALR04 (preview).** Inspects tool definitions for content (ALR02 above checks for change). It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. ALR04 never blocks a call.
 
