@@ -339,8 +339,8 @@ DIAGNOSTICS: dict[str, str] = {
     "ALR04-099": "ALR04 per-scan summary",
     "ALR16-090": "ALR16 could not fully inspect a tool-call argument (coverage)",
     "ALR16-099": "ALR16 per-scan summary",
-    "ALR05-R90": "ALR05 could not inspect tool output (no payload recorded, or output was cut)",
-    "ALR10-R90": "ALR10 saw a tool call but no payload record (coverage)",
+    "ALR05-090": "ALR05 could not inspect tool output (no payload recorded, or output was cut)",
+    "ALR10-090": "ALR10 saw a tool call but no payload record (coverage)",
 }
 
 # Runtime detectors that cite only a subset of their gate's OWASP categories. Other runtime

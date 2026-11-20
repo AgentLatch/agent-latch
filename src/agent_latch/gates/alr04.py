@@ -76,7 +76,6 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
-import hashlib
 import html
 import json
 import re
@@ -92,9 +91,9 @@ from typing import Any
 from urllib.parse import unquote
 
 from agent_latch.catalog import gate
-from agent_latch.gates._text import Evidence
-from agent_latch.gates._text import verdict as _text_verdict
 from agent_latch.owasp import category_entries
+from agent_latch.runtime.text.engine import Evidence, digest, safe
+from agent_latch.runtime.text.engine import verdict as _text_verdict
 
 GATE_ID = "ALR04"
 # Every ALR04 check cites its gate's OWASP categories (agent_latch.catalog).
@@ -116,6 +115,7 @@ CATEGORIES = (
 RULE_IDS = {name: f"ALR04-{i:03d}" for i, name in enumerate(CATEGORIES, 1)}
 RULE_COVERAGE = "ALR04-090"
 RULE_SUMMARY = "ALR04-099"
+POLICY_KEYS = ("suppressions", "allowed_tool_dependencies")  # operator policy keys read
 
 # Severity follows the outcome, per check. There is no per-category ladder to calibrate.
 FAIL_SEVERITY = {category: "high" for category in CATEGORIES}
@@ -160,21 +160,6 @@ def rx(expr: str) -> re.Pattern[str]:
 
 
 # --- record contract ------------------------------------------------------------------------
-# Shared with ALR03, which imports ``digest`` and ``safe`` from this module. Keep both public and
-# behaviour-stable; the contract helpers are the part of this gate other gates may depend on.
-
-
-def digest(text: str) -> str:
-    """SHA-256 of ``text``. Findings carry hashes so no matched content is ever reported."""
-    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
-
-
-def safe(text: Any, limit: int = 120) -> str:
-    """Printable, single-line, length-limited text; names and paths come from untrusted servers."""
-    flat = "".join("?" if unicodedata.category(c).startswith("C") else c for c in str(text))
-    return flat[:limit]
-
-
 def _pointer(event: Mapping[str, Any]) -> str:
     """The importer's event pointer, so every record can be traced back to a log row."""
     record = event.get("record_id")
@@ -647,7 +632,7 @@ RULE_THRESHOLDS = {
 }
 
 # The phrase families, text preparation, bounded walk, decode layers, clause splitting, the
-# Evidence type and the corroboration verdict live in agent_latch.gates._text, shared with the
+# Evidence type and the corroboration verdict live in agent_latch.runtime.text.engine, shared with the
 # other runtime gates. This module keeps only tool-definition logic.
 
 

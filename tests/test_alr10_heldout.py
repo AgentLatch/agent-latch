@@ -3,9 +3,13 @@
 ``runtime_fixtures/alr10_heldout.json`` is kept apart from the inline corpus in ``test_alr10.py``
 and was not used to tune the masking patterns. It is still small and written by the same people
 as the gate, so it checks for regressions and shows the measured rates; it is not evidence of
-performance on real traffic. Measured when it was added: request recall 7/12, response recall
-8/10, no false positives in either direction; the thresholds below sit under those numbers. Some cases are formats the masking does not recognize (see
-``KNOWN_MISSES``): they are listed so the blind spots stay visible instead of being dropped.
+performance on real traffic. Measured now (48 original cases plus 9 benign and review cases):
+request recall 7/12 (58%), request false positives 1/17 (6%); response recall 8/10 (80%),
+response false positives 1/16 (6%). The thresholds below sit under those numbers. Some secrets
+are formats the masking does not recognize (``KNOWN_MISSES``), and two benign placeholder texts
+are still flagged (``KNOWN_FALSE_POSITIVES``); both are asserted so the blind spots stay visible.
+Cases marked ``review`` are honest text with a bare ``[REDACTED]``: they are a low-severity
+INCONCLUSIVE review, counted in neither rate.
 """
 
 from __future__ import annotations
@@ -29,6 +33,14 @@ KNOWN_MISSES = {
     "npm token (shape not covered)",
     "AWS secret in an env assignment",
     "env-style password line",
+}
+
+
+# Benign cases the gate still flags today. The test asserts they are still flagged, so a masking
+# fix shows up as a deliberate change here. They count in the false-positive rate.
+KNOWN_FALSE_POSITIVES = {
+    "placeholder API_KEY=<your key>",
+    "placeholder assignments in docs",
 }
 
 
@@ -85,12 +97,48 @@ def _rates(direction: str) -> tuple[float, float, list[str], list[str]]:
             hit += flagged
             if not flagged:
                 missed.append(case["note"])
-        else:
+        elif case["expect"] == "benign":
             benign += 1
             false_hit += flagged
             if flagged:
                 false_positives.append(case["note"])
     return hit / secrets, false_hit / benign, missed, false_positives
+
+
+def test_review_cases_are_low_severity_reviews_never_failures() -> None:
+    """A bare [REDACTED] with no masking metadata may be honest text: review it, never FAIL."""
+    reviews = [(order, case) for order, case in enumerate(_cases(), 1)
+               if case["expect"] == "review"]
+    assert len(reviews) >= 2
+    for order, case in reviews:
+        found = alr10.evaluate(_event(case, order))["findings"]
+        assert [(f["outcome"], f["severity"]) for f in found] == [("INCONCLUSIVE", "low")], case
+
+
+def test_known_false_positives_are_exactly_the_documented_ones() -> None:
+    flagged = {
+        case["note"]
+        for order, case in enumerate(_cases(), 1)
+        if case["expect"] == "benign" and _flagged(case, order)
+    }
+    assert flagged == KNOWN_FALSE_POSITIVES
+
+
+def test_a_login_style_tool_name_never_lowers_a_finding() -> None:
+    """The same secret shape in a tool named like a login tool keeps the severity of any tool."""
+    for order, case in enumerate(_cases(), 1):
+        if case["expect"] != "secret" or case["note"] in KNOWN_MISSES:
+            continue
+        plain = alr10.evaluate(_event(case, order))["findings"]
+        assert plain and plain[0]["is_finding"], case["note"]
+        for name in ("login", "authenticate", "get_access_token", "oauth_sign_in"):
+            event = _event(case, order)
+            event["name"] = name
+            event["payload"] = {**event["payload"], "tool": name}
+            renamed = alr10.evaluate(event)["findings"]
+            assert [(f["outcome"], f["severity"], f["is_finding"]) for f in renamed] == [
+                (f["outcome"], f["severity"], f["is_finding"]) for f in plain
+            ], (name, case["note"])
 
 
 def test_heldout_set_covers_both_directions() -> None:
