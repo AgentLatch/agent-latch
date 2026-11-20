@@ -45,6 +45,10 @@ class ToolInfo:
     input_schema: Mapping[str, Any]
     # MCP tool annotations as the server declares them (readOnlyHint, destructiveHint, ...).
     annotations: Mapping[str, Any] = field(default_factory=dict)
+    # Other stable fields the server advertises; None when it sends none (ALR02 fingerprints them).
+    title: str | None = None
+    output_schema: Mapping[str, Any] | None = None
+    meta: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

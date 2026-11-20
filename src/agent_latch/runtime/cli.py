@@ -44,12 +44,22 @@ from agent_latch.runtime.ledger.verify import (
     trace_for,
 )
 from agent_latch.runtime.payloads import DEFAULT_PAYLOAD_MAX_CHARS, PayloadFile, PayloadTap
+from agent_latch.runtime.redact import safe_text
 from agent_latch.runtime.sqlite_store import (
     SQLiteEventReader,
     SQLiteEventStore,
     stored_schema_version,
 )
 from agent_latch.runtime.store_check import check_store
+from agent_latch.runtime.tool_baseline import (
+    BaselineError,
+    approve_document,
+    capture_candidate,
+    check_candidate,
+    location_problem,
+    read_document,
+    write_private,
+)
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
 
 DEFAULT_LOG_DIR = "runtime-logs"
@@ -298,6 +308,39 @@ def _parser() -> argparse.ArgumentParser:
                       help="the event store written by import-logs --database")
     tool.add_argument("--name", default="audit-log", help="MCP server name (default audit-log)")
 
+    baseline = commands.add_parser(
+        "baseline",
+        help="capture a tool-list candidate and approve it as the ALR02 baseline",
+        description=(
+            "ALR02 compares each complete tools/list response with a baseline you approved."
+            " 'capture' writes a CANDIDATE from the recorded payloads (names and hashes only)."
+            " A candidate is never trusted. 'approve' is the explicit step that turns one into"
+            " a baseline, at a path outside the logs and outside the monitored project. Point"
+            " import-logs --policy at it with the key alr02_baseline. Local only, no network."
+        ),
+    )
+    steps = baseline.add_subparsers(dest="baseline_command", required=True)
+    capture = steps.add_parser("capture", help="write a baseline candidate from recorded payloads")
+    capture.add_argument("--dir", type=Path, default=Path(DEFAULT_LOG_DIR), metavar="DIR",
+                         help=f"folder with payloads.jsonl (default {DEFAULT_LOG_DIR})")
+    capture.add_argument("--payloads", type=Path, metavar="FILE",
+                         help="payloads file (default DIR/payloads.jsonl)")
+    capture.add_argument("--server", metavar="NAME", help="only this server label")
+    capture.add_argument("--output", type=Path, metavar="FILE",
+                         help="candidate file (default DIR/alr02-candidate.json)")
+    capture.add_argument("--force", action="store_true",
+                         help="replace the candidate file if it already exists")
+    approve = steps.add_parser("approve", help="approve a reviewed candidate as the baseline")
+    approve.add_argument("candidate", type=Path, help="candidate file written by 'capture'")
+    approve.add_argument("--to", type=Path, required=True, metavar="FILE",
+                         help="the baseline to write, outside the logs and the project")
+    approve.add_argument("--protect", type=Path, action="append", default=[], metavar="DIR",
+                         help="a folder the monitored process can write; --to may not be inside"
+                              " it (repeatable; the candidate's own folder is always protected)")
+    approve.add_argument("--yes", action="store_true",
+                         help="approve without the confirmation prompt")
+    approve.add_argument("--force", action="store_true", help="replace an existing baseline file")
+
     demo = commands.add_parser(
         "demo",
         help="record a short synthetic MCP session through the proxy and import it",
@@ -311,10 +354,13 @@ def _parser() -> argparse.ArgumentParser:
         help=f"folder for the demo's files, replaced on each run (default {DEFAULT_LOG_DIR}/demo)",
     )
     demo.add_argument(
-        "--scenario", choices=("default", "poisoned-output", "secret-leak"), default="default",
+        "--scenario", choices=("default", "poisoned-output", "secret-leak", "tool-drift"),
+        default="default",
         help="default: a mix of ordinary calls; poisoned-output: one web fetch whose result "
              "carries hidden and visible injection content for ALR05; secret-leak: sends a fake "
-             "credential to a tool and reads one back so the ALR10 checks fire",
+             "credential to a tool and reads one back so the ALR10 checks fire; tool-drift: "
+             "approves the tool list, then lists again after a description change, an added "
+             "tool and a removed tool, plus an incomplete list, for ALR02",
     )
     return parser
 
@@ -444,7 +490,15 @@ def _import_logs(args: argparse.Namespace) -> int:
                 ),
                 directory,
             )
-        gates = discover_gates(load_policy(args.policy) if args.policy else None)
+        policy = load_policy(args.policy) if args.policy else None
+        # What the monitored process writes: the log folder, and each output with its folder (a
+        # name without a suffix, or one not created yet, still protects its parent). The operator's
+        # policy file is trusted configuration, so a baseline may sit beside it.
+        written = [trace, payloads, args.output_csv, events_csv, args.normalized_out, args.database]
+        _check_baseline_location(policy, [
+            directory, *written,
+        ], protected_directories=[path.resolve().parent for path in written if path])
+        gates = discover_gates(policy)
         store = SQLiteEventStore(args.database) if args.database else None
         importer = RuntimeLogImporter(
             trace,
@@ -486,6 +540,76 @@ def _import_logs(args: argparse.Namespace) -> int:
         print(f"agent-latch-runtime: importer failed: {error}", file=sys.stderr)
         return 2
     return 0
+
+
+def _check_baseline_location(
+    policy: dict | None, protected: list[Path | None], *,
+    protected_directories: tuple[Path, ...] | list[Path] = (),
+) -> None:
+    """ALR02: refuse a baseline the monitored process could have written. Raises ValueError."""
+    configured = (policy or {}).get("alr02_baseline")
+    if not isinstance(configured, str) or not configured.strip():
+        return
+    roots = (policy or {}).get("alr02_project_root")
+    if roots is None:
+        roots = []
+    elif isinstance(roots, str):
+        roots = [roots]
+    elif not (isinstance(roots, list) and all(isinstance(r, str) for r in roots)):
+        raise ValueError("alr02_project_root must be a path or a list of paths")
+    problem = location_problem(
+        Path(configured).expanduser(), protected, extra_roots=roots,
+        protected_directories=protected_directories,
+    )
+    if problem:
+        raise ValueError(f"ALR02 baseline refused: {problem}")
+
+
+def _baseline(args: argparse.Namespace) -> int:
+    try:
+        if args.baseline_command == "capture":
+            payloads = args.payloads or args.dir / "payloads.jsonl"
+            output = args.output or args.dir / "alr02-candidate.json"
+            if output.resolve() == payloads.resolve() or (
+                output.exists() and payloads.exists() and output.samefile(payloads)
+            ):
+                raise BaselineError("unsafe_output", "candidate output aliases the payloads log")
+            document = capture_candidate(payloads, server=args.server)
+            write_private(output, document, replace=args.force)
+            print(f"agent-latch-runtime: wrote baseline CANDIDATE {output} (not trusted)",
+                  file=sys.stderr)
+            _print_candidate(document)
+            print("Review it, then approve it with: agent-latch-runtime baseline approve"
+                  f" {output} --to PATH_OUTSIDE_LOGS_AND_PROJECT", file=sys.stderr)
+            return 0
+        # One document is read, validated, shown and then written, so what the operator approves
+        # is exactly what becomes the baseline, even if the file changes in between.
+        document = read_document(args.candidate)
+        check_candidate(document)
+        _print_candidate(document)
+        if not args.yes:
+            if not sys.stdin.isatty():
+                print("agent-latch-runtime: approval needs a terminal or --yes", file=sys.stderr)
+                return 2
+            if input("Approve this tool surface as the baseline? [y/N] ").strip().lower() != "y":
+                print("agent-latch-runtime: not approved", file=sys.stderr)
+                return 2
+        approve_document(
+            document, args.candidate.parent, args.to, args.protect, replace=args.force
+        )
+        print(f"agent-latch-runtime: approved baseline written to {args.to}."
+              ' Use it with --policy: alr02_baseline: "<that path>"', file=sys.stderr)
+        return 0
+    except (BaselineError, OSError) as error:
+        print(f"agent-latch-runtime: baseline: {error}", file=sys.stderr)
+        return 2
+
+
+def _print_candidate(document: dict) -> None:
+    for label, entry in document.get("servers", {}).items():
+        print(f"server {safe_text(label, 200)}: {entry.get('tool_count')} tool(s)", file=sys.stderr)
+        for name, digest in entry.get("tools", {}).items():
+            print(f"  {safe_text(name, 200)}  {digest[:16]}", file=sys.stderr)
 
 
 def _connectors(args: argparse.Namespace) -> int:
@@ -785,6 +909,8 @@ def main(argv: list[str] | None = None) -> int:
         return _anchor(args)
     if args.subcommand == "audit-tool":
         return _audit_tool(args)
+    if args.subcommand == "baseline":
+        return _baseline(args)
     if args.subcommand == "demo":
         return _demo(args)
     return 2
