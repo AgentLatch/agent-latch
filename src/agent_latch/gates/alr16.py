@@ -998,6 +998,7 @@ class Origin:
 _lock = Lock()
 _seen: OrderedDict[tuple[str, ...], None] = OrderedDict()
 _writes: deque[tuple[Origin, str]] = deque()
+_write_revisions: OrderedDict[Origin, int] = OrderedDict()
 
 
 def reset_state() -> None:
@@ -1030,6 +1031,19 @@ def _remember_scripts(origin: Origin, names: Iterable[str]) -> bool:
             _writes.popleft()
             dropped = True
     return dropped
+
+
+def _advance_write_revision(origin: Origin) -> None:
+    with _lock:
+        _write_revisions[origin] = _write_revisions.get(origin, 0) + 1
+        _write_revisions.move_to_end(origin)
+        while len(_write_revisions) > MAX_REMEMBERED:
+            _write_revisions.popitem(last=False)
+
+
+def _write_revision(origin: Origin) -> int:
+    with _lock:
+        return _write_revisions.get(origin, 0)
 
 
 def _forget_scripts(origin: Origin, paths: Iterable[str]) -> None:
@@ -1711,6 +1725,8 @@ def _scan_write(fields: Sequence[Field], scan: Scan, origin: Origin, tool: str) 
     """A file write is not an install. Remember the file if its content contains one."""
     names = [_normalize_path(item.text) for item in fields
              if item.key in PATH_KEYS and item.complete]
+    if names:
+        _advance_write_revision(origin)
     contents = [item for item in fields if item.key not in PATH_KEYS]
     suspicious = False
     python_content = any(posixpath.splitext(name)[1].lower() == ".py" for name in names)
@@ -1869,7 +1885,8 @@ def evaluate(event: dict[str, Any]) -> dict[str, Any]:
     origin = Origin(str(event.get("run_id") or ""), str(event.get("session_id") or ""), server)
     # The same command means something new once a script has been written, so the write
     # history is part of the duplicate key.
-    history = digest("\n".join(sorted(_written_scripts(origin))))
+    history = digest(
+        f"{_write_revision(origin)}|" + "\n".join(sorted(_written_scripts(origin))))
     scan, arguments_sha256 = _scan_call(arguments, role, origin, tool)
     if _already_reported((origin.run_id, origin.session_id, origin.server, tool,
                           arguments_sha256, history)):
