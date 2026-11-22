@@ -259,6 +259,8 @@ Each finding includes a rule ID and its gate (see [GATES.md](GATES.md)), severit
 
 With `--runtime-result --ledger FILE`, the audit trail counts too: a trail that fails verification exits `1` even when `--fail-on none`, and a ledger path with nothing at it exits `2`. `--runtime-result --database FILE` does the same for the event store, and a store that does not seal its rows (`ALR15-R02`) also exits `1`. See [the audit ledger](ledger.md).
 
+Runtime findings are not part of a scan. `agent-latch-runtime import-logs` writes `events.csv`, `normalized.jsonl`, `gate-results.csv` and `gate-results.sarif` (SARIF 2.1.0, every finding from all runtime gates, written on every run), and `agent-latch --runtime-result gate-results.csv` prints the CSV as a table. See [the runtime monitor](runtime.md).
+
 When the scan exits `1`, it prints the findings that caused the failure (severity, rule, `path:line`, and title) to stderr, so JSON or SARIF on stdout stays valid:
 
 ```text
