@@ -315,6 +315,14 @@ That prints the same kind of table as `agent-latch scan`: severity, rule, locati
 
 Restarting the importer skips events and results already in its output files, so rows and lines are not repeated. Malformed lines are logged and skipped. The importer does not block or modify MCP traffic. Its output files can hold payload data, so keep them local and access-controlled (they are created with mode `0600`; `runtime-logs/` is in `.gitignore`).
 
+### Keep the events in another store (optional)
+
+A store package keeps the same sealed events somewhere other than a SQLite file. Choose it with
+`--store TYPE` (and `--store-option KEY=VALUE`, secrets as `env:VARNAME`) wherever you would write
+`--database FILE`: `import-logs`, `verify`, `anchor`, `audit-tool` and the report. The seals, the
+refusals, the anchors and the exit codes are the same. `agent-latch-runtime stores` lists what is
+installed. See [stores.md](stores.md).
+
 ### Send events to a connector (optional)
 
 A connector is a separate package that sends the normalized events somewhere other than the built-in files: a database, another live system or an archive (design: [connectors.md](connectors.md)). **Nothing is discovered, imported or sent unless you name a connector.** `--database` is unchanged and does not use connectors. No connector package ships with AgentLatch yet; this is the configuration and the command line they plug into.

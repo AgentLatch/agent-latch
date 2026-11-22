@@ -320,6 +320,24 @@ class _Reading:
             return None
         return None if row is None or not isinstance(row[0], str) else row[0]
 
+    def seals_for(self, keys: Iterable[tuple[str, int]]) -> dict[tuple[str, int], Seal]:
+        """The stored seal of each ``(run_id, order)`` key that exists (for connectors that ask)."""
+        found: dict[tuple[str, int], Seal] = {}
+        conn = self._connection()
+        try:
+            for run_id, order in keys:
+                row = conn.execute(
+                    "SELECT seal_seq, seal_prev, seal_digest FROM events"
+                    " WHERE run_id = ? AND event_order = ?",
+                    (run_id, int(order)),
+                ).fetchone()
+                seal = None if row is None else _seal_from(tuple(row))
+                if seal is not None:
+                    found[(run_id, int(order))] = seal
+        except sqlite3.Error as error:
+            raise OSError(f"could not read seals from {self.path} ({type(error).__name__})") from error
+        return found
+
     def sealed_rows(self) -> Iterator[StoredRow]:
         """Every row with its seal, in seal order. An unreadable row is yielded as such."""
         try:

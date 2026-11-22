@@ -512,6 +512,14 @@ that prove it:
 - No new core runtime dependency.
 - Every existing test passes unchanged.
 
+## 7a. Seals for connectors that ask
+
+A connector may set `wants_seals = True`. With a sealed store (`--database` or `--store`), it receives
+each event after the store has saved it, with an extra `seal` field (`{seq, prev, digest}`, or `null`
+when the store could not return it). Without a store it receives events as before, with no `seal`
+field. Every other connector is unchanged. The field is optional and additive, so `CONNECTOR_API`
+stays `1`. Details: [stores.md](stores.md#connectors-that-ask-for-seals).
+
 ## 8. What this is not
 
 - Not real-time blocking. Connectors observe, like the gates. They never approve or refuse

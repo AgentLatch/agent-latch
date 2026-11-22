@@ -337,6 +337,12 @@ class RuntimeLogImporter:
         self._runners = [
             ConnectorRunner(loaded, connector_dir or trace_path.parent) for loaded in connectors
         ]
+        # A connector that asks for seals (``wants_seals = True``) gets each event once the store
+        # has saved and sealed it, with the seal attached. Only with a store that can look its seals
+        # up again; every other connector gets events as soon as they are read, as before.
+        self._sealing = callable(getattr(store, "seals_for", None))
+        self._awaiting_seal: list[dict[str, Any]] = []  # saved, seal not yet handed on
+        self._seal_lookup_failing = False
         self.follow = follow
         self.poll_interval = poll_interval
         self.payload_grace = payload_grace
@@ -476,6 +482,8 @@ class RuntimeLogImporter:
 
     def _deliver_connectors(self, *, final: bool) -> None:
         """Hand new events to each connector. A failing one never holds back another."""
+        if self._sealing:
+            self._hand_on_seals(final=final)
         for runner in self._runners:
             runner.deliver(final=final)
 
@@ -514,8 +522,42 @@ class RuntimeLogImporter:
                 len(self._unsaved),
             )
             self._store_failing = False
+        if self._sealing and any(runner.wants_seals for runner in self._runners):
+            self._awaiting_seal.extend(self._unsaved)
         self._unsaved = []
+        self._hand_on_seals()
         self._publish(force=False)
+
+    def _hand_on_seals(self, *, final: bool = False) -> None:
+        """Give saved events, each with its seal, to the connectors that asked for seals.
+
+        A failed lookup keeps them for the next pass. With ``final``, events still without a seal
+        are handed on with ``seal`` set to null, so the connector reports them like any other.
+        """
+        if not self._awaiting_seal:
+            return
+        events = self._awaiting_seal
+        seals: Mapping[tuple[str, int], Any] = {}
+        try:
+            seals = self.store.seals_for(  # type: ignore[union-attr]
+                [(str(event["run_id"]), int(event["order"])) for event in events]
+            )
+        except OSError as error:
+            if not final:
+                if not self._seal_lookup_failing:
+                    log.warning("agent-latch-runtime: cannot read seals back (%s); retrying", error)
+                    self._seal_lookup_failing = True
+                return
+        self._seal_lookup_failing = False
+        self._awaiting_seal = []
+        for event in events:
+            seal = seals.get((str(event["run_id"]), int(event["order"])))
+            event["seal"] = (
+                None if seal is None else {"seq": seal.seq, "prev": seal.prev, "digest": seal.digest}
+            )
+            for runner in self._runners:
+                if runner.wants_seals:
+                    runner.add(event)
 
     def _refuse_lowered_version(self) -> None:
         """Refuse before the store is opened when its anchor is unreadable or its version was lowered.
@@ -634,7 +676,7 @@ class RuntimeLogImporter:
         self._refuse_if_saved_rows_changed()
         self._refuse_if_rewritten_since_last_point()
         point = point_for(
-            store.path or Path("events"),
+            store.path or Path(str(getattr(store, "name", None) or "events")),
             seq=head.seq,
             digest=head.digest,
             records=head.seq,
@@ -812,6 +854,8 @@ class RuntimeLogImporter:
         if self.store is not None:
             self._unsaved.append(copy.deepcopy(event))  # saved at the end of this pass
         for runner in self._runners:
+            if runner.wants_seals and self._sealing:
+                continue  # handed on with its seal once the store has saved it
             runner.add(event)  # each connector keeps its own copy, delivered after this pass
         findings = errors = 0
         if self._csv is not None and self._writer is not None:

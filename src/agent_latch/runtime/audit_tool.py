@@ -44,3 +44,39 @@ def build_audit_tool(database: Path, *, name: str = "audit-log") -> FastMCP:
         )
 
     return server
+
+
+def build_audit_tool_for_reader(reader: Any, *, name: str = "audit-log") -> FastMCP:
+    """The same audit tool for a store opened through ``--store``.
+
+    The reader comes from the store package and must not be able to change the store. A reader
+    with ``query(sql)`` (a database) also gets ``query_audit_log``; one without (an object store)
+    offers ``recent_events`` only.
+    """
+    from agent_latch.runtime.stores import recent_from_rows
+
+    reader.open()  # fails early (and clearly) when the store is missing, unsealed or newer
+    server = FastMCP(name)
+    query = getattr(reader, "query", None)
+
+    if callable(query):
+
+        @server.tool(annotations={"readOnlyHint": True})
+        def query_audit_log(sql: str) -> list[dict[str, Any]]:
+            """Run one SQL statement against the audit log and return up to 200 rows.
+
+            The connection is read-only: statements that change anything are refused.
+            """
+            return query(sql)
+
+    recent = getattr(reader, "recent_events", None)
+
+    @server.tool(annotations={"readOnlyHint": True})
+    def recent_events(limit: int = 5) -> list[dict[str, Any]]:
+        """Return the newest stored events: time, tool or prompt name, stage and seal number."""
+        count = max(1, min(int(limit), 200))
+        if callable(recent):
+            return recent(count)
+        return recent_from_rows(reader.sealed_rows(), count)
+
+    return server
