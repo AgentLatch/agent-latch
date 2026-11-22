@@ -259,6 +259,7 @@ def test_store_without_a_file_names_its_anchor_points(tmp_path: Path, run: dict[
 
 
 def test_audit_tool_for_a_store(wrapped: None, run: dict[str, Path]) -> None:
+    pytest.importorskip("fastmcp")  # the [runtime] extra; the plain unit-test job runs without it
     from agent_latch.runtime.audit_tool import build_audit_tool_for_reader
 
     assert _import(run) == 0
