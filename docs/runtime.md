@@ -206,14 +206,14 @@ The `secret-leak` scenario shows the ALR10 checks instead: the client calls `sea
 2. **Shows** it: one line on stderr, one row in `events.csv`, and the full event (arguments, payload and response) in `normalized.jsonl`.
 3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR03, ALR04, ALR05 and ALR10 ship with the package, so this file is created. They record findings and do not block or change the call. When the import ends (a `--once` run, or after you stop a following one), it also writes `gate-results.sarif` next to it; see below.
 
-With no file options it reads and writes in `runtime-logs/`:
+`--dir` names the run folder: the importer reads `trace.jsonl` and `payloads.jsonl` there and writes its outputs beside them. The proxy creates one folder per run (see [Default recording](#default-recording)) and prints it, so copy that path. Without `--dir` the importer reads `./runtime-logs/`, where `demo` and older setups write.
 
 ```sh
-# Terminal 1: MCP traffic keeps flowing through the proxy.
-agent-latch-runtime proxy --trace runtime-logs/trace.jsonl --payloads runtime-logs/payloads.jsonl -- npx -y @modelcontextprotocol/server-github
+# Terminal 1: MCP traffic keeps flowing through the proxy. It prints the run folder.
+agent-latch-runtime proxy --name github --record-payloads -- npx -y @modelcontextprotocol/server-github
 
-# Terminal 2: follow both logs (Ctrl+C to stop).
-agent-latch-runtime import-logs
+# Terminal 2: follow the run's logs (Ctrl+C to stop). Use the folder the proxy printed.
+agent-latch-runtime import-logs --dir ~/agent-latch/runtime-logs/github/20261122-074500
 ```
 
 For a full live run with a real CrewAI agent and this repo's MCP gateway, follow [Part 4 of the gateway setup guide](../mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch).
@@ -395,20 +395,64 @@ runtime gates keep. Until a procedure is documented, do not rotate or move the l
 proxy or a follow-mode importer is running, and follow `docs/ledger-operations.md` ("Retention and
 rotation") for the ledger.
 
-## Tamper-evident audit ledger (preview)
+## Default recording
 
-A trace file is only evidence if nobody can quietly rewrite it. `--ledger FILE` seals every trace record into a local hash chain, and `anchor` publishes one short digest where the agent cannot write, so an edit, a deletion or a full rebuild shows up when you verify.
+The proxy records a trace and seals it into a ledger **by default**, with no flags. Every run gets its own folder:
 
-```sh
-agent-latch-runtime proxy --trace runtime-logs/trace.jsonl \
-  --ledger runtime-logs/trace.ledger.jsonl -- <server command>
-
-agent-latch-runtime anchor --ledger runtime-logs/trace.ledger.jsonl --to /mnt/audit/anchors.jsonl
-agent-latch-runtime verify --ledger runtime-logs/trace.ledger.jsonl \
-  --trace runtime-logs/trace.jsonl --anchor /mnt/audit/anchors.jsonl
+```
+~/agent-latch/runtime-logs/<server name>/<YYYYMMDD-HHMMSS>/trace.jsonl
+                                                          /trace.ledger.jsonl
 ```
 
-`agent-latch --runtime-result FILE --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl` prints the verdict as the first thing in the report, in bold in a terminal (add `--database FILE [--database-anchor PATH]` for the event store's verdict too; the findings are listed by gate):
+The root is in your home folder, so it does not depend on where an MCP client happened to start the proxy, and it is outside any project, so the files are not committed by accident. The timestamp is UTC, taken when the proxy starts (a second run in the same second gets a `-2` suffix). Because a run never reuses a folder, two proxies never share a hash chain, and each run has its own ledger and its own anchor. The proxy prints the exact folder, with a ready-to-copy `import-logs` command, on stderr at startup, and the folder again on exit.
+
+**The run is imported for you when the proxy stops.** The proxy cannot know when an agent has finished, only when it is stopped (Ctrl+C or shutdown). At that point it runs the same one-shot import as `import-logs --once` over its own run folder and prints where everything is:
+
+```
+agent-latch-runtime: run folder: /home/you/agent-latch/runtime-logs/duckduckgo/20261122-074500
+agent-latch-runtime: 14 event(s), 2 finding(s) (ALR05-R90 x1, ALR10-R01 x1); ledger unanchored
+agent-latch-runtime: results: .../gate-results.csv  .../gate-results.sarif
+agent-latch-runtime: to view the results, copy and paste:
+RUN=/home/you/agent-latch/runtime-logs/duckduckgo/20261122-074500
+/home/you/venv/bin/agent-latch --runtime-result "$RUN/gate-results.csv" --ledger "$RUN/trace.ledger.jsonl"
+column -s, -t < "$RUN/events.csv" | less -S
+agent-latch-runtime: anchor it (to a path the agent cannot write): agent-latch-runtime anchor --ledger ... --to <anchor file>
+```
+
+The block under "copy and paste" has no prefix, so you can paste it into a shell as is. The `agent-latch` path is the install the proxy runs from, so it works even when that install's `bin` folder is not on your `PATH`.
+
+It only reads the run's own trace and payloads, runs after traffic has stopped, and never changes the proxy's exit code: a failed import prints a warning with the `import-logs` command to run by hand. `--no-import` turns it off (only the run folder is printed), and `--quiet` imports without printing. It does not help when an MCP client kills the proxy outright (for example Claude Desktop stopping a stdio server), because no output is seen then; use `import-logs --dir` for those runs. The ledger verdict is `unanchored` until you run `anchor`: the proxy cannot publish an anchor somewhere your agent cannot write.
+
+Importing by hand, for runs that were not imported (or to import again), needs the run named, because nothing is guessed:
+
+```sh
+RUN=~/agent-latch/runtime-logs/duckduckgo/20261122-074500
+agent-latch-runtime import-logs --dir "$RUN" --once
+agent-latch --runtime-result "$RUN/gate-results.csv" --ledger "$RUN/trace.ledger.jsonl"
+```
+
+If you point `import-logs --dir` at a folder of runs (or give no `--dir` while runs exist in the home folder), it lists the runs it found, newest last, and exits `2`. `agent-latch-runtime verify ~/agent-latch/runtime-logs --all` checks every ledger below a folder in one go.
+
+- `--log-dir DIR` moves the root (runs are then `DIR/<name>/<timestamp>`). `--trace FILE` and `--ledger FILE` set exact paths and skip the per-run folder (a trace alone gets `TRACE.ledger.jsonl` beside it).
+- `--no-ledger` records the trace without sealing it. `--no-trace` records nothing (and so no ledger). Combining an opt-out with its own path flag is an error (exit `2`).
+- **Payloads stay opt-in**: `--record-payloads` writes `payloads.jsonl` into the run folder, where `import-logs --dir` finds it with no extra flag; `--payloads FILE` sets another path (then pass the same file to `import-logs --payloads`). They cannot be combined. The file is opt-in because the file holds masked tool arguments and outputs and is sensitive. Without it, gates that read payloads, such as ALR10, have nothing to inspect.
+- If a *default* location cannot be written, the proxy warns and keeps running without recording. An explicitly given path that cannot be opened is still a configuration error.
+- Giving `--trace` and `--ledger` the same files for two proxies at once can break the chain, and verification then reports a false gap. The per-run default folders avoid this.
+- Old habit, still valid: `--trace runtime-logs/trace.jsonl --payloads runtime-logs/payloads.jsonl --ledger runtime-logs/trace.ledger.jsonl` writes exactly there, and `import-logs` with no `--dir` reads `./runtime-logs/`.
+
+## Tamper-evident audit ledger (preview)
+
+A trace file is only evidence if nobody can quietly rewrite it. The ledger (on by default, or `--ledger FILE`) seals every trace record into a local hash chain, and `anchor` publishes one short digest where the agent cannot write, so an edit, a deletion or a full rebuild shows up when you verify. Until you anchor it, the verdict is `unanchored`.
+
+```sh
+agent-latch-runtime proxy -- <server command>      # prints the run folder, shown as $RUN below
+
+agent-latch-runtime anchor --ledger "$RUN/trace.ledger.jsonl" --to /mnt/audit/anchors.jsonl
+agent-latch-runtime verify --ledger "$RUN/trace.ledger.jsonl" \
+  --trace "$RUN/trace.jsonl" --anchor /mnt/audit/anchors.jsonl
+```
+
+`agent-latch --runtime-result FILE --ledger "$RUN/trace.ledger.jsonl" --anchor /mnt/audit/anchors.jsonl` prints the verdict as the first thing in the report, in bold in a terminal (add `--database FILE [--database-anchor PATH]` for the event store's verdict too; the findings are listed by gate):
 
 ```
 AUDIT TRAIL TAMPERED — a record was altered; the log cannot be trusted.

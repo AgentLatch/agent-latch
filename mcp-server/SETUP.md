@@ -476,6 +476,8 @@ cd ~/projects/agent-latch/mcp-server
 
 ✅ You see `agent-latch-runtime: monitoring 'gateway' (preview; records traffic, never blocks)`.
 
+> **Shorter form, new default.** Because `--trace` is given here, the proxy also seals it into `runtime-logs/trace.ledger.jsonl` beside it (add `--no-ledger` to skip). Without `--trace` it records on its own, into a new folder per run, `~/agent-latch/runtime-logs/gateway/<YYYYMMDD-HHMMSS>/`, and prints it. Then name that folder for the importer: `import-logs --dir ~/agent-latch/runtime-logs/gateway/<YYYYMMDD-HHMMSS>`. The steps below keep the explicit paths so the commands match what you see on screen.
+
 **2. Terminal 2: start the importer before the agent.** It waits for the log files, then follows them and records each new event while the agent runs. Leave it open. Add `--database` when you want a local SQLite copy. Leave that flag off and only the CSV and JSONL files are written. Nothing is uploaded. What the file contains: [Store events in SQLite](../docs/runtime.md#store-events-in-sqlite).
 
 ```sh
