@@ -75,7 +75,7 @@ class ConnectorDeliveryError(OSError):
 class ConnectorContext:
     """What AgentLatch tells a connector when it is created."""
 
-    name: str  # the name the operator chose, for example "pg"
+    name: str  # the name the operator chose, for example "wh"
     log_dir: Path  # the runtime-logs folder, for any local state the connector needs
     agentlatch_version: str
     connector_api: int
@@ -187,7 +187,7 @@ def parse_connector_settings(
             name, kind = selection, selection
         kind = kind.strip()
         if not kind:
-            raise ConnectorConfigError(f"{origin}: expected [NAME=]TYPE, for example pg=postgres")
+            raise ConnectorConfigError(f"{origin}: expected [NAME=]TYPE, for example wh=webhook")
         name = _check_name(name.strip(), origin)
         if name not in types:
             order.append(name)

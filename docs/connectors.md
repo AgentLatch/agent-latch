@@ -56,7 +56,7 @@ There are three kinds. They share one lifecycle but promise different things.
 | | **Store** | **Exporter** | **Archive** |
 |---|---|---|---|
 | Plain meaning | A database you query later | Forwards events to another live system | Long-term, write-once copy |
-| Examples | SQLite (today), PostgreSQL, DuckDB | OpenTelemetry, Splunk HEC, a webhook | Folder of `.jsonl.gz` files, S3 bucket |
+| Examples | SQLite (built in), another SQL database, a data warehouse | A log pipeline, a SIEM, a webhook | A folder of `.jsonl.gz` files, object storage |
 | Keeps the data? | Yes, and can read it back | No, the other system keeps it | Yes, but it is not meant for queries |
 | Duplicate handling | Merges by event key `(run_id, order)` (section 4.1) | Sends the event key with every event so the receiver can merge duplicates | Objects are write-once, with portable names built from the order range, a hash of `batch_id` and a hash of the content, so nothing is ever overwritten; readers merge by event key (section 4.1) |
 | Typical failure | Database locked or unreachable | Network down, rate limited | Disk full, bucket permission |
@@ -90,7 +90,7 @@ ConnectorKind = Literal["store", "exporter", "archive"]
 @dataclass(frozen=True)
 class ConnectorContext:
     """What AgentLatch tells a connector when it is created."""
-    name: str                 # the name the operator chose, e.g. "pg" or "otel"
+    name: str                 # the name the operator chose, e.g. "wh" or "archive"
     log_dir: Path             # runtime-logs/ folder, for any local state the connector needs
     agentlatch_version: str
     connector_api: int        # CONNECTOR_API of the running core
@@ -341,9 +341,9 @@ original run. For example:
 
 ```bash
 agent-latch-runtime import-logs --once --dir runtime-logs \
-  --connector pg=postgres \
-  --connector-option pg.dsn=env:AGENTLATCH_PG_DSN \
-  --connector-option pg.table=agent_events
+  --connector wh=webhook \
+  --connector-option wh.url=env:AGENTLATCH_WEBHOOK_URL \
+  --connector-option wh.timeout=5
 ```
 
 (or the same `--connector-config FILE`). If the original run was given `--run-id ID`, add the
@@ -376,10 +376,10 @@ A connector package declares an entry point in its own `pyproject.toml`:
 
 ```toml
 [project.entry-points."agent_latch.connectors"]
-postgres = "agentlatch_connector_postgres:create"
+webhook = "agentlatch_connector_webhook:create"
 ```
 
-`create` is the `ConnectorFactory`. The entry point name (`postgres`) is the **type** the
+`create` is the `ConnectorFactory`. The entry point name (`webhook`) is the **type** the
 operator selects. Two installed packages may not register the same type, and the importer exits
 `2` if they do rather than picking one. `agent-latch-runtime connectors` lists the installed
 types with their package and version, without loading them. A connector's `CONNECTOR_API` is
@@ -393,9 +393,9 @@ from the scanned project or the MCP traffic.
 
 ```bash
 agent-latch-runtime import-logs \
-  --connector pg=postgres \
-  --connector-option pg.dsn=env:AGENTLATCH_PG_DSN \
-  --connector-option pg.table=agent_events
+  --connector wh=webhook \
+  --connector-option wh.url=env:AGENTLATCH_WEBHOOK_URL \
+  --connector-option wh.timeout=5
 ```
 
 - `--connector [NAME=]TYPE` (repeatable). `NAME` defaults to `TYPE`. It allows two instances of
@@ -405,10 +405,10 @@ agent-latch-runtime import-logs \
 - `--connector-config FILE` reads the same settings from a TOML file (stdlib `tomllib`):
 
   ```toml
-  [connectors.pg]
-  type = "postgres"
-  dsn = "env:AGENTLATCH_PG_DSN"
-  table = "agent_events"
+  [connectors.wh]
+  type = "webhook"
+  url = "env:AGENTLATCH_WEBHOOK_URL"
+  timeout = "5"
   ```
 
   Command-line options override file values.
@@ -434,18 +434,16 @@ connectors/
     CHANGELOG.md
     src/agentlatch_connector_jsonl_archive/__init__.py
     tests/
-  otel/                             # later
 ```
 
-The PostgreSQL store is a **paid** connector, so it is not in this folder. It lives in a separate
-private repository with the same layout and follows this contract unchanged. How paid packages are
-licensed and distributed is in [`connector-licensing.md`](connector-licensing.md).
+Separately licensed (paid) packages are not in this folder and follow this contract unchanged. How
+they are licensed is in [`connector-licensing.md`](connector-licensing.md).
 
 Why one folder rather than separate repositories or the main package:
 
 - **Separate.** Each has its own `pyproject.toml`, dependencies, tests and PyPI package. The core
-  package (`agentlatch-security`) never includes them, so vendor clients (`psycopg`, `boto3`,
-  OpenTelemetry SDK) never become core dependencies. `connectors/` is outside `src/`, so the core
+  package (`agentlatch-security`) never includes them, so database drivers and vendor SDKs never
+  become core dependencies. `connectors/` is outside `src/`, so the core
   wheel and the Docker build context (an allow-list) do not pick it up.
 - **One folder.** A change to the contract and the fixes to every connector land in one pull
   request, and CI tests every connector against the core in the same commit. Separate repositories
@@ -462,7 +460,7 @@ Three version numbers, each with one job:
 |---|---|---|
 | **Core version** | `agentlatch-security 0.6.0` | As today. |
 | **Contract version** `CONNECTOR_API` | `1` | Only on a **breaking** change to `Connector`, `EventBatch` or the event schema. Adding an optional field or method does **not** change it. |
-| **Connector version** (SemVer, per package) | `agentlatch-connector-postgres 1.2.0` | Independently, whenever that connector changes. |
+| **Connector version** (SemVer, per package) | `agentlatch-connector-jsonl-archive 1.2.0` | Independently, whenever that connector changes. |
 
 Rules:
 
@@ -472,7 +470,7 @@ Rules:
   that range, `import-logs` exits `2` and says which side to upgrade.
 - A connector's **major** version goes up when it moves to a new `CONNECTOR_API` or changes the
   meaning of an existing option.
-- Release tags are `connector-<type>-vX.Y.Z` (for example `connector-postgres-v1.2.0`), so they
+- Release tags are `connector-<type>-vX.Y.Z` (for example `connector-jsonl-archive-v1.2.0`), so they
   never collide with core tags (`vX.Y.Z`). A separate workflow, `publish-connectors.yml`,
   publishes the matching folder with Trusted Publishing and checks that the tag matches that
   folder's `pyproject.toml`. The existing `publish.yml` stays core-only.
@@ -549,6 +547,5 @@ stays `1`. Details: [stores.md](stores.md#connectors-that-ask-for-seals).
 3. Add `connectors/_template` and `connectors/jsonl-archive`, the first real connector. It is
    local and stdlib-only, so it proves the contract with no network behavior. Its README starts
    from the design notes in `connectors/jsonl-archive/README.md`.
-4. Add network connectors (PostgreSQL, OpenTelemetry), each documented as opt-in network
-   behavior.
+4. Add network connectors, each documented as opt-in network behavior.
 5. Add the gate-results batch type (section 8) so exporters can forward findings.
