@@ -44,8 +44,13 @@ home", no usage reporting.
 | A store's license expires while `import-logs` runs | The store stops saving; the events wait, as for a database that cannot be reached, and the run exits `2` at the end. Renew and run it again: nothing is lost |
 | A connector's license expires while `import-logs` runs | That connector stops with a message; every other output keeps running. Running `import-logs` again after renewal delivers the gap |
 
+**A paid package needs a valid license for every use.** That includes reading a paid store with
+`verify`, `anchor`, `audit-tool` or the report: without a license they exit `2`, and a running
+`audit-tool` refuses its tools once the license lapses.
+
 **No data is deleted or locked.** What a package already wrote stays where it is, in its normal
-format. Reading it (`verify`, `anchor`, `audit-tool`, the report) needs no license.
+format, in the customer's own database or bucket, and stays readable with the customer's own tools.
+Only the package's commands stop.
 
 ## What this is not
 
