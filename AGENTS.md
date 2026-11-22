@@ -266,7 +266,7 @@ Runtime gates are monitor-only plugins in `agent_latch/gates/` (one module per g
 ## Conventions
 
 - Container images: keep them free of Node.js, compilers and the source tree, running as user `10001`, with the base image pinned by digest and dependencies installed from the hash-pinned locks with `--only-binary=:all:`. A server that needs another runtime goes in its own container or a user-built derived image (`docs/docker.md`).
-- Paid connector packages and the `agentlatch-license` library live in a private repository (`docs/connector-licensing.md`), outside this one. Paid code never enters this repository, its wheels or its container images.
+- Paid packages (stores and connectors) and their license library live outside this repository (`docs/connector-licensing.md`). Paid code never enters this repository, its wheels or its container images.
 - Keep runtime dependencies minimal: `rich`, `rich-argparse`, `PyYAML`. `pip-audit` is an optional `[audit]` extra, and pinned `fastmcp` is the optional `[runtime]` extra (`import agent_latch.runtime` must not import it). Do not add new runtime dependencies without strong justification.
 - Use `from __future__ import annotations`, type hints, and `pathlib.Path` throughout. Use frozen dataclasses for value types.
 - Rules are static heuristics. Parse with `ast` and never import or execute scanned code. Load YAML only with `yaml.SafeLoader` (see `manifest._LineLoader`).
@@ -329,7 +329,7 @@ Before building a check, look at how established open-source tools handle it. Bo
 - `docs/ledger-reference.md`: on-disk formats, digest inputs, Python API, CLI and exit codes, adding an anchor destination
 - `docs/ledger-operations.md`: cost, anchor cadence, retention and rotation, incident runbook
 - `docs/connectors.md`: design for log connectors (stores, exporters, archives): lifecycle, event batch format, error behavior, registration, versioning. Not implemented yet
-- `docs/connector-licensing.md`: design for paid connector packages: MIT core vs. commercial packages, distribution, offline license files, behavior on missing/expired/invalid licenses, pending legal review. Not implemented yet
+- `docs/connector-licensing.md`: what separately licensed stores and connectors may and may not do: MIT core, offline license files, behavior on missing or expired licenses, no telemetry.
 - `docs/clients/chatgpt.md`: ChatGPT reaches the proxy through OpenAI's Secure MCP Tunnel. Local apps use the config change in `docs/runtime.md`
 - `mcp-server/SETUP.md`: the only place with step-by-step gateway setup and agent connection instructions, including starting `import-logs --database` before a live CrewAI or Claude Desktop run; `mcp-server/README.md` is an overview that links to it
 - `CONTRIBUTING.md`, `SECURITY.md`, `llms.txt`

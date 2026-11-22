@@ -330,9 +330,9 @@ A connector is a separate package that sends the normalized events somewhere oth
 ```sh
 agent-latch-runtime connectors                       # list installed types; imports nothing
 agent-latch-runtime import-logs \
-  --connector pg=postgres \
-  --connector-option pg.dsn=env:AGENTLATCH_PG_DSN \
-  --connector-option pg.table=agent_events
+  --connector wh=webhook \
+  --connector-option wh.url=env:AGENTLATCH_WEBHOOK_URL \
+  --connector-option wh.timeout=5
 ```
 
 - `--connector [NAME=]TYPE` selects an installed connector (repeatable). `NAME` defaults to `TYPE`, and two names let you run two of one type.

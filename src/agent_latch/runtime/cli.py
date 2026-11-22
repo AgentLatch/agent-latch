@@ -72,7 +72,7 @@ _EPILOG = """\
   [cyan]agent-latch-runtime import-logs --database events.db --anchor ~/offbox/store-anchors.jsonl[/cyan]
   [cyan]agent-latch-runtime verify --database events.db --anchor ~/offbox/store-anchors.jsonl[/cyan]
   [cyan]agent-latch-runtime anchor --database events.db --to ~/offbox/store-anchors.jsonl[/cyan]
-  [cyan]agent-latch-runtime import-logs --connector pg=postgres --connector-option pg.dsn=env:PG_DSN[/cyan]
+  [cyan]agent-latch-runtime import-logs --connector wh=webhook --connector-option wh.url=env:WEBHOOK_URL[/cyan]
   [cyan]agent-latch-runtime connectors[/cyan]   (list installed connector types; nothing is loaded)
   [cyan]agent-latch-runtime import-logs --store TYPE --store-option dsn=env:STORE_DSN --anchor PATH[/cyan]
   [cyan]agent-latch-runtime stores[/cyan]   (list installed store types; nothing is loaded)
