@@ -273,6 +273,25 @@ def test_events_are_visible_without_any_gate(tmp_path: Path) -> None:
     assert len(_rows(events_csv)) == 4 and len(summary.getvalue().splitlines()) == 4
 
 
+def test_gate_progress_counts_only_finding_records(tmp_path: Path) -> None:
+    trace_path, payloads_path = _record_run(tmp_path)
+    gate_csv = tmp_path / "gate-results.csv"
+    summary = io.StringIO()
+
+    def evaluate(_event: dict[str, Any]) -> dict[str, Any]:
+        return {"findings": [
+            {"is_finding": False}, {"is_finding": True}, {"outcome": "OBSERVED"},
+        ]}
+
+    RuntimeLogImporter(
+        trace_path, gate_csv, [GatePlugin("test", evaluate)], payloads_path=payloads_path,
+        summary=summary, follow=False,
+    ).run()
+    assert all("gates: 1 finding(s)" in line for line in summary.getvalue().splitlines())
+    rows = _rows(gate_csv)
+    assert all(len(json.loads(row["result_json"])["findings"]) == 3 for row in rows)
+
+
 def test_events_csv_cells_cannot_run_as_formulas(tmp_path: Path) -> None:
     trace_path = tmp_path / "trace.jsonl"
     trace = TraceLog(trace_path, summary=None)

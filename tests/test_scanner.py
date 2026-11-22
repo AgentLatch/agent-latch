@@ -757,8 +757,11 @@ def test_every_rule_maps_only_to_known_owasp_categories() -> None:
             if isinstance(owasp, ast.Tuple):
                 categories.update(ast.literal_eval(owasp))
 
-    # MAN001 and AG004-AG006 compute their mapping at runtime; its options are checked through scan_manifest tests.
-    assert set(emitted) == set(RULE_CATEGORIES)
+    # MAN001 and AG004-AG006 compute their mapping at runtime; ALR04-R01-R03 are runtime
+    # detectors whose mapping is declared by the gate.
+    runtime_only = {detector.id for detector in catalog.DETECTORS
+                    if detector.mode == "runtime" and detector.id in RULE_CATEGORIES}
+    assert set(RULE_CATEGORIES) - set(emitted) == runtime_only
     for rule_id, categories in emitted.items():
         assert categories <= set(RULE_CATEGORIES[rule_id]), rule_id
     assert {cid for cats in RULE_CATEGORIES.values() for cid in cats} <= set(ASI_CATEGORIES)

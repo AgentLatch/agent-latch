@@ -854,7 +854,8 @@ class RuntimeLogImporter:
                 if (run_id, order, gate.gate_id) in self._done:
                     continue
                 result = _evaluate(gate, event)
-                findings += len(result["findings"])
+                findings += sum(record.get("is_finding") is True
+                                for record in result["findings"])
                 errors += result["status"] == "error"
                 self._writer.writerow({
                     "run_id": run_id,

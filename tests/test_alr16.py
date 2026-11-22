@@ -36,12 +36,10 @@ class Step(TypedDict):
     arguments: dict[str, Any]
     definition: NotRequired[Any]
 
-
 class Expected(TypedDict):
     signals: dict[str, str]
     observed: bool
     not_inspected: list[str]
-
 
 class Case(TypedDict):
     id: str
@@ -162,6 +160,11 @@ def test_every_signal_has_a_fixture_at_its_rank():
     assert set(seen) == set(alr16.SIGNALS)
     assert seen == {name: rank for name, (_, rank) in alr16.SIGNALS.items()}
 
+@pytest.mark.parametrize("bad_event", [None, "text", 7, []])
+def test_malformed_event_does_not_raise(bad_event: Any) -> None:
+    (record,) = alr16.evaluate(bad_event)["findings"]
+    assert record["coverage_notes"] == ["malformed_event"]
+
 
 def test_fixture_ids_are_unique_and_splits_are_known():
     ids = [case["id"] for case in CASES]
@@ -196,12 +199,6 @@ def test_missing_payload_is_not_inspected_rather_than_clean():
 def test_malformed_payload_is_not_inspected(payload):
     (record,) = alr16.evaluate(event("x", {}) | {"payload": payload})["findings"]
     assert record["coverage_notes"] == ["call_arguments_unavailable"]
-
-
-@pytest.mark.parametrize("bad_event", [None, "text", 7, []])
-def test_malformed_event_does_not_raise(bad_event):
-    (record,) = alr16.evaluate(bad_event)["findings"]
-    assert record["coverage_notes"] == ["malformed_event"]
 
 
 @pytest.mark.parametrize("arguments", [
@@ -350,6 +347,18 @@ def test_same_command_is_reported_again_after_a_suspicious_write():
     assert signals(run("bash setup.sh", order=3)) == {"write_then_execute_install": "medium"}
 
 
+def test_rewriting_the_same_script_changes_execution_history():
+    def write(order: int) -> None:
+        alr16.evaluate(event(
+            "write_file", {"path": "setup.sh", "content": "pip install evil\n"}, order=order))
+
+    write(1)
+    assert signals(run("bash setup.sh", order=2)) == {"write_then_execute_install": "medium"}
+    assert run("bash setup.sh", order=3) == []
+    write(4)
+    assert signals(run("bash setup.sh", order=5)) == {"write_then_execute_install": "medium"}
+
+
 @pytest.mark.parametrize("other", [
     {"session_id": "session-2"}, {"server": "other"}, {"run_id": "run-2"},
 ])
@@ -377,6 +386,11 @@ def test_state_is_bounded(monkeypatch):
         notes += not_inspected(records)
     assert len(alr16._writes) == 3
     assert notes == ["write_history_limit", "write_history_limit"]
+    for number in range(6):
+        alr16.evaluate(event(
+            "write_file", {"path": f"safe-{number}.txt", "content": "safe"},
+            run_id=f"run-{number}"))
+    assert len(alr16._write_revisions) == 4
 
 
 # --- limits are visible ---------------------------------------------------------------------
