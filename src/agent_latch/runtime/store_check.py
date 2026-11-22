@@ -107,3 +107,43 @@ def check_store(database: Path, anchor_path: Path | None = None) -> StoreCheck:
         )
     finally:
         reader.close()
+
+
+def check_reader(reader: Any, *, name: str, anchor_path: Path | None = None) -> StoreCheck:
+    """Verify a store opened through ``--store`` the same way ``check_store`` verifies SQLite.
+
+    ``reader`` is the store package's read-only view. Before it is opened, an optional
+    ``exists()`` says whether there is a store at all (so a dropped store with an anchor is reported
+    as deleted, not as a setup error), and an optional ``stored_version()`` reads the schema version
+    without changing anything (so a lowered version is tampering, not an old store).
+    """
+    exists = getattr(reader, "exists", None)
+    try:
+        present = True if exists is None else bool(exists())
+    except (ValueError, OSError) as error:
+        return StoreCheck(error=str(error))
+    if not present:
+        return StoreCheck(verification=_nothing_to_verify(
+            Path(name), f"no event store at {name}", trace_path=None, anchor_path=anchor_path
+        ))
+    if anchor_path is not None:
+        try:
+            point = make_anchor(anchor_path).latest()
+        except (AnchorError, OSError):
+            point = None
+        stored_version = getattr(reader, "stored_version", None)
+        if stored_version is not None and point is not None:
+            try:
+                issues = downgrade_issues(stored_version(), point)
+            except (ValueError, OSError) as error:
+                return StoreCheck(error=str(error))
+            if issues:
+                return StoreCheck(verification=downgrade_verdict(name, point, issues))
+    try:
+        reader.open()
+    except (ValueError, OSError) as error:
+        return StoreCheck(error=str(error))
+    try:
+        return StoreCheck(verification=verify_store(reader, name=name, anchor_path=anchor_path))
+    finally:
+        reader.close()

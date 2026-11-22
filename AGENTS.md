@@ -102,6 +102,7 @@ src/agent_latch/
     importer.py   # RuntimeLogImporter: tails logs, writes events, runs gates; optional EventWriter (EventReader is the read-only view)
     sqlite_store.py # SQLiteEventStore (writer, seals rows, triggers) and SQLiteEventReader (read-only), stdlib sqlite3 (`--database`)
     connectors.py # optional connectors: contract, `--connector*` parsing, `env:` secrets, entry-point discovery, per-connector delivery (stdlib only; never touches `--database`)
+    stores.py     # optional store packages for `--store`: contract, `--store-option` parsing, `env:` secrets, entry-point discovery (stdlib only; `--database` does not use it)
     results.py    # agent-latch --runtime-result: findings from gate-results.csv grouped by gate, plus the ledger and store verdicts
     store_check.py # check_store: one read-only look at an event store (verdict, unsealed, or error); the ALR15-R02 finding
     ledger/       # ALR15: tamper-evident hash chain over trace records, plus anchor points (stdlib, local)
@@ -132,6 +133,7 @@ tests/test_alr10.py            # ALR10: masking metadata, severity, policy, leak
 tests/test_alr10_heldout.py    # ALR10 validation on runtime_fixtures/alr10_heldout.json: request and response rates, known misses
 tests/test_runtime_results.py  # runtime findings report, including a later gate's path and line
 tests/test_connectors.py       # connector selection, options and `env:` secrets, discovery, delivery and errors from import-logs (fake connectors, no network)
+tests/test_store_plugins.py    # `--store` in import-logs, verify, anchor, audit-tool and the report; seals handed to connectors that ask (a test store wrapping SQLite)
 tests/runtime_fixtures/        # demo-server wrapper, audit_reader_server (a reader-only MCP tool), the ALR04 event dataset, the ALR05 labeled output cases, and the ALR10 validation set
 examples/vulnerable-agent/     # deliberately insecure demo project + expected SARIF
 scripts/agentlatch-chatgpt.ps1 # one-command ChatGPT tunnel setup and start (Windows); .sh for macOS/Linux

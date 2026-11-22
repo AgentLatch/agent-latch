@@ -345,7 +345,8 @@ new one and verify each with its own anchor.
 
 ## Adding another event store
 
-A store (another database, a warehouse, plain files) implements the writer contract from
+Package it as a store and it is used with `--store TYPE` in every command that takes
+`--database` ([stores.md](stores.md)). A store (another database, a warehouse, plain files) implements the writer contract from
 `runtime/importer.py` (`open`, `save`, `close`; a key saved again keeps the first write), keeps the three
 seal values with each row, and provides what `event_seal.SealedSource` asks for (`sealed_rows`, the
 schema methods) plus `head()` and `as_stored()`. Then `tests/store_contract.py` proves it:

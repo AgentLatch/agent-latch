@@ -150,10 +150,25 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     output.add_argument(
+        "--store",
+        metavar="TYPE",
+        help=(
+            "With --runtime-result: like --database, for an event store kept by an installed store"
+            " package (`agent-latch-runtime import-logs --store`)"
+        ),
+    )
+    output.add_argument(
+        "--store-option",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="A setting for --store (repeatable). Write secrets as env:VARNAME",
+    )
+    output.add_argument(
         "--database-anchor",
         metavar="PATH",
         help=(
-            "With --database: also compare the store with every point in this anchor file, so a"
+            "With --database or --store: also compare the store with every point in this anchor file, so a"
             " rebuilt store is caught and not only an edited one"
         ),
     )
@@ -433,12 +448,41 @@ def main(argv: list[str] | None = None) -> int:
     if args.anchor is not None and args.ledger is None:
         print("Error: --anchor needs --ledger", file=sys.stderr)
         return 2
-    if args.database_anchor is not None and args.database is None:
+    if args.database is not None and args.store is not None:
+        print("Error: give --database or --store, not both", file=sys.stderr)
+        return 2
+    if args.store_option and args.store is None:
+        print("Error: --store-option needs --store", file=sys.stderr)
+        return 2
+    if args.database_anchor is not None and args.database is None and args.store is None:
         print("Error: --database-anchor needs --database", file=sys.stderr)
         return 2
     if args.database is not None and args.runtime_result is None:
         print("Error: --database needs --runtime-result", file=sys.stderr)
         return 2
+    if args.store is not None and args.runtime_result is None:
+        print("Error: --store needs --runtime-result", file=sys.stderr)
+        return 2
+    store_result = store_name = None
+    if args.store is not None:
+        from agent_latch.runtime.store_check import check_reader
+        from agent_latch.runtime.stores import StoreConfigError, load_store
+
+        loaded = None
+        try:
+            loaded = load_store(args.store, args.store_option)
+            store_name = loaded.name
+            store_result = check_reader(
+                loaded.backend.reader(),
+                name=store_name,
+                anchor_path=Path(args.database_anchor).expanduser() if args.database_anchor else None,
+            )
+        except StoreConfigError as error:
+            text = loaded.scrub(str(error)) if loaded else str(error)
+            print(f"Error: store error: {text}", file=sys.stderr)
+            return 2
+        if store_result.error is not None:
+            store_result = type(store_result)(error=loaded.scrub(store_result.error))
     if args.runtime_result is not None:
         if args.format == "json":
             print("Error: --runtime-result supports --format text or sarif", file=sys.stderr)
@@ -461,6 +505,8 @@ def main(argv: list[str] | None = None) -> int:
             output_format=args.format,
             output=Path(args.output).expanduser() if args.output else None,
             ledger_rows_limit=args.ledger_rows,
+            store_result=store_result,
+            store_name=store_name,
         )
     if args.interactive:
         return interactive_main()

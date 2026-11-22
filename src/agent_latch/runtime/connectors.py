@@ -472,6 +472,9 @@ class ConnectorRunner:
         self.name = loaded.name
         self._connector = loaded.connector
         self._rejected_path = rejected_path_for(loaded.name, log_dir)
+        # Optional: a connector that sets ``wants_seals = True`` receives each event only after the
+        # store has sealed it, with an extra ``seal`` field ({seq, prev, digest}, or null).
+        self.wants_seals = getattr(loaded.connector, "wants_seals", False) is True
         self._buffer: list[dict[str, Any]] = []  # events not yet in a batch
         self._queue: deque[EventBatch] = deque()  # frozen batches waiting for delivery
         self._open = False

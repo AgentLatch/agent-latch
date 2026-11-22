@@ -462,11 +462,13 @@ def _exit_code(
     return 1
 
 
-def _store_error(store: StoreCheck, database: Path) -> str | None:
+def _store_error(store: StoreCheck, database: Path, *, plugin: bool = False) -> str | None:
     """Why the store cannot be reported on at all (exit 2), or None."""
     if store.error is not None:
         return f"Error: {database} is not a usable event store: {store.error}"
     if store.verification is not None and store.verification.status == STATUS_MISSING:
+        if plugin:
+            return f"Error: the event store {database} holds no rows; there is nothing to verify"
         if not database.is_file():
             return (
                 f"Error: no event store at {database}; pass the file written by"
@@ -503,6 +505,8 @@ def report_runtime_results(
     output_format: str = "text",
     output: Path | None = None,
     ledger_rows_limit: int = DEFAULT_ROWS,
+    store_result: StoreCheck | None = None,
+    store_name: str | None = None,
 ) -> int:
     """Print the report. Returns 0, 1 when a trail failed or --fail-on matches, or 2.
 
@@ -519,8 +523,11 @@ def report_runtime_results(
         return 2
     verification = verify_ledger(ledger, anchor_path=anchor) if ledger is not None else None
     store = check_store(database, database_anchor) if database is not None else None
+    if store_result is not None:
+        # A store opened through --store, already checked by the caller with check_reader.
+        store, database = store_result, Path(store_name or "store")
     if store is not None and database is not None:
-        problem = _store_error(store, database)
+        problem = _store_error(store, database, plugin=store_result is not None)
         if problem is not None:
             print(problem, file=sys.stderr)
             return 2

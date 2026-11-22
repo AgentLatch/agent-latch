@@ -49,7 +49,13 @@ from agent_latch.runtime.sqlite_store import (
     SQLiteEventStore,
     stored_schema_version,
 )
-from agent_latch.runtime.store_check import check_store
+from agent_latch.runtime.store_check import check_reader, check_store
+from agent_latch.runtime.stores import (
+    LoadedStore,
+    StoreConfigError,
+    installed_stores,
+    load_store,
+)
 from agent_latch.runtime.trace import DEFAULT_EXCERPT_CHARS, TraceLog
 
 DEFAULT_LOG_DIR = "runtime-logs"
@@ -68,6 +74,8 @@ _EPILOG = """\
   [cyan]agent-latch-runtime anchor --database events.db --to ~/offbox/store-anchors.jsonl[/cyan]
   [cyan]agent-latch-runtime import-logs --connector pg=postgres --connector-option pg.dsn=env:PG_DSN[/cyan]
   [cyan]agent-latch-runtime connectors[/cyan]   (list installed connector types; nothing is loaded)
+  [cyan]agent-latch-runtime import-logs --store TYPE --store-option dsn=env:STORE_DSN --anchor PATH[/cyan]
+  [cyan]agent-latch-runtime stores[/cyan]   (list installed store types; nothing is loaded)
   [cyan]agent-latch-runtime demo[/cyan]   (try it with a synthetic server, no setup)
 
 In an MCP config, put [cyan]agent-latch-runtime[/cyan] as the command and move the real server
@@ -180,8 +188,19 @@ def _parser() -> argparse.ArgumentParser:
         " Off unless set. Nothing is uploaded",
     )
     importer.add_argument(
+        "--store", metavar="TYPE",
+        help="keep the sealed events in an installed store package instead of a SQLite file (the"
+        " same seals, checks and anchors as --database). Not with --database. List the installed"
+        " types with `agent-latch-runtime stores`",
+    )
+    importer.add_argument(
+        "--store-option", action="append", default=[], metavar="KEY=VALUE",
+        help="a setting for --store (repeatable). Write secrets as env:VARNAME, so the value is read"
+        " from the environment and never appears on the command line or in output",
+    )
+    importer.add_argument(
         "--anchor", type=Path, metavar="PATH",
-        help="with --database: publish the newest seal here as the store grows, and refuse a store"
+        help="with --database or --store: publish the newest seal here as the store grows, and refuse a store"
         " that no longer matches the newest point (exit 1). Keep this file where the agent"
         " cannot write. A new store creates the first point; a sealed store with no anchor is"
         " refused until `anchor --database` is run once",
@@ -218,6 +237,15 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     commands.add_parser(
+        "stores",
+        help="list the installed store types (nothing is loaded or opened)",
+        description=(
+            "List the event store types installed in this Python environment, with the package and"
+            " version that provides each. No store is imported or opened."
+        ),
+    )
+
+    commands.add_parser(
         "connectors",
         help="list the installed connector types (nothing is loaded or sent)",
         description=(
@@ -250,6 +278,11 @@ def _parser() -> argparse.ArgumentParser:
                         help="verify the event store written by import-logs --database instead of"
                              " a ledger: every seal, the table layout, and (with --anchor) the"
                              " newest published point")
+    verify.add_argument("--store", metavar="TYPE",
+                        help="verify an event store kept by an installed store package"
+                             " (import-logs --store), the same way as --database")
+    verify.add_argument("--store-option", action="append", default=[], metavar="KEY=VALUE",
+                        help="a setting for --store (repeatable); write secrets as env:VARNAME")
     verify.add_argument("--all", action="store_true",
                         help="with a folder: also search its subfolders")
     verify.add_argument("--trace", type=Path, metavar="FILE",
@@ -274,6 +307,10 @@ def _parser() -> argparse.ArgumentParser:
                         help="the ledger written by proxy --ledger")
     target.add_argument("--database", type=Path, metavar="FILE",
                         help="the event store written by import-logs --database")
+    target.add_argument("--store", metavar="TYPE",
+                        help="the event store kept by an installed store package (import-logs --store)")
+    anchor.add_argument("--store-option", action="append", default=[], metavar="KEY=VALUE",
+                        help="a setting for --store (repeatable); write secrets as env:VARNAME")
     anchor.add_argument("--accept-unchecked-rows", action="store_true",
                         help="with --database: anchor rows added after the newest anchor point"
                              " without checking them against the logs. Only for a store you trust:"
@@ -294,8 +331,14 @@ def _parser() -> argparse.ArgumentParser:
             " missing, not sealed yet, or newer than this AgentLatch."
         ),
     )
-    tool.add_argument("--database", type=Path, required=True, metavar="FILE",
-                      help="the event store written by import-logs --database")
+    source = tool.add_mutually_exclusive_group(required=True)
+    source.add_argument("--database", type=Path, metavar="FILE",
+                        help="the event store written by import-logs --database")
+    source.add_argument("--store", metavar="TYPE",
+                        help="the event store kept by an installed store package; give it a"
+                             " read-only account in --store-option")
+    tool.add_argument("--store-option", action="append", default=[], metavar="KEY=VALUE",
+                      help="a setting for --store (repeatable); write secrets as env:VARNAME")
     tool.add_argument("--name", default="audit-log", help="MCP server name (default audit-log)")
 
     demo = commands.add_parser(
@@ -432,9 +475,16 @@ def _import_logs(args: argparse.Namespace) -> int:
     trace = args.trace or directory / "trace.jsonl"
     payloads = args.payloads or (None if args.trace else directory / "payloads.jsonl")
     events_csv = args.events_csv or directory / "events.csv"
-    if args.anchor is not None and not args.database:
+    if args.database and args.store:
+        print("agent-latch-runtime: give --database or --store, not both", file=sys.stderr)
+        return 2
+    if args.store_option and not args.store:
+        print("agent-latch-runtime: --store-option needs --store", file=sys.stderr)
+        return 2
+    if args.anchor is not None and not (args.database or args.store):
         print("agent-latch-runtime: --anchor needs --database", file=sys.stderr)
         return 2
+    loaded_store: LoadedStore | None = None
     try:
         loaded = []
         if args.connector or args.connector_option or args.connector_config:
@@ -446,6 +496,9 @@ def _import_logs(args: argparse.Namespace) -> int:
             )
         gates = discover_gates(load_policy(args.policy) if args.policy else None)
         store = SQLiteEventStore(args.database) if args.database else None
+        if args.store:
+            loaded_store = load_store(args.store, args.store_option, log_dir=directory)
+            store = loaded_store.backend.writer()
         importer = RuntimeLogImporter(
             trace,
             args.output_csv or directory / "gate-results.csv",
@@ -464,6 +517,7 @@ def _import_logs(args: argparse.Namespace) -> int:
         print(
             f"agent-latch-runtime: importing {trace} into {events_csv}"
             + (f" and {args.database}" if args.database else "")
+            + (f" and store {loaded_store.name} ({args.store})" if loaded_store else "")
             + (f" (anchoring to {args.anchor})" if args.anchor else "")
             + "".join(f" and connector {c.name} ({c.type})" for c in loaded)
             + f" with {len(gates)} gate(s)"
@@ -476,15 +530,43 @@ def _import_logs(args: argparse.Namespace) -> int:
     except StoreIntegrityError as error:
         # The store is not trusted: it is never repaired or re-sealed, and no forged head is anchored.
         # Exit 1, as verify does.
-        print(f"agent-latch-runtime: {error}", file=sys.stderr)
+        print(f"agent-latch-runtime: {_scrubbed(error, loaded_store)}", file=sys.stderr)
         return 1
+    except StoreConfigError as error:
+        print(f"agent-latch-runtime: store error: {_scrubbed(error, loaded_store)}", file=sys.stderr)
+        return 2
     except ConnectorConfigError as error:
         # Messages never carry option values; secrets are written as env: references.
         print(f"agent-latch-runtime: connector error: {error}", file=sys.stderr)
         return 2
     except (ImportError, OSError, ValueError, AnchorError) as error:
-        print(f"agent-latch-runtime: importer failed: {error}", file=sys.stderr)
+        print(f"agent-latch-runtime: importer failed: {_scrubbed(error, loaded_store)}",
+              file=sys.stderr)
         return 2
+    return 0
+
+
+def _scrubbed(error: BaseException, loaded: LoadedStore | None) -> str:
+    """The error text with every --store-option secret hidden."""
+    return loaded.scrub(str(error)) if loaded is not None else str(error)
+
+
+def _stores(args: argparse.Namespace) -> int:
+    """Run ``stores``: list installed store types without importing any of them."""
+    try:
+        found = installed_stores()
+    except StoreConfigError as error:
+        print(f"agent-latch-runtime: store error: {error}", file=sys.stderr)
+        return 2
+    if not found:
+        print(
+            "agent-latch-runtime: no stores installed; a store is a separate package that"
+            " registers the 'agent_latch.stores' entry point. --database FILE needs none"
+        )
+        return 0
+    width = max(len(item.type) for item in found)
+    for item in found:
+        print(f"{item.type:<{width}}  {item.package} {item.version}  ({item.target})")
     return 0
 
 
@@ -578,8 +660,48 @@ def _verify_database(args: argparse.Namespace) -> int:
     return 1 if verification.failed else 0
 
 
+def _verify_store(args: argparse.Namespace) -> int:
+    """Run ``verify --store``: the same checks and exit codes as ``verify --database``."""
+    if (
+        args.database is not None or args.path is not None or args.ledger is not None or args.all
+        or args.trace is not None
+    ):
+        print(
+            "agent-latch-runtime: --store checks one event store; do not combine it with"
+            " --database, a PATH, --ledger, --all or --trace",
+            file=sys.stderr,
+        )
+        return 2
+    anchor_path = make_anchor(args.anchor).path if args.anchor else None
+    loaded: LoadedStore | None = None
+    try:
+        loaded = load_store(args.store, args.store_option)
+        found = check_reader(loaded.backend.reader(), name=loaded.name, anchor_path=anchor_path)
+    except StoreConfigError as error:
+        print(f"agent-latch-runtime: store error: {_scrubbed(error, loaded)}", file=sys.stderr)
+        return 2
+    if found.unsealed is not None or found.error is not None:
+        print(f"agent-latch-runtime: {_scrubbed(Exception(found.unsealed or found.error), loaded)}",
+              file=sys.stderr)
+        return 2
+    verification = found.verification
+    assert verification is not None
+    if verification.status == STATUS_MISSING:
+        for line in describe(verification):
+            print(line)
+        return 2
+    for line in describe(verification):
+        print(line)
+    return 1 if verification.failed else 0
+
+
 def _verify(args: argparse.Namespace) -> int:
     """Run ``verify`` for a ledger, a folder of ledgers or, with ``--database``, an event store."""
+    if args.store is not None:
+        return _verify_store(args)
+    if args.store_option:
+        print("agent-latch-runtime: --store-option needs --store", file=sys.stderr)
+        return 2
     if args.database is not None:
         return _verify_database(args)
     for given in (args.path, args.ledger):
@@ -690,8 +812,96 @@ def _anchor_database(args: argparse.Namespace) -> int:
     return 0
 
 
+def _anchor_store(args: argparse.Namespace) -> int:
+    """``anchor --store``: the same checks and refusals as ``anchor --database``."""
+    destination = make_anchor(args.to)
+    loaded: LoadedStore | None = None
+    try:
+        earlier = destination.latest()
+    except (AnchorError, OSError) as error:
+        print(f"agent-latch-runtime: cannot anchor: {error}", file=sys.stderr)
+        return 2
+    try:
+        loaded = load_store(args.store, args.store_option)
+        reader = loaded.backend.reader()
+        stored_version = getattr(reader, "stored_version", None)
+        lowered = downgrade_issues(stored_version(), earlier) if stored_version else []
+    except StoreConfigError as error:
+        print(f"agent-latch-runtime: store error: {_scrubbed(error, loaded)}", file=sys.stderr)
+        return 2
+    except (ValueError, OSError) as error:
+        print(f"agent-latch-runtime: cannot anchor: {_scrubbed(error, loaded)}", file=sys.stderr)
+        return 2
+    name = loaded.name
+    if lowered and earlier is not None:
+        for line in describe(downgrade_verdict(name, earlier, lowered)):
+            print(line, file=sys.stderr)
+        print("agent-latch-runtime: not anchored: the event store fails its check", file=sys.stderr)
+        return 1
+    try:
+        reader.open()
+    except (ValueError, OSError) as error:
+        print(f"agent-latch-runtime: cannot anchor: {_scrubbed(error, loaded)}", file=sys.stderr)
+        return 2
+    try:
+        if earlier is not None and earlier.source != SOURCE:
+            print(
+                f"agent-latch-runtime: cannot anchor: {args.to} holds points for a trace ledger;"
+                " use one anchor file per ledger or event store",
+                file=sys.stderr,
+            )
+            return 2
+        verification = verify_store(reader, name=name, anchor_path=destination.path)
+        if verification.failed:
+            for line in describe(verification):
+                print(line, file=sys.stderr)
+            print("agent-latch-runtime: not anchored: the event store fails its check",
+                  file=sys.stderr)
+            return 1
+        head = reader.head()
+        if verification.status == STATUS_MISSING or head is None:
+            print(f"agent-latch-runtime: {name} has no sealed rows to anchor", file=sys.stderr)
+            return 2
+        if earlier is not None and head.seq > earlier.seq and not args.accept_unchecked_rows:
+            print(
+                f"agent-latch-runtime: not anchored: {head.seq - earlier.seq} row(s) after the"
+                f" newest anchor point (#{earlier.seq}) have not been checked against the logs."
+                " Run import-logs --store TYPE --anchor PATH, which checks them and anchors"
+                " them. To anchor them as they are, because you trust this store, run this"
+                " command again with --accept-unchecked-rows",
+                file=sys.stderr,
+            )
+            return 1
+        point = point_for(
+            Path(name),
+            seq=head.seq,
+            digest=head.digest,
+            records=head.seq,
+            source=SOURCE,
+            schema_sha256=reader.schema_sha256(),
+            schema_version=reader.schema_version(),
+        )
+        destination.publish(point)
+    except (AnchorError, OSError, ValueError) as error:
+        print(f"agent-latch-runtime: cannot anchor: {_scrubbed(error, loaded)}", file=sys.stderr)
+        return 2
+    finally:
+        reader.close()
+    if not args.quiet:
+        print(
+            f"agent-latch-runtime: anchored #{point.seq} {point.digest[:12]}… to {destination.path}",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def _anchor(args: argparse.Namespace) -> int:
     """Run ``anchor``: publish the newest seal of a ledger or an event store to an anchor file."""
+    if args.store_option and args.store is None:
+        print("agent-latch-runtime: --store-option needs --store", file=sys.stderr)
+        return 2
+    if args.store is not None:
+        return _anchor_store(args)
     if args.database is not None:
         return _anchor_database(args)
     ledger: Path = args.ledger
@@ -757,6 +967,11 @@ def _audit_tool(args: argparse.Namespace) -> int:
         return 2
     # stdout carries the MCP protocol, so logging goes to stderr.
     logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
+    if args.store is not None:
+        return _audit_tool_store(args)
+    if args.store_option:
+        print("agent-latch-runtime: --store-option needs --store", file=sys.stderr)
+        return 2
     try:
         server = build_audit_tool(args.database, name=args.name)
     except (ValueError, OSError) as error:
@@ -770,6 +985,38 @@ def _audit_tool(args: argparse.Namespace) -> int:
     return 0
 
 
+def _audit_tool_store(args: argparse.Namespace) -> int:
+    """``audit-tool --store``: the same read-only MCP tool over a store package's reader."""
+    from agent_latch.runtime.audit_tool import build_audit_tool_for_reader
+
+    loaded: LoadedStore | None = None
+    try:
+        loaded = load_store(args.store, args.store_option)
+        server = build_audit_tool_for_reader(loaded.backend.reader(), name=args.name)
+    except StoreConfigError as error:
+        print(f"agent-latch-runtime: store error: {_scrubbed(error, loaded)}", file=sys.stderr)
+        return 2
+    except (ValueError, OSError) as error:
+        print(f"agent-latch-runtime: {_scrubbed(error, loaded)}", file=sys.stderr)
+        return 2
+    tools = "query_audit_log, recent_events" if "query_audit_log" in _tool_names(server) \
+        else "recent_events"
+    print(f"agent-latch-runtime: serving store {loaded.name} read-only ({tools})", file=sys.stderr)
+    server.run(show_banner=False)
+    return 0
+
+
+def _tool_names(server: object) -> set[str]:
+    """Names of the tools an audit-tool server offers (best effort, for the startup line)."""
+    import asyncio
+
+    try:
+        tools = asyncio.run(server.list_tools())  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - only used for a message
+        return set()
+    return {getattr(tool, "name", "") for tool in tools}
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse the arguments, run the chosen sub-command and return its exit code."""
     args = _parser().parse_args(argv)
@@ -779,6 +1026,8 @@ def main(argv: list[str] | None = None) -> int:
         return _import_logs(args)
     if args.subcommand == "connectors":
         return _connectors(args)
+    if args.subcommand == "stores":
+        return _stores(args)
     if args.subcommand == "verify":
         return _verify(args)
     if args.subcommand == "anchor":
