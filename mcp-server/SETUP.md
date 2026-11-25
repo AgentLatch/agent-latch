@@ -476,6 +476,8 @@ cd ~/projects/agent-latch/mcp-server
 
 ✅ You see `agent-latch-runtime: monitoring 'gateway' (preview; records traffic, never blocks)`.
 
+> **Shorter form, new default.** Because `--trace` is given here, the proxy also seals it into `runtime-logs/trace.ledger.jsonl` beside it (add `--no-ledger` to skip). Without `--trace` it records on its own, into a new folder per run, `~/agent-latch/runtime-logs/gateway/<YYYYMMDD-HHMMSS>/`, and prints it. Then name that folder for the importer: `import-logs --dir ~/agent-latch/runtime-logs/gateway/<YYYYMMDD-HHMMSS>`. The steps below keep the explicit paths so the commands match what you see on screen.
+
 **2. Terminal 2: start the importer before the agent.** It waits for the log files, then follows them and records each new event while the agent runs. Leave it open. Add `--database` when you want a local SQLite copy. Leave that flag off and only the CSV and JSONL files are written. Nothing is uploaded. What the file contains: [Store events in SQLite](../docs/runtime.md#store-events-in-sqlite).
 
 ```sh
@@ -532,6 +534,7 @@ Scenario 21 calls `schema_fixture`. That tool's description tells the agent to r
 | The prompt each scenario gave the agent, the calls it made and its answer | `runtime-logs/agent-runs.jsonl`, written by the script itself (the proxy never sees prompts to the model) |
 | Each request's arguments, joined with its response, as the proxy saw them | `runtime-logs/normalized.jsonl`, one JSON object per event |
 | A quick table of every event | `runtime-logs/events.csv` |
+| The gate findings: as a table, and as SARIF 2.1.0 for GitHub or a dashboard | `runtime-logs/gate-results.csv` (print it with `agent-latch --runtime-result`), and `runtime-logs/gate-results.sarif`, written by every `import-logs` run |
 | The same events in SQLite, when Terminal 2 was started with `--database` | `runtime-logs/runtime.db` |
 
 The fake key and password show as `[REDACTED]` in every file, `agent-runs.jsonl` included: the script masks its log and console output with the proxy's own redaction before writing, and refuses to run if it can't load it. Masking is pattern-based and can miss unusual secret formats, so keep `runtime-logs/` local and private.

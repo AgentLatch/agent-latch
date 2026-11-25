@@ -35,7 +35,7 @@ async def _drive(directory: Path, log_file: TextIO, scenario: str) -> None:
     transport = StdioTransport(
         command=sys.executable,
         args=[
-            "-m", "agent_latch.runtime.cli", "proxy", "--quiet", "--name", DEMO_SERVER,
+            "-m", "agent_latch.runtime.cli", "proxy", "--quiet", "--no-import", "--name", DEMO_SERVER,
             "--trace", str(directory / "trace.jsonl"),
             "--payloads", str(directory / "payloads.jsonl"),
             "--", sys.executable, "-m", "agent_latch.runtime.demo_server",

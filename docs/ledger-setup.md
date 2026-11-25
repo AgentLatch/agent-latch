@@ -14,19 +14,19 @@ Everything here is local. No account, no network, no extra package.
 | A folder for the two files | They are a pair: the trace and its ledger |
 | A path the agent cannot write | The anchor destination. This is the part people skip; do not skip it |
 
-## Step 1 — Turn the ledger on
+## Step 1 — The ledger is on by default
 
-Add `--ledger` next to the `--trace` you already pass:
+Run the proxy as usual. The trace and its ledger are written to a new folder for this run,
+`~/agent-latch/runtime-logs/<server name>/<YYYYMMDD-HHMMSS>/`, and the proxy prints it:
 
 ```sh
-agent-latch-runtime proxy \
-  --trace runtime-logs/trace.jsonl \
-  --ledger runtime-logs/trace.ledger.jsonl \
-  -- npx -y @modelcontextprotocol/server-filesystem ~/projects
+agent-latch-runtime proxy -- npx -y @modelcontextprotocol/server-filesystem ~/projects
 ```
 
-That is the whole integration. `--ledger` needs `--trace`; with no trace there is nothing to seal,
-so the command exits `2` instead of writing a ledger that proves nothing.
+That is the whole integration. Below, `$RUN` stands for the folder it printed. To choose the
+files yourself, pass `--trace FILE` (the ledger goes beside it) and optionally `--ledger FILE`.
+`--no-ledger` records the trace without sealing it, `--no-trace` records nothing, and
+`--ledger` with `--no-trace` exits `2`: with no trace there is nothing to seal.
 
 What happens on each MCP message, in order:
 
@@ -58,8 +58,8 @@ arguments or output, so it is safe to keep next to the log — but keep both.
 ## Step 2 — Check the chain
 
 ```sh
-agent-latch-runtime verify runtime-logs/trace.ledger.jsonl      # finds trace.jsonl beside it
-agent-latch-runtime verify runtime-logs --all                   # every ledger, archive included
+agent-latch-runtime verify /trace.ledger.jsonl      # finds trace.jsonl beside it
+agent-latch-runtime verify ~/agent-latch/runtime-logs --all                   # every ledger, archive included
 ```
 
 ```
@@ -73,8 +73,8 @@ Add `--trace` to compare every block with the line it sealed:
 
 ```sh
 agent-latch-runtime verify \
-  --ledger runtime-logs/trace.ledger.jsonl \
-  --trace runtime-logs/trace.jsonl
+  --ledger /trace.ledger.jsonl \
+  --trace /trace.jsonl
 ```
 
 Exit codes: `0` intact or unanchored, `1` altered, deleted or rewritten, `2` no ledger at that path.
@@ -92,7 +92,7 @@ Pick a destination outside the agent's reach. Good options, in order of effort:
 
 ```sh
 agent-latch-runtime anchor \
-  --ledger runtime-logs/trace.ledger.jsonl \
+  --ledger /trace.ledger.jsonl \
   --to /Volumes/audit/anchors.jsonl
 ```
 
@@ -110,8 +110,8 @@ the anchor proves nothing. This is the single most important sentence in this gu
 
 ```sh
 agent-latch-runtime verify \
-  --ledger runtime-logs/trace.ledger.jsonl \
-  --trace runtime-logs/trace.jsonl \
+  --ledger /trace.ledger.jsonl \
+  --trace /trace.jsonl \
   --anchor /Volumes/audit/anchors.jsonl
 ```
 
@@ -134,8 +134,8 @@ so its verdict is shown too; a store that does not seal its rows is reported as 
 
 ```sh
 agent-latch scan . \
-  --runtime-result runtime-logs/gate-results.csv \
-  --ledger runtime-logs/trace.ledger.jsonl \
+  --runtime-result /gate-results.csv \
+  --ledger /trace.ledger.jsonl \
   --anchor /Volumes/audit/anchors.jsonl
 ```
 
@@ -175,7 +175,7 @@ every session is plenty for a laptop. For a long-running proxy, anchor hourly or
 ```sh
 # crontab: every hour at :05
 5 * * * * /usr/local/bin/agent-latch-runtime anchor \
-  --ledger /srv/agent/runtime-logs/trace.ledger.jsonl \
+  --ledger /srv/agent//trace.ledger.jsonl \
   --to /Volumes/audit/anchors.jsonl --quiet
 ```
 
@@ -183,7 +183,7 @@ Then verify on a schedule too, and let it fail loudly:
 
 ```sh
 agent-latch-runtime verify \
-  --ledger /srv/agent/runtime-logs/trace.ledger.jsonl \
+  --ledger /srv/agent//trace.ledger.jsonl \
   --anchor /Volumes/audit/anchors.jsonl || notify-oncall "audit trail failed verification"
 ```
 
@@ -238,15 +238,16 @@ The same idea covers the SQLite store written by `import-logs --database`. It ta
 
 ## Using it with the ChatGPT tunnel
 
-`scripts/agentlatch-chatgpt.sh` writes a trace only; it does not pass `--ledger` and does not run
-`import-logs`. If you want a chain for those sessions, run the proxy command the script prints and
-add the two flags yourself:
+`scripts/agentlatch-chatgpt.sh` passes `--trace ~/agentlatch-trace.jsonl` and does not run
+`import-logs`. Because the ledger is on by default, the proxy it starts also seals that trace into
+`~/agentlatch-trace.ledger.jsonl` (the script's own text may still say it writes a trace only).
+To choose both files yourself, or to turn sealing off:
 
 ```sh
 agent-latch-runtime proxy \
   --trace ~/agentlatch-runtime/trace.jsonl \
   --ledger ~/agentlatch-runtime/trace.ledger.jsonl \
-  -- <the server command the script uses>
+  -- <the server command the script uses>   # add --no-ledger to skip sealing
 ```
 
 The tunnel carries the MCP traffic; the ledger only watches what the proxy records. See
@@ -256,7 +257,7 @@ The tunnel carries the MCP traffic; the ledger only watches what the proxy recor
 
 | Message | Meaning | Fix |
 |---|---|---|
-| `no ledger file at …` (exit 2) | Wrong path, or the proxy ran without `--ledger` | Check the path; a run without `--ledger` cannot be verified after the fact |
+| `no ledger file at …` (exit 2) | Wrong path, or the proxy ran with `--no-ledger` or `--no-trace` | Check the path (the proxy prints the run folder); a run without a ledger cannot be verified after the fact |
 | `NO AUDIT TRAIL — nothing to verify` | The report was pointed at a path with nothing there | Same as above. The report exits `2` on purpose |
 | `AUDIT TRAIL UNANCHORED` | No anchor given, or the anchor file is empty | Add `--anchor`, or run `anchor` first |
 | `refusing to anchor #3: #5 is already anchored` | That destination already knows a later block | Correct behaviour. Use a fresh anchor file only if you are deliberately starting a new log |
@@ -267,7 +268,7 @@ The tunnel carries the MCP traffic; the ledger only watches what the proxy recor
 
 ## Checklist
 
-- [ ] `--ledger` next to `--trace` on every proxy you care about
+- [ ] No `--no-ledger` or `--no-trace` on any proxy you care about (the ledger is on by default)
 - [ ] A destination for anchors that the agent's account cannot write
 - [ ] One `anchor` run after each session, or a cron job
 - [ ] `--ledger` (and `--anchor`) on the report, so the verdict is the first thing read

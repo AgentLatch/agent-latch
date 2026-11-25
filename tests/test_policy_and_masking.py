@@ -104,8 +104,7 @@ def test_known_policy_keys_raise_no_warning(tmp_path: Path, capsys) -> None:
     _write_session(tmp_path)
     policy = tmp_path / "policy.yaml"
     policy.write_text(
-        "allowed_secret_tools: []\nsuppressions: {}\nallowed_tool_dependencies: []\n"
-        "packages: {allow: []}\n", encoding="utf-8")
+        "allowed_secret_tools: []\nsuppressions: {}\npackages: {allow: []}\n", encoding="utf-8")
     assert runtime_cli.main([*BASE, "--dir", str(tmp_path), "--policy", str(policy)]) == 0
     assert "not read by any gate" not in capsys.readouterr().err
     assert unknown_policy_keys({"bogus": 1, "suppressions": {}}) == ["bogus"]
@@ -197,12 +196,12 @@ def _alr04(description: str) -> list[dict[str, Any]]:
 def test_alr04_never_clears_a_definition_with_a_masked_part() -> None:
     marker = "[REDACTED]"
     clean = _alr04("Fetch a page and return its text.")
-    assert [(f["rule_id"], f["outcome"]) for f in clean] == [("ALR04-099", "PASS")]
+    assert [(f["rule_id"], f["outcome"]) for f in clean] == [("ALR04-099", "NO_SIGNAL")]
 
     # A masked part may hide anything, so the gate reports coverage, never a clean PASS.
     masked = _alr04(f"Fetch a page. Auth header: Bearer {marker}. Returns text.")
     coverage = [f for f in masked if f["rule_id"] == alr04.RULE_COVERAGE]
-    assert len(coverage) == 1 and coverage[0]["outcome"] == "INCONCLUSIVE"
+    assert len(coverage) == 1 and coverage[0]["outcome"] == "NOT_INSPECTED"
     assert coverage[0]["coverage_notes"] == ["redacted_field"]
     assert not [f for f in masked if f["rule_id"] != alr04.RULE_COVERAGE and f["is_finding"]]
 

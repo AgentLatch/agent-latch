@@ -4,15 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import io
 import ipaddress
 import logging
+import re
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 from rich_argparse import RawDescriptionRichHelpFormatter
 
 from agent_latch import __version__
+from agent_latch.runtime.autoimport import import_run
 from agent_latch.runtime.connectors import (
     ConnectorConfigError,
     installed_connectors,
@@ -61,6 +65,8 @@ DEFAULT_LOG_DIR = "runtime-logs"
 
 _EPILOG = """\
 [bold bright_cyan]EXAMPLES:[/bold bright_cyan]
+  [cyan]agent-latch-runtime proxy -- npx -y @modelcontextprotocol/server-github[/cyan]   (trace + ledger in ~/agent-latch/runtime-logs/NAME/TIMESTAMP)
+  [cyan]agent-latch-runtime import-logs --dir ~/agent-latch/runtime-logs/server-github/20261122-074500 --once[/cyan]
   [cyan]agent-latch-runtime proxy --trace trace.jsonl -- npx -y @modelcontextprotocol/server-github[/cyan]
   [cyan]agent-latch-runtime proxy --http 127.0.0.1:8770 --upstream-url https://tools.example.com/mcp[/cyan]
   [cyan]agent-latch-runtime proxy --trace t.jsonl --ledger t.ledger.jsonl -- npx -y @modelcontextprotocol/server-github[/cyan]
@@ -94,19 +100,54 @@ def _parser() -> argparse.ArgumentParser:
 
     proxy = commands.add_parser(
         "proxy",
-        help="run one MCP server behind AgentLatch and record its traffic",
-        description="Run one MCP server behind AgentLatch and record its traffic (monitor only).",
+        help="run one MCP server (or several remote ones) behind AgentLatch and record its traffic",
+        description=(
+            "Run one MCP server behind AgentLatch and record its traffic (monitor only). With"
+            " --http, repeat --upstream-url NAME=URL to front several remote servers in one proxy:"
+            " each is served at /mcp/NAME, and all of them write to the same trace, payloads and"
+            " ledger. Several servers must be remote URLs; a server started from a command needs"
+            " its own proxy."
+        ),
         epilog=_EPILOG,
         formatter_class=RawDescriptionRichHelpFormatter,
     )
-    proxy.add_argument("--upstream-url", metavar="URL", help="proxy a remote MCP server at URL")
+    proxy.add_argument(
+        "--upstream-url",
+        action="append",
+        default=[],
+        metavar="[NAME=]URL",
+        help="proxy a remote MCP server at URL. Repeat it with a NAME= on each (NAME is"
+        " [a-z0-9_-], up to 32 characters) to front several servers with --http: each is served"
+        " at /mcp/NAME and recorded with that name as its server",
+    )
     proxy.add_argument(
         "--http",
         metavar="HOST:PORT",
         help="serve the proxy over HTTP on a loopback address instead of stdio",
     )
     proxy.add_argument("--name", help="server name used in the trace (default: from the command)")
-    proxy.add_argument("--trace", type=Path, metavar="FILE", help="append trace records (JSONL)")
+    proxy.add_argument(
+        "--trace",
+        type=Path,
+        metavar="FILE",
+        help="append trace records (JSONL). Default: trace.jsonl in this run's folder"
+        " (see --log-dir)",
+    )
+    proxy.add_argument(
+        "--log-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="root folder for the default trace and ledger. Each run gets its own folder,"
+        " DIR/NAME/YYYYMMDD-HHMMSS (UTC), printed at startup. Default: agent-latch/runtime-logs in"
+        " your home folder, so the files do not depend on where the proxy was started. Read a run"
+        " back with `import-logs --dir <that folder>`",
+    )
+    proxy.add_argument(
+        "--no-trace",
+        action="store_true",
+        help="do not record a trace (and so no ledger). Nothing is then available to import",
+    )
     proxy.add_argument(
         "--excerpt-chars",
         type=int,
@@ -119,7 +160,13 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="FILE",
         help="append intercepted payloads (JSONL): argument values, tool output and tool"
-        " definitions, secret-masked; the file is sensitive",
+        " definitions, secret-masked; the file is sensitive. Off unless set",
+    )
+    proxy.add_argument(
+        "--record-payloads",
+        action="store_true",
+        help="same as --payloads, with the file in this run's folder (payloads.jsonl beside the"
+        " trace), where `import-logs --dir` finds it. The file is sensitive. Off unless set",
     )
     proxy.add_argument(
         "--payload-max-chars",
@@ -133,7 +180,20 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="FILE",
         help="seal every trace record into a hash chain (JSONL) so edits, deletions and rewrites"
-        " are detectable; verify it later with `agent-latch-runtime verify`. Off unless set",
+        " are detectable; verify it later with `agent-latch-runtime verify`. Default: beside the"
+        " trace, as TRACE.ledger.jsonl",
+    )
+    proxy.add_argument(
+        "--no-ledger",
+        action="store_true",
+        help="do not seal the trace into a ledger (the trace is still recorded)",
+    )
+    proxy.add_argument(
+        "--no-import",
+        action="store_true",
+        help="do not import the run when the proxy stops. By default the run's logs are turned"
+        " into events.csv, gate-results.csv and gate-results.sarif in the run folder, and the"
+        " path and a summary are printed (the same as `import-logs --once`)",
     )
     proxy.add_argument("--quiet", action="store_true", help="no per-message summary on stderr")
     proxy.add_argument(
@@ -148,12 +208,15 @@ def _parser() -> argparse.ArgumentParser:
         description=(
             "Follow the proxy's trace (and payloads) files, join each message into one normalized"
             " event, print it, append it to an events CSV, and run every installed gate on it."
-            f" With no file options, reads and writes in {DEFAULT_LOG_DIR}/."
+            " Name the run to import with --dir: the proxy writes each run to its own folder"
+            " (~/agent-latch/runtime-logs/NAME/YYYYMMDD-HHMMSS by default) and prints it. Pointing"
+            " --dir at a folder of runs lists them and exits 2; nothing is guessed."
         ),
     )
     importer.add_argument(
-        "--dir", type=Path, default=Path(DEFAULT_LOG_DIR), metavar="DIR",
-        help=f"folder for the default input and output files (default {DEFAULT_LOG_DIR})",
+        "--dir", type=Path, default=None, metavar="DIR",
+        help="the run folder: the default input (trace.jsonl, payloads.jsonl) and output files"
+        f" live here (default ./{DEFAULT_LOG_DIR}, where `demo` and older setups write)",
     )
     importer.add_argument(
         "--trace", type=Path, metavar="FILE",
@@ -324,6 +387,42 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+UPSTREAM_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+RESERVED_NAMES = frozenset({"mcp"})  # /mcp is where a single, unnamed upstream is served
+
+
+def parse_upstreams(values: list[str]) -> tuple[str | None, dict[str, str]]:
+    """``(url, {})`` for one bare URL, else ``(None, {name: url})``. Raises ``ValueError``.
+
+    A value that starts with ``http://`` or ``https://`` is a URL, so an ``=`` in its query
+    string is never read as a name. Anything else must be ``NAME=URL``.
+    """
+    bare: list[str] = []
+    named: dict[str, str] = {}
+    for value in values:
+        if value.startswith(("http://", "https://")):
+            bare.append(value)
+            continue
+        name, sep, url = value.partition("=")
+        if not sep or not url.startswith(("http://", "https://")):
+            raise ValueError(f"--upstream-url {value!r} must be a URL or NAME=URL")
+        if not UPSTREAM_NAME.match(name):
+            raise ValueError(
+                f"--upstream-url name {name!r} must be 1 to 32 characters of [a-z0-9_-],"
+                " starting with a letter or digit"
+            )
+        if name in RESERVED_NAMES:
+            raise ValueError(f"--upstream-url name {name!r} is reserved")
+        if name in named:
+            raise ValueError(f"--upstream-url name {name!r} is used twice")
+        named[name] = url
+    if len(bare) == 1 and not named:
+        return bare[0], {}
+    if bare:
+        raise ValueError("give every --upstream-url a NAME= when there is more than one")
+    return None, named
+
+
 def _default_name(command: list[str], upstream_url: str | None) -> str:
     if upstream_url:
         return urlparse(upstream_url).hostname or "upstream"
@@ -331,6 +430,61 @@ def _default_name(command: list[str], upstream_url: str | None) -> str:
     words = [word for word in command[1:] if not word.startswith("-")] or command
     last = words[-1].replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
     return last.rsplit(".", 1)[0] if "." in last else last
+
+
+def _folder_name(name: str) -> str:
+    """A server name as one safe folder name (no separators, no leading dots)."""
+    cleaned = re.sub(r"[^a-z0-9_.-]+", "-", name.lower()).strip(".-")
+    return cleaned[:64] or "proxy"
+
+
+def default_log_root() -> Path:
+    """``~/agent-latch/runtime-logs``: stable wherever an MCP client starts the proxy."""
+    try:
+        return Path.home() / "agent-latch" / "runtime-logs"
+    except RuntimeError:  # no home folder can be determined
+        return Path.cwd() / DEFAULT_LOG_DIR
+
+
+def run_folder(root: Path, name: str, now: datetime | None = None) -> Path:
+    """``root/NAME/YYYYMMDD-HHMMSS`` (UTC), never a folder that already exists."""
+    stamp = (now or datetime.now(UTC)).strftime("%Y%m%d-%H%M%S")
+    base = root / _folder_name(name)
+    folder = base / stamp
+    number = 2
+    while folder.exists():
+        folder = base / f"{stamp}-{number}"
+        number += 1
+    return folder
+
+
+def _recording_paths(
+    args: argparse.Namespace, name: str
+) -> tuple[Path | None, Path | None, bool, bool]:
+    """``(trace, ledger, trace_defaulted, ledger_defaulted)``. Raises ``ValueError``.
+
+    The trace and the ledger are on unless ``--no-trace`` / ``--no-ledger`` say otherwise.
+    """
+    if args.no_trace and args.trace is not None:
+        raise ValueError("--no-trace and --trace contradict each other")
+    if args.no_ledger and args.ledger is not None:
+        raise ValueError("--no-ledger and --ledger contradict each other")
+    if args.no_trace and args.ledger is not None:
+        raise ValueError("--ledger needs a trace to seal; remove --no-trace")
+    if args.record_payloads and args.payloads is not None:
+        raise ValueError("--record-payloads and --payloads contradict each other")
+    if args.record_payloads and args.no_trace:
+        raise ValueError("--record-payloads puts the file beside the trace; remove --no-trace")
+    trace = None if args.no_trace else args.trace
+    trace_defaulted = trace is None and not args.no_trace
+    if trace_defaulted:
+        trace = run_folder(args.log_dir or default_log_root(), name) / "trace.jsonl"
+    ledger = args.ledger
+    ledger_defaulted = trace is not None and ledger is None and not args.no_ledger
+    if ledger_defaulted:
+        stem = trace.name.removesuffix(".jsonl")
+        ledger = trace.with_name(stem + ".ledger.jsonl")
+    return trace, ledger, trace_defaulted, ledger_defaulted
 
 
 def _parse_http(value: str) -> tuple[str, int]:
@@ -348,9 +502,23 @@ def _proxy(args: argparse.Namespace) -> int:
     command = list(args.command)
     if command and command[0] == "--":
         command = command[1:]
+    try:
+        single_url, mounts = parse_upstreams(args.upstream_url)
+    except ValueError as error:
+        print(f"agent-latch-runtime: {error}", file=sys.stderr)
+        return 2
     if bool(command) == bool(args.upstream_url):
         print("agent-latch-runtime: give the server command after --, or --upstream-url",
               file=sys.stderr)
+        return 2
+    if mounts and not args.http:
+        print(
+            "agent-latch-runtime: NAME=URL upstreams are served at /mcp/NAME, so they need --http",
+            file=sys.stderr,
+        )
+        return 2
+    if mounts and args.name:
+        print("agent-latch-runtime: --name applies to a single unnamed upstream", file=sys.stderr)
         return 2
     try:
         http = _parse_http(args.http) if args.http else None
@@ -369,49 +537,98 @@ def _proxy(args: argparse.Namespace) -> int:
 
     # stdout carries the MCP protocol in stdio mode, so logging goes to stderr.
     logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
-    name = args.name or _default_name(command, args.upstream_url)
-    if args.ledger is not None and args.trace is None:
-        print(
-            "agent-latch-runtime: --ledger needs --trace; nothing would be sealed otherwise",
-            file=sys.stderr,
-        )
+    name = args.name or (",".join(mounts) if mounts else _default_name(command, single_url))
+    try:
+        trace_path, ledger_path, trace_defaulted, ledger_defaulted = _recording_paths(args, name)
+    except ValueError as error:
+        print(f"agent-latch-runtime: {error}", file=sys.stderr)
         return 2
+
+    def _warn(message: str) -> None:
+        if not args.quiet:
+            print(f"agent-latch-runtime: {message}", file=sys.stderr)
+
     ledger: Ledger | None = None
-    if args.ledger is not None:
+    if ledger_path is not None:
         try:
-            ledger = Ledger(args.ledger)
+            ledger = Ledger(ledger_path)
         except (LedgerError, OSError) as error:
-            print(f"agent-latch-runtime: cannot open ledger file: {error}", file=sys.stderr)
-            return 2
+            if not ledger_defaulted:
+                print(f"agent-latch-runtime: cannot open ledger file: {error}", file=sys.stderr)
+                return 2
+            # A default location must not stop the proxy: the server still works, unsealed.
+            _warn(f"cannot open the default ledger {ledger_path} ({error}); not sealing."
+                  " Pass --ledger FILE or --log-dir DIR, or --no-ledger to silence this")
     try:
         trace = TraceLog(
-            args.trace,
+            trace_path,
             summary=None if args.quiet else sys.stderr,
             excerpt_chars=args.excerpt_chars,
-            transport="http" if args.upstream_url else "stdio",
+            transport="http" if single_url or mounts else "stdio",
             ledger=ledger,
             warn=None if args.quiet else sys.stderr,
         )
     except OSError as error:
         if ledger is not None:
             ledger.close()
-        print(f"agent-latch-runtime: cannot open trace file: {error}", file=sys.stderr)
-        return 2
+        if not trace_defaulted:
+            print(f"agent-latch-runtime: cannot open trace file: {error}", file=sys.stderr)
+            return 2
+        _warn(f"cannot open the default trace {trace_path} ({error}); not recording."
+              " Pass --trace FILE or --log-dir DIR, or --no-trace to silence this")
+        trace = TraceLog(
+            None,
+            summary=None if args.quiet else sys.stderr,
+            excerpt_chars=args.excerpt_chars,
+            transport="http" if single_url or mounts else "stdio",
+            warn=None if args.quiet else sys.stderr,
+        )
+        trace_path = ledger = None
+    payloads_path = args.payloads
+    if args.record_payloads:
+        if trace_path is not None:
+            payloads_path = trace_path.parent / "payloads.jsonl"
+        else:
+            _warn("--record-payloads needs the trace folder, which could not be opened;"
+                  " payloads are not recorded")
+    if trace_path is not None:
+        sealed = "sealed in " + str(ledger_path.resolve()) if ledger is not None else "unsealed"
+        _warn(f"recording trace to {trace_path.resolve()} ({sealed}); payloads "
+              + (f"to {payloads_path.resolve()}" if payloads_path is not None
+                 else "are off unless --payloads or --record-payloads is given"))
+        if trace_defaulted:
+            _warn(f"read this run back with: agent-latch-runtime import-logs --dir "
+                  f"{trace_path.parent.resolve()} --once")
     payloads: PayloadFile | None = None
-    if args.payloads is not None:
+    if payloads_path is not None:
         try:
-            payloads = PayloadFile(args.payloads, max_chars=args.payload_max_chars)
+            payloads = PayloadFile(payloads_path, max_chars=args.payload_max_chars)
         except OSError as error:
             trace.close()
             print(f"agent-latch-runtime: cannot open payloads file: {error}", file=sys.stderr)
             return 2
     try:
+        tap = PayloadTap([payloads]) if payloads is not None else None
+        if mounts and http:
+            import uvicorn
+
+            from agent_latch.runtime.proxy import build_mount_app
+
+            app = build_mount_app(mounts=mounts, trace=trace, tap=tap)
+            print(
+                f"agent-latch-runtime: monitoring {name!r} at "
+                + ", ".join(f"http://{http[0]}:{http[1]}/mcp/{item}" for item in mounts)
+                + " (preview; records traffic, never blocks)",
+                file=sys.stderr,
+            )
+            uvicorn.run(app, host=http[0], port=http[1], log_level="warning", lifespan="on")
+            return 0
         server = build_proxy(
             name=name,
             trace=trace,
             command=command,
-            upstream_url=args.upstream_url,
-            tap=PayloadTap([payloads]) if payloads is not None else None,
+            upstream_url=single_url,
+            tap=tap,
         )
         print(
             f"agent-latch-runtime: monitoring {name!r} (preview; records traffic, never blocks)",
@@ -421,11 +638,42 @@ def _proxy(args: argparse.Namespace) -> int:
             server.run(transport="http", host=http[0], port=http[1], show_banner=False)
         else:
             server.run(show_banner=False)
+    except KeyboardInterrupt:
+        # Ctrl+C is how a run is stopped: no traceback, so the summary below is the last thing shown.
+        pass
     finally:
         trace.close()
         if payloads is not None:
             payloads.close()
+        if trace_path is not None:
+            if args.no_import:
+                _warn(f"run folder: {trace_path.parent.resolve()}")
+            else:
+                import_run(
+                    trace_path,
+                    ledger_path if ledger is not None else None,
+                    payloads_path,
+                    io.StringIO() if args.quiet else sys.stderr,
+                )
     return 0
+
+
+def _runs_below(directory: Path) -> list[Path]:
+    """Run folders (holding ``trace.jsonl``) up to two levels below ``directory``, oldest first."""
+    found: list[Path] = []
+    if not directory.is_dir():
+        return found
+    for child in sorted(directory.iterdir()):
+        if child.is_symlink() or not child.is_dir():
+            continue
+        if (child / "trace.jsonl").is_file():
+            found.append(child)
+            continue
+        found.extend(
+            grand for grand in sorted(child.iterdir())
+            if grand.is_dir() and not grand.is_symlink() and (grand / "trace.jsonl").is_file()
+        )
+    return found
 
 
 def _import_logs(args: argparse.Namespace) -> int:
@@ -433,10 +681,34 @@ def _import_logs(args: argparse.Namespace) -> int:
     when a store is refused.
     """
     logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
-    directory: Path = args.dir
+    directory: Path = args.dir or Path(DEFAULT_LOG_DIR)
     trace = args.trace or directory / "trace.jsonl"
     payloads = args.payloads or (None if args.trace else directory / "payloads.jsonl")
     events_csv = args.events_csv or directory / "events.csv"
+    if args.trace is None and not trace.exists():
+        search = directory
+        runs = _runs_below(search)
+        if not runs and args.dir is None:
+            search = default_log_root()
+            runs = _runs_below(search)
+        if runs:
+            # Every run has its own folder; guessing one could import the wrong (or a live) run.
+            shown = "\n".join(f"  {run}" for run in runs[-10:])
+            more = f"\n  ... and {len(runs) - 10} older" if len(runs) > 10 else ""
+            print(
+                f"agent-latch-runtime: {search} holds {len(runs)} run folder(s), not one run."
+                f" Pass --dir with the run to import (newest last):\n{shown}{more}",
+                file=sys.stderr,
+            )
+            return 2
+    if args.once and not trace.exists():
+        # A following import may wait for the proxy to create the file; a one-shot import cannot.
+        print(
+            f"agent-latch-runtime: no trace at {trace}. Check --dir: it must be the run folder"
+            " the proxy printed (or give the file with --trace)",
+            file=sys.stderr,
+        )
+        return 2
     if args.anchor is not None and not args.database:
         print("agent-latch-runtime: --anchor needs --database", file=sys.stderr)
         return 2

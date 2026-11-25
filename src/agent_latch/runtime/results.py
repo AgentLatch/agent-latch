@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import ast
 import csv
+import hashlib
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -77,6 +79,9 @@ class RuntimeAlert:
     message: str
     evidence: str
     order: str
+    # Stable identity for the SARIF fingerprint: ``server/tool`` and the definition's hash.
+    entity: str = ""
+    definition: str = ""
 
 
 def _rank(severity: str) -> int:
@@ -165,6 +170,11 @@ def _location(finding: dict[str, Any], order: str, sites: dict[str, str]) -> str
     return f"{where} #{order}"
 
 
+def _entity(finding: dict[str, Any]) -> str:
+    entity = finding.get("entity") if isinstance(finding.get("entity"), dict) else {}
+    return "/".join(str(entity[key]) for key in ("server", "tool") if entity.get(key))
+
+
 def _alert(finding: dict[str, Any], order: str, sites: dict[str, str], fallback: str) -> RuntimeAlert:
     title = str(finding.get("family") or finding.get("title") or "").replace("_", " ")
     return RuntimeAlert(
@@ -176,6 +186,8 @@ def _alert(finding: dict[str, Any], order: str, sites: dict[str, str], fallback:
         message=str(finding.get("message") or ""),
         evidence=_evidence(finding),
         order=order,
+        entity=_entity(finding),
+        definition=str(finding.get("definition_sha256") or ""),
     )
 
 
@@ -204,9 +216,12 @@ def _gate_heading(alert: RuntimeAlert) -> str:
     return f"{found.id} {found.name}" if found else "No gate"
 
 
-def load_alerts(csv_path: Path, project: Path) -> list[RuntimeAlert]:
-    """Findings from a gate-results CSV. Rows that are not findings are left out."""
-    sites = _tool_sites(project)
+def load_alerts(csv_path: Path, project: Path | None) -> list[RuntimeAlert]:
+    """Findings from a gate-results CSV. Rows that are not findings are left out.
+
+    Without a ``project`` a finding is not matched to a source function.
+    """
+    sites = _tool_sites(project) if project is not None else {}
     alerts: list[RuntimeAlert] = []
     with csv_path.open(encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream)
@@ -353,6 +368,7 @@ def runtime_sarif(
             "level": _SARIF_LEVEL.get(alert.severity, "warning"),
             "message": {"text": alert.message or alert.title or alert.rule_id},
             "locations": [_alert_location(alert.location)],
+            "partialFingerprints": {"agentLatchRuntimeFinding/v1": _fingerprint(alert)},
             "properties": {
                 "severity": alert.severity,
                 "gate": gate,
@@ -376,6 +392,13 @@ def runtime_sarif(
         }],
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def _fingerprint(alert: RuntimeAlert) -> str:
+    """Stable across runs: no event order, so a finding keeps its alert history."""
+    where = alert.entity or alert.location
+    text = f"{alert.rule_id}|{where}|{alert.definition}|{alert.message}"
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
 
 
 def _gate_dict(rule_id: str) -> dict[str, str] | None:
@@ -474,6 +497,21 @@ def _store_error(store: StoreCheck, database: Path) -> str | None:
             )
         return f"Error: the event store {database} holds no rows; there is nothing to verify"
     return None
+
+
+def write_runtime_sarif(csv_path: Path, sarif_path: Path) -> int:
+    """Write every finding in ``csv_path`` (all gates) to ``sarif_path`` and return how many.
+
+    The file is always written, with an empty ``results`` list when there are no findings, and is
+    created with mode 0600 like the CSV it comes from.
+    """
+    alerts = load_alerts(csv_path, None) if csv_path.is_file() else []
+    sarif = runtime_sarif(alerts, None, "", 0)
+    sarif_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(sarif_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+        stream.write(sarif + "\n")
+    return len(alerts)
 
 
 def _write_sarif(sarif: str, output: Path | None) -> bool:

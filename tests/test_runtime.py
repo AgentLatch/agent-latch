@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+from datetime import UTC
 from io import StringIO
 from pathlib import Path
 
@@ -181,6 +183,296 @@ def test_proxy_ledger_flag_seals_trace_records(
     assert main([*arguments, "--", "python", "server.py"]) == 0
     assert len(ledger.read_text(encoding="utf-8").splitlines()) == 1
     assert main(["verify", str(ledger)]) == 0
+
+
+def _stub_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    def build_proxy(*, trace, **_kwargs):
+        trace.tools_listed(session_id="s", request_id="1", server="x", tools=[])
+        return SimpleNamespace(run=lambda **_run_kwargs: None)
+
+    monkeypatch.setitem(
+        sys.modules, "agent_latch.runtime.proxy", SimpleNamespace(build_proxy=build_proxy)
+    )
+
+
+_RUN_STAMP = re.compile(r"\d{8}-\d{6}(-\d+)?")
+
+
+def _only_run(root: Path, name: str) -> Path:
+    runs = [path for path in (root / name).iterdir() if path.is_dir()]
+    assert len(runs) == 1
+    assert _RUN_STAMP.fullmatch(runs[0].name)
+    return runs[0]
+
+
+def _set_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
+def test_proxy_records_trace_and_ledger_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_proxy(monkeypatch)
+    arguments = ["proxy", "--quiet", "--log-dir", str(tmp_path), "--name", "My Server"]
+    assert main([*arguments, "--", "python", "server.py"]) == 0
+    folder = _only_run(tmp_path, "my-server")
+    assert len((folder / "trace.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+    assert len((folder / "trace.ledger.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+    assert main(["verify", str(folder / "trace.ledger.jsonl")]) == 0
+    assert not (folder / "payloads.jsonl").exists()  # payloads stay opt-in
+
+
+def test_proxy_writes_under_the_home_folder_without_a_log_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _stub_proxy(monkeypatch)
+    home, elsewhere = tmp_path / "home", tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _set_home(monkeypatch, home)
+    monkeypatch.chdir(elsewhere)  # where an MCP client happens to start the proxy
+    assert main(["proxy", "--name", "github", "--", "python", "server.py"]) == 0
+    folder = _only_run(home / "agent-latch" / "runtime-logs", "github")
+    assert (folder / "trace.jsonl").is_file()
+    assert (folder / "trace.ledger.jsonl").is_file()
+    assert list(elsewhere.iterdir()) == []
+    err = capsys.readouterr().err
+    assert f"import-logs --dir {folder.resolve()}" in err  # startup hint
+    assert f"run folder: {folder.resolve()}" in err  # and again on exit
+
+
+def test_every_run_gets_its_own_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime
+
+    from agent_latch.runtime.cli import run_folder
+
+    moment = datetime(2026, 11, 22, 7, 45, 0, tzinfo=UTC)
+    first = run_folder(tmp_path, "My Server", moment)
+    assert first == tmp_path / "my-server" / "20261122-074500"
+    first.mkdir(parents=True)
+    assert run_folder(tmp_path, "My Server", moment) == tmp_path / "my-server" / "20261122-074500-2"
+
+    _stub_proxy(monkeypatch)
+    command = ["proxy", "--quiet", "--log-dir", str(tmp_path / "logs"), "--name", "s", "--",
+               "python", "s.py"]
+    assert main(command) == 0
+    assert main(command) == 0
+    runs = [path for path in (tmp_path / "logs" / "s").iterdir()]
+    assert len(runs) == 2  # a second run never appends to the first run's ledger
+
+
+def test_proxy_ledger_follows_an_explicit_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_proxy(monkeypatch)
+    trace = tmp_path / "t.jsonl"
+    assert main(["proxy", "--quiet", "--trace", str(trace), "--", "python", "server.py"]) == 0
+    assert (tmp_path / "t.ledger.jsonl").is_file()
+
+
+def test_proxy_opt_outs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_proxy(monkeypatch)
+    base = ["proxy", "--quiet", "--log-dir", str(tmp_path)]
+    assert main([*base, "--no-ledger", "--", "python", "a.py"]) == 0
+    run = _only_run(tmp_path, "a")
+    assert (run / "trace.jsonl").is_file()
+    assert not (run / "trace.ledger.jsonl").exists()
+    assert main([*base, "--no-trace", "--", "python", "b.py"]) == 0
+    assert not (tmp_path / "b").exists()
+
+
+def test_record_payloads_writes_beside_the_trace_and_import_finds_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _stub_proxy(monkeypatch)
+    base = ["proxy", "--log-dir", str(tmp_path), "--name", "s"]
+    assert main([*base, "--record-payloads", "--", "python", "s.py"]) == 0
+    run = _only_run(tmp_path, "s")
+    assert (run / "payloads.jsonl").is_file()
+    assert f"payloads to {(run / 'payloads.jsonl').resolve()}" in capsys.readouterr().err
+    # import-logs --dir reads payloads.jsonl from the same run folder with no extra flag.
+    assert main(["import-logs", "--dir", str(run), "--once", "--quiet"]) == 0
+
+    # Without the flag no payloads file is written.
+    assert main([*base, "--", "python", "s.py"]) == 0
+    other = next(path for path in (tmp_path / "s").iterdir() if path != run)
+    assert not (other / "payloads.jsonl").exists()
+
+
+def test_record_payloads_contradictions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _stub_proxy(monkeypatch)
+    command = ["--", "python", "s.py"]
+    for flags in (
+        ["--record-payloads", "--payloads", str(tmp_path / "p.jsonl")],
+        ["--record-payloads", "--no-trace"],
+    ):
+        assert main(["proxy", "--quiet", "--log-dir", str(tmp_path), *flags, *command]) == 2
+        assert "--record-payloads" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_import_logs_needs_a_named_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _stub_proxy(monkeypatch)
+    root = tmp_path / "logs"
+    assert main(["proxy", "--quiet", "--no-import", "--log-dir", str(root), "--name", "s", "--", "python", "s.py"]) == 0
+    run = _only_run(root, "s")
+
+    # Pointing at the server's folder or the root lists the runs and imports nothing.
+    for parent in (root, root / "s"):
+        assert main(["import-logs", "--dir", str(parent), "--once", "--quiet"]) == 2
+        err = capsys.readouterr().err
+        assert "1 run folder(s)" in err and str(run) in err
+    assert not (run / "events.csv").exists()
+
+    assert main(["import-logs", "--dir", str(run), "--once", "--quiet"]) == 0
+    assert (run / "events.csv").is_file()
+
+
+def test_proxy_imports_its_run_when_it_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _stub_proxy(monkeypatch)
+    command = ["proxy", "--log-dir", str(tmp_path), "--name", "s", "--record-payloads", "--",
+               "python", "s.py"]
+    assert main(command) == 0
+    run = _only_run(tmp_path, "s")
+    for name in ("events.csv", "gate-results.csv", "gate-results.sarif", "normalized.jsonl"):
+        assert (run / name).is_file(), name
+    err = capsys.readouterr().err
+    assert f"run folder: {run.resolve()}" in err
+    assert "1 event(s)" in err and "ledger unanchored" in err
+    # A block the user can paste as is: RUN=... then the report and the events table.
+    assert f"\nRUN={run.resolve()}\n" in err
+    assert '--runtime-result "$RUN/gate-results.csv" --ledger "$RUN/trace.ledger.jsonl"' in err
+    assert 'column -s, -t < "$RUN/events.csv" | less -S' in err
+    assert "agent-latch-runtime anchor --ledger" in err
+
+
+def test_proxy_import_can_be_turned_off_and_is_quiet_with_quiet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _stub_proxy(monkeypatch)
+    base = ["proxy", "--log-dir", str(tmp_path)]
+    assert main([*base, "--name", "off", "--no-import", "--", "python", "s.py"]) == 0
+    off = _only_run(tmp_path, "off")
+    assert not (off / "events.csv").exists()
+    assert f"run folder: {off.resolve()}" in capsys.readouterr().err
+
+    assert main([*base, "--name", "q", "--quiet", "--", "python", "s.py"]) == 0
+    assert (_only_run(tmp_path, "q") / "events.csv").is_file()  # still imported
+    err = capsys.readouterr().err
+    assert "run folder" not in err and "event(s)" not in err  # but no summary printed
+
+
+def test_proxy_with_no_traffic_says_so_and_does_not_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(
+        sys.modules,
+        "agent_latch.runtime.proxy",
+        SimpleNamespace(build_proxy=lambda **_k: SimpleNamespace(run=lambda **_r: None)),
+    )
+    assert main(["proxy", "--log-dir", str(tmp_path), "--name", "idle", "--", "python", "s.py"]) == 0
+    assert "no traffic was recorded" in capsys.readouterr().err
+
+
+def test_ctrl_c_stops_cleanly_and_the_summary_is_last(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    def build_proxy(*, trace, **_kwargs):
+        trace.tools_listed(session_id="s", request_id="1", server="x", tools=[])
+
+        def run(**_run_kwargs):
+            raise KeyboardInterrupt
+
+        return SimpleNamespace(run=run)
+
+    monkeypatch.setitem(
+        sys.modules, "agent_latch.runtime.proxy", SimpleNamespace(build_proxy=build_proxy)
+    )
+    assert main(["proxy", "--log-dir", str(tmp_path), "--name", "s", "--", "python", "s.py"]) == 0
+    lines = capsys.readouterr().err.splitlines()
+    assert "Traceback" not in "\n".join(lines)
+    assert "agent-latch --runtime-result" in lines[-2] or "anchor --ledger" in lines[-1]
+    assert lines[-1].startswith("agent-latch-runtime: anchor it")
+
+
+def test_a_failing_import_is_a_warning_not_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from agent_latch.runtime import autoimport
+
+    _stub_proxy(monkeypatch)
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(autoimport, "discover_gates", broken)
+    assert main(["proxy", "--log-dir", str(tmp_path), "--name", "s", "--", "python", "s.py"]) == 0
+    err = capsys.readouterr().err
+    assert "could not import this run automatically (RuntimeError: boom)" in err
+    assert "import-logs --dir" in err
+
+
+def test_import_logs_once_refuses_a_folder_with_no_trace(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing = tmp_path / "20261122-074500"
+    assert main(["import-logs", "--dir", str(missing), "--once", "--quiet"]) == 2
+    assert f"no trace at {missing / 'trace.jsonl'}" in capsys.readouterr().err
+    assert not missing.exists()
+
+
+def test_import_logs_without_dir_lists_runs_in_the_home_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _stub_proxy(monkeypatch)
+    _set_home(monkeypatch, tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+    assert main(["proxy", "--quiet", "--name", "s", "--", "python", "s.py"]) == 0
+    assert main(["import-logs", "--once", "--quiet"]) == 2
+    assert str(tmp_path / "home" / "agent-latch" / "runtime-logs") in capsys.readouterr().err
+
+
+def test_proxy_rejects_contradictory_recording_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _stub_proxy(monkeypatch)
+    command = ["--", "python", "server.py"]
+    for flags in (
+        ["--no-trace", "--trace", str(tmp_path / "t.jsonl")],
+        ["--no-ledger", "--ledger", str(tmp_path / "l.jsonl")],
+        ["--no-trace", "--ledger", str(tmp_path / "l.jsonl")],
+    ):
+        assert main(["proxy", "--quiet", *flags, *command]) == 2
+        assert "--no-" in capsys.readouterr().err
+    assert not list(tmp_path.iterdir())
+
+
+def test_proxy_keeps_running_when_the_default_folder_is_unwritable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _stub_proxy(monkeypatch)
+    blocker = tmp_path / "file"
+    blocker.write_text("not a folder", encoding="utf-8")
+    assert main(["proxy", "--log-dir", str(blocker), "--", "python", "server.py"]) == 0
+    assert "cannot open the default" in capsys.readouterr().err
+    # The same location given explicitly is a configuration error.
+    explicit = ["proxy", "--trace", str(blocker / "t.jsonl"), "--", "python", "server.py"]
+    assert main(explicit) == 2
 
 
 def test_mask_value_masks_secret_keys_and_cuts_long_strings() -> None:

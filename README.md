@@ -181,7 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: AgentLatch/agent-latch@v0.5.1
+      - uses: AgentLatch/agent-latch@v0.6.0
         with:
           fail-on: high
           # min-severity: medium      # optional: hide low and info findings
@@ -193,7 +193,7 @@ jobs:
 ```yaml
 repos:
   - repo: https://github.com/AgentLatch/agent-latch
-    rev: v0.5.1
+    rev: v0.6.0
     hooks:
       - id: agent-latch
 ```
@@ -231,21 +231,27 @@ Watch a real agent. Put the proxy in front of any MCP server, then follow its lo
 
 ```sh
 # Terminal 1: the agent's MCP traffic goes through the proxy.
-agent-latch-runtime proxy --trace runtime-logs/trace.jsonl --payloads runtime-logs/payloads.jsonl \
+agent-latch-runtime proxy --name github --record-payloads \
   -- npx -y @modelcontextprotocol/server-github
 ```
 
+The proxy records a trace and a sealed ledger by default, in a new folder per run: `~/agent-latch/runtime-logs/<name>/<YYYYMMDD-HHMMSS>/` (UTC; it prints the path). Payloads stay opt-in: `--record-payloads` (or `--payloads FILE`) because that file holds masked tool arguments and outputs. `--log-dir DIR` moves the root, `--no-ledger` skips sealing, `--no-trace` records nothing.
+
+When the proxy stops (Ctrl+C), it imports the run itself: it writes `events.csv`, `gate-results.csv` and `gate-results.sarif` (all gates, SARIF 2.1.0) into the run folder and prints the folder, a findings summary and the report command. `--no-import` turns that off. To follow a run live, or to import one by hand, name the run folder:
+
 ```sh
-# Terminal 2: one line per message, plus events.csv and gate-results.csv in runtime-logs/.
-agent-latch-runtime import-logs
+# Terminal 2 (optional): one line per message while the agent runs.
+agent-latch-runtime import-logs --dir ~/agent-latch/runtime-logs/github/20261122-074500
 ```
 
-Run both from the same folder, in the environment where AgentLatch is installed. `mcp-server/.venv` does not provide `agent-latch-runtime`. To also keep a queryable local copy, add `--database runtime-logs/runtime.db` to `import-logs` (SQLite, nothing is uploaded).
+Run both in the environment where AgentLatch is installed. `mcp-server/.venv` does not provide `agent-latch-runtime`. Pointing `--dir` at a folder of runs lists them and exits `2`; nothing is guessed. To also keep a queryable local copy, add `--database FILE` to `import-logs` (SQLite, nothing is uploaded).
+
+Several remote servers in one proxy: serve it with `--http` and repeat `--upstream-url NAME=URL` (for example `--upstream-url fetch=https://a.example/mcp --upstream-url git=https://b.example/mcp`). Each server is reachable at `/mcp/NAME`, and all of them write to the same trace, payloads and ledger, so there is one ordered trail for the whole agent. Servers started from a command still need one proxy each. See [the runtime guide](docs/runtime.md#connect-an-app).
 
 **See the result:**
 
 ```sh
-agent-latch . --runtime-result runtime-logs/gate-results.csv
+agent-latch . --runtime-result ~/agent-latch/runtime-logs/github/20261122-074500/gate-results.csv
 ```
 
 This prints the gate findings grouped by gate, with the local tool's file and line when the project defines it (add `--plain` for text). Real output, shortened:
@@ -281,36 +287,36 @@ The **trace** keeps argument names, sizes, SHA-256 hashes and a short secret-mas
 
 ## 4. Tamper-evident ledger (preview)
 
-**What it does:** a log the agent can rewrite is not evidence. `--ledger FILE` seals every trace record into a local hash chain, and one short digest per batch (an *anchor*) is published somewhere the agent cannot write. An edit, a deletion or a full rebuild then shows up when you verify. It is off unless you ask for it, uses only the standard library, makes no network call, and is never in the request path.
+**What it does:** a log the agent can rewrite is not evidence. The proxy seals every trace record into a local hash chain by default (`--no-ledger` turns it off, `--ledger FILE` sets the path), and one short digest per batch (an *anchor*) is published somewhere the agent cannot write. An edit, a deletion or a full rebuild then shows up when you verify. It uses only the standard library, makes no network call, and is never in the request path.
 
 ![Tamper-evident ledger: each trace line is sealed into a numbered block that holds its hash and the previous block's digest, the newest digest is published as an anchor the agent cannot write, and verify returns intact, unanchored, tampered, deleted, rewritten or missing.](docs/assets/diagrams/ledger.svg)
 
 **Run it:**
 
 ```sh
-# 1. Record with a ledger (the ledger needs a trace file beside it)
-agent-latch-runtime proxy --trace runtime-logs/trace.jsonl \
-  --ledger runtime-logs/trace.ledger.jsonl -- npx -y @modelcontextprotocol/server-github
+# 1. Record (the ledger is on by default). The proxy prints the run folder, used as $RUN below.
+agent-latch-runtime proxy -- npx -y @modelcontextprotocol/server-github
+RUN=~/agent-latch/runtime-logs/server-github/20261122-074500
 ```
 
 ```sh
 # 2. Publish an anchor to a place the agent cannot write (a mounted drive, another host, ...)
-agent-latch-runtime anchor --ledger runtime-logs/trace.ledger.jsonl --to /mnt/audit/anchors.jsonl
+agent-latch-runtime anchor --ledger $RUN/trace.ledger.jsonl --to /mnt/audit/anchors.jsonl
 ```
 
 ```sh
 # 3. Verify, any time
-agent-latch-runtime verify runtime-logs/trace.ledger.jsonl                       # finds trace.jsonl beside it
-agent-latch-runtime verify runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl
-agent-latch-runtime verify runtime-logs                                          # every ledger in a folder
-agent-latch-runtime verify runtime-logs --all                                    # ... and its subfolders, archives included
+agent-latch-runtime verify $RUN/trace.ledger.jsonl                               # finds trace.jsonl beside it
+agent-latch-runtime verify $RUN/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl
+agent-latch-runtime verify $RUN                                                  # every ledger in a folder
+agent-latch-runtime verify ~/agent-latch/runtime-logs --all                      # every run, subfolders included
 ```
 
 **See the result:** `verify` prints one verdict (`intact`, `unanchored`, `tampered`, `deleted`, `rewritten` or `missing`) and exits `1` when the trail cannot be trusted. For the full picture, put the ledger in the runtime report:
 
 ```sh
-agent-latch . --runtime-result runtime-logs/gate-results.csv \
-  --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl
+agent-latch . --runtime-result $RUN/gate-results.csv \
+  --ledger $RUN/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl
 ```
 
 The verdict leads the report, followed by a table with one row per record. Problem records are always listed, and `--ledger-rows N` sets how many intact ones to show (`0` for all). Real output for a ledger with one edited record, one gap and one out-of-order block (shortened):
@@ -331,8 +337,8 @@ AUDIT TRAIL TAMPERED — a record was altered; the log cannot be trusted.
 Export it as SARIF for a viewer or code scanning. The file gets the SARIF and the terminal still shows the report above:
 
 ```sh
-agent-latch . --runtime-result runtime-logs/gate-results.csv \
-  --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl \
+agent-latch . --runtime-result $RUN/gate-results.csv \
+  --ledger $RUN/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl \
   --format sarif --output audit.sarif
 ```
 
@@ -393,7 +399,7 @@ flowchart LR
         proxy --> server["MCP server"]
         proxy --> logs["Masked logs<br/>trace.jsonl · payloads.jsonl"]
         logs --> importer["agent-latch-runtime import-logs"]
-        importer --> events["One event per message<br/>events.csv · normalized.jsonl<br/>optional --database (local SQLite)"]
+        importer --> events["One event per message<br/>events.csv · normalized.jsonl<br/>gate-results.csv · gate-results.sarif<br/>optional --database (local SQLite)"]
     end
 ```
 
@@ -452,6 +458,14 @@ sequenceDiagram
 | `ALR14-S03` | `ALR14` | Agent installs packages at runtime | ASI10 Rogue Agents |
 
 Rule behavior and known blind spots are documented in [docs/RULES.md](https://github.com/AgentLatch/agent-latch/blob/main/docs/RULES.md).
+
+The monitor-only ALR04 runtime detector IDs are:
+
+| Rule | Gate | Detection | OWASP Agentic mapping |
+|---|---|---|---|
+| `ALR04-R01` | `ALR04` | Tool claims read-only or offline behavior while its input schema accepts a risky capability | ASI01; ASI02; ASI04 |
+| `ALR04-R02` | `ALR04` | Tool input schema accepts conversation context or credential parameters | ASI01; ASI02; ASI04 |
+| `ALR04-R03` | `ALR04` | Tool name collides with or resembles one listed by another server in the run | ASI01; ASI02; ASI04 |
 
 Every rule belongs to one **gate**: the security outcome it checks, such as `ALR09` Human approval for sensitive actions. Reports show a rule with its gate, for example `AG006 (ALR09)`. SARIF and JSON keep the full rule ID (`AGENTLATCH-AG006`), and suppressions accept either form. [docs/GATES.md](https://github.com/AgentLatch/agent-latch/blob/main/docs/GATES.md) lists every gate, its detectors (static rules and runtime checks such as ALR04), and how it maps to OWASP and the EU AI Act. These mappings are informational, not a compliance claim.
 
@@ -544,7 +558,7 @@ The source rules work on any Python code. Framework-specific checks cover CrewAI
 
 ### How do I check AI agent security in CI or GitHub Actions?
 
-Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) (`uses: AgentLatch/agent-latch@v0.5.1`) to scan every push and pull request and show findings in GitHub code scanning, or the [pre-commit hook](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md#pre-commit-hook) to block risky commits. Any other CI can run `agent-latch scan --fail-on high`, which exits with code 1 when high-severity findings exist.
+Use the [GitHub Action](https://github.com/marketplace/actions/agentlatch-scan) (`uses: AgentLatch/agent-latch@v0.6.0`) to scan every push and pull request and show findings in GitHub code scanning, or the [pre-commit hook](https://github.com/AgentLatch/agent-latch/blob/main/docs/ci.md#pre-commit-hook) to block risky commits. Any other CI can run `agent-latch scan --fail-on high`, which exits with code 1 when high-severity findings exist.
 
 ### Does AgentLatch upload my code or call an LLM?
 
