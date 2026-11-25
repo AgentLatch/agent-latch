@@ -16,7 +16,7 @@ risk, so a finding records whether the tool declares ``openWorldHint`` or its na
 outside-content tool (``outside_content_context``). That context is self-declared by the server,
 so it never skips a check and never lowers a finding: severity follows the outcome alone.
 
-Coverage (``ALR05-090``). Payload records exist only when the proxy runs with ``--payloads``;
+Coverage (``ALR05-R90``). Payload records exist only when the proxy runs with ``--payloads``;
 without them there is nothing to scan, and the gate emits one coverage record per run, not per
 event. Output cut by the payload file's per-string limit (``--payload-max-chars``) gets one
 coverage record per tool per run.
@@ -90,7 +90,7 @@ CATEGORIES = (
     "action_steering_output",
 )
 RULE_IDS = {name: f"ALR05-R{i:02d}" for i, name in enumerate(CATEGORIES, 1)}
-RULE_COVERAGE = "ALR05-090"
+RULE_COVERAGE = "ALR05-R90"
 POLICY_KEYS = ("suppressions",)  # top-level operator policy keys this gate reads
 # category -> (fail_at, review_at), tuned on output data (tests/test_alr05_eval.py). Output text is
 # longer and noisier than tool definitions, so these are set separately from ALR04's.

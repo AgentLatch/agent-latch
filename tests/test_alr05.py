@@ -214,7 +214,7 @@ def test_missing_payload_is_one_coverage_record_per_run() -> None:
 
     first = alr05.evaluate(event)["findings"]
     assert len(first) == 1
-    assert first[0]["rule_id"] == "ALR05-090"
+    assert first[0]["rule_id"] == "ALR05-R90"
     assert first[0]["family"] == "coverage"
     assert first[0]["outcome"] == "INCONCLUSIVE"
     assert first[0]["is_finding"] is True
@@ -230,7 +230,7 @@ def test_missing_payload_is_one_coverage_record_per_run() -> None:
 def test_truncated_output_gets_one_coverage_record_per_tool() -> None:
     text = "Partial page content…[4200 more chars]"
     first = alr05.evaluate(_call_event(text))["findings"]
-    assert _rules(first) == {"ALR05-090"}
+    assert _rules(first) == {"ALR05-R90"}
     assert first[0]["decision_reason"] == "output_truncated"
     assert first[0]["coverage"] < 0.9
 
@@ -248,7 +248,7 @@ def test_scanner_limits_get_coverage_records_independent_of_truncation() -> None
 
     # Same tool, new output that is also cut by the payload file: both records still appear.
     both = alr05.evaluate(_call_event(many + "…[4200 more chars]", order=8))["findings"]
-    assert {f["decision_reason"] for f in both if f["rule_id"] == "ALR05-090"} == {
+    assert {f["decision_reason"] for f in both if f["rule_id"] == "ALR05-R90"} == {
         "output_truncated"}
 
     # Traversal limit: reported even when identical output is evaluated again.

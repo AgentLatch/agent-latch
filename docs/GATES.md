@@ -89,7 +89,7 @@ Detection details and blind spots for the static rules are in [RULES.md](RULES.m
 | `ALR16-003` | `ALR16` | runtime | The install is unpinned, hashless or a lookalike name, so its content is not fixed | `ASI04`, `ASI05` |
 | `ALR16-004` | `ALR16` | runtime | The install arrives through a pipe-to-shell, chained command or write-then-run sequence | `ASI04`, `ASI05` |
 
-Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR03-090` alr03 could not fully identify an endpoint from its handshake (coverage); `ALR03-099` alr03 per-scan summary; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary; `ALR16-090` alr16 could not fully inspect a tool-call argument (coverage); `ALR16-099` alr16 per-scan summary; `ALR05-090` alr05 could not inspect tool output (no payload recorded, or output was cut); `ALR10-090` alr10 saw a tool call but no payload record (coverage).
+Diagnostics report on the scan itself and belong to no gate: `MAN000` manifest could not be read or has an invalid field; `ALR03-090` alr03 could not fully identify an endpoint from its handshake (coverage); `ALR03-099` alr03 per-scan summary; `ALR04-090` alr04 could not inspect enough of a tool definition (coverage); `ALR04-099` alr04 per-scan summary; `ALR16-090` alr16 could not fully inspect a tool-call argument (coverage); `ALR16-099` alr16 per-scan summary; `ALR05-R90` alr05 could not inspect tool output (no payload recorded, or output was cut); `ALR10-R90` alr10 saw a tool call but no payload record (coverage).
 
 ## Framework references
 

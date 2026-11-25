@@ -44,7 +44,7 @@ OWASP = ["ASI03"]
 
 RULE_REQUEST = "ALR10-R01"
 RULE_RESPONSE = "ALR10-R02"
-RULE_COVERAGE = "ALR10-090"
+RULE_COVERAGE = "ALR10-R90"
 POLICY_KEYS = ("allowed_secret_tools",)  # top-level operator policy keys this gate reads
 
 # Kinds whose shape alone marks a real credential (always high severity).
