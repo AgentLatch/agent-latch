@@ -117,6 +117,7 @@ FAMILIES: dict[str, tuple[str, str]] = {
 RULE_IDS = {family: rule_id for family, (rule_id, _) in FAMILIES.items()}  # public lookup
 RULE_COVERAGE = "ALR04-090"
 RULE_SUMMARY = "ALR04-099"
+POLICY_KEYS: tuple[str, ...] = ()  # reads no operator policy yet
 
 # signal -> (family, rank, layer). This table is the only place severity is decided.
 SIGNALS: dict[str, tuple[str, str, str]] = {

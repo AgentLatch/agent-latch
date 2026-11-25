@@ -6,11 +6,11 @@ decoding layers, phrase families and correlations, the bounded JSON walk, clause
 Evidence type, and the corroboration verdict. Gates import from here and add their own input
 selection, thresholds, and result records.
 
-The module name starts with an underscore so the importer's gate discovery skips it: it is not a
-gate, and it must never become one.
+It lives outside ``agent_latch.gates`` because that package holds runtime gate plugins only
+(the importer loads every module in it), and this module is not a gate.
 
-Stability contract: ALR04's recorded 111-case baseline pins this engine's behaviour. A change
-here changes both gates at once, so run the ALR04 baseline test before and after any edit.
+Used by ALR05 (ALR04 now carries its own matching code). A change here changes ALR05's
+behaviour, so run the ALR05 cases (tests/test_alr05_eval.py) before and after any edit.
 """
 
 from __future__ import annotations

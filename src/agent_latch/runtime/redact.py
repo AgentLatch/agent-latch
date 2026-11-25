@@ -39,10 +39,12 @@ _TOKENS = re.compile(
     r"|AKIA[0-9A-Z]{16}"  # AWS access key ID
     r"|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})"  # JWT
 )
-# "basic authentication" and similar are prose, not a credential. Only these exact words are
-# exempt, so any other value after "Basic", lowercase or not, is still masked.
+# "basic authentication", "bearer authentication" and similar are prose, not a credential. Only
+# these exact words are exempt, so any other value after "Basic" or "Bearer", lowercase or not,
+# is still masked.
 _BEARER = re.compile(
-    r"(?i)\b(?!basic\s+(?:authentication|authorization|auth|access)\.?(?![A-Za-z0-9._~+/=-]))"
+    r"(?i)\b(?!(?:basic|bearer)\s+(?:authentication|authorization|auth|access)\.?"
+    r"(?![A-Za-z0-9._~+/=-]))"
     r"(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"
 )
 _PEM = re.compile(

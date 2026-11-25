@@ -90,6 +90,7 @@ CATEGORIES = (INTENT, SOURCE, PINNING, SEQUENCE)
 RULE_IDS = {name: f"ALR16-{number:03d}" for number, name in enumerate(CATEGORIES, 1)}
 RULE_COVERAGE = "ALR16-090"
 RULE_SUMMARY = "ALR16-099"
+POLICY_KEYS = ("suppressions", "gates", "packages", "indexes", "mode")  # operator policy keys read
 
 OUTCOME_FINDING = "FINDING"
 OUTCOME_OBSERVED = "OBSERVED"

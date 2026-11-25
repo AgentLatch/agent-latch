@@ -45,6 +45,7 @@ OWASP = ["ASI03"]
 RULE_REQUEST = "ALR10-R01"
 RULE_RESPONSE = "ALR10-R02"
 RULE_COVERAGE = "ALR10-R90"
+POLICY_KEYS = ("allowed_secret_tools",)  # top-level operator policy keys this gate reads
 
 # Kinds whose shape alone marks a real credential (always high severity).
 TOKEN_KINDS = frozenset(
@@ -116,6 +117,7 @@ def _gather(payload: Mapping[str, Any], sections: tuple[str, ...]) -> list[dict[
         if item["path"].startswith(prefixes)
     ]
     covered = {item["field"] for item in evidence}
+    truncated = payload.get("masked_truncated") is True  # the masked list was cut at its cap
     for section in sections:
         for path, text in _strings(payload.get(section), f"$/{section}"):
             field = _safe(path, 220)
@@ -123,6 +125,11 @@ def _gather(payload: Mapping[str, Any], sections: tuple[str, ...]) -> list[dict[
             if residual is not None:
                 evidence.append(
                     {"signal": f"unmasked:{residual}", "field": field, "source": "residual"}
+                )
+            elif MASK in text and field not in covered and truncated:
+                # The proxy masked more spots than it lists, so this marker is backed by masking.
+                evidence.append(
+                    {"signal": "masked_unlisted", "field": field, "source": "masking"}
                 )
             elif MASK in text and field not in covered:
                 # Fallback for records written before masked-location metadata existed.

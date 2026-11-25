@@ -23,7 +23,12 @@ from agent_latch.runtime.connectors import (
     load_connectors,
     parse_connector_settings,
 )
-from agent_latch.runtime.importer import RuntimeLogImporter, discover_gates, load_policy
+from agent_latch.runtime.importer import (
+    RuntimeLogImporter,
+    discover_gates,
+    load_policy,
+    unknown_policy_keys,
+)
 from agent_latch.runtime.ledger import (
     Ledger,
     LedgerError,
@@ -716,7 +721,11 @@ def _import_logs(args: argparse.Namespace) -> int:
                 ),
                 directory,
             )
-        gates = discover_gates(load_policy(args.policy) if args.policy else None)
+        policy = load_policy(args.policy) if args.policy else None
+        if policy:
+            for key in unknown_policy_keys(policy):
+                print(f"warning: policy key {key!r} is not read by any gate (typo?)", file=sys.stderr)
+        gates = discover_gates(policy)
         store = SQLiteEventStore(args.database) if args.database else None
         importer = RuntimeLogImporter(
             trace,

@@ -45,8 +45,8 @@ from threading import RLock
 from typing import Any
 
 from agent_latch.catalog import gate
-from agent_latch.gates.alr04 import digest, safe
 from agent_latch.runtime.redact import unescape_text
+from agent_latch.runtime.text.engine import digest, safe
 
 GATE_ID = "ALR03"
 # Every ALR03 check cites its gate's OWASP categories (agent_latch.catalog).
@@ -60,6 +60,7 @@ CATEGORIES = (
 RULE_IDS = {name: f"ALR03-{i:03d}" for i, name in enumerate(CATEGORIES, 1)}
 RULE_COVERAGE = "ALR03-090"
 RULE_SUMMARY = "ALR03-099"
+POLICY_KEYS = ("suppressions",)  # top-level operator policy keys this gate reads
 
 MAX_REMEMBERED = 2048
 MAX_SERVERS = 1024

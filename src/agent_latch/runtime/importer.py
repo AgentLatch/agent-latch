@@ -173,6 +173,22 @@ def load_policy(path: Path) -> dict[str, Any]:
     return data
 
 
+def unknown_policy_keys(policy: Mapping[str, Any]) -> list[str]:
+    """Top-level policy keys that no installed gate reads, sorted.
+
+    Each gate lists the keys it reads in ``POLICY_KEYS``. A typo such as ``allowed_secret_tool``
+    would otherwise do nothing and say nothing.
+    """
+    package = importlib.import_module("agent_latch.gates")
+    known: set[str] = set()
+    for module_info in pkgutil.iter_modules(getattr(package, "__path__", [])):
+        if module_info.name.startswith("_"):
+            continue
+        module = importlib.import_module(f"{package.__name__}.{module_info.name}")
+        known.update(getattr(module, "POLICY_KEYS", ()))
+    return sorted(str(key) for key in policy if key not in known)
+
+
 def discover_gates(policy: Mapping[str, Any] | None = None) -> list[GatePlugin]:
     """Load gate modules from ``agent_latch.gates`` in deterministic order.
 
