@@ -109,7 +109,15 @@ GATES: tuple[Gate, ...] = (
         "Tool definitions are pinned and changes are detected",
         ("ASI02", "ASI04"),
         ("Art. 15",),
-        detectors=(),
+        detectors=(
+            ("ALR02-001", "runtime",
+             ("A tool whose definition changed after approval is a different tool than the one "
+              "the operator reviewed")),
+            ("ALR02-002", "runtime",
+             "A tool added after approval widens the tool surface without a review"),
+            ("ALR02-003", "runtime",
+             "A tool removed since approval means the surface no longer matches what was reviewed"),
+        ),
     ),
     Gate(
         "ALR03",
@@ -339,6 +347,9 @@ DETECTORS: tuple[Detector, ...] = tuple(
 # Records that report on the scan itself rather than a security outcome; they belong to no gate.
 DIAGNOSTICS: dict[str, str] = {
     "AGENTLATCH-MAN000": "Manifest could not be read or has an invalid field",
+    "ALR02-090": ("ALR02 could not compare a tool list with an approved baseline "
+                  "(coverage, never a pass)"),
+    "ALR02-099": "ALR02 per-comparison summary",
     "ALR03-090": "ALR03 could not fully identify an endpoint from its handshake (coverage)",
     "ALR03-099": "ALR03 per-scan summary",
     "ALR04-090": "ALR04 could not inspect enough of a tool definition (coverage)",

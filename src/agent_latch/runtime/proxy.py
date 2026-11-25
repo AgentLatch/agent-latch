@@ -13,10 +13,33 @@ from contextlib import AsyncExitStack
 from fastmcp import FastMCP
 from fastmcp.client.transports import StdioTransport
 from fastmcp.server import create_proxy
+from fastmcp.server.providers.proxy import ProxyClient
 
-from agent_latch.runtime.middleware import AgentLatchMiddleware
+from agent_latch.runtime.middleware import AgentLatchMiddleware, listing_incomplete
 from agent_latch.runtime.payloads import PayloadTap
 from agent_latch.runtime.trace import TraceLog
+
+
+class RecordingProxyClient(ProxyClient):
+    """Observe protocol pages before FastMCP aggregates away their cursors."""
+
+    async def list_tools(self, *args, **kwargs):
+        parent = listing_incomplete.get()
+        status = [False]
+        token = listing_incomplete.set(status)
+        try:
+            return await super().list_tools(*args, **kwargs)
+        finally:
+            listing_incomplete.reset(token)
+            if parent is not None:
+                parent[0] |= status[0]
+
+    async def list_tools_mcp(self, *args, **kwargs):
+        result = await super().list_tools_mcp(*args, **kwargs)
+        status = listing_incomplete.get()
+        if status is not None:
+            status[0] = result.next_cursor is not None
+        return result
 
 
 def build_proxy(
@@ -42,7 +65,7 @@ def build_proxy(
     # mode="auto" lets the upstream negotiate its own protocol version, as the gateway does.
     # identity="upstream" forwards the real server's name/version to the client (and so to the
     # recorded handshake), instead of the proxy hiding it behind its own identity.
-    proxy = create_proxy(target, name=name, mode="auto", identity="upstream")
+    proxy = create_proxy(RecordingProxyClient(target, mode="auto"), name=name, identity="upstream")
     # First in the list = outermost. create_proxy already added its ProxyMetadataMiddleware, which
     # applies the upstream identity to the handshake result on the way out. AgentLatch must wrap
     # it, so the recorded handshake is the final result the client receives.
