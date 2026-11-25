@@ -305,8 +305,9 @@ def test_alr04_still_reports_a_definition_that_matches_the_baseline(tmp_path: Pa
     bad = event(poisoned)
     assert drift(alr02.evaluate(bad, policy=policy)) == []
     assert records(alr02.evaluate(bad, policy=policy))["ALR02-099"]["outcome"] == "PASS"
-    failed = [i for i in alr04.evaluate(bad)["findings"] if i.get("outcome") == "FAIL"]
-    assert failed, "ALR04 must still flag instruction-like content in a matching definition"
+    flagged = [i for i in alr04.evaluate(bad)["findings"]
+               if i.get("is_finding") and i["rule_id"].startswith("ALR04-")]
+    assert flagged, "ALR04 must still flag instruction-like content in a matching definition"
 
 
 # --- where a baseline may live; capture and approve -----------------------------------------------
@@ -565,7 +566,7 @@ def test_tool_drift_demo_shows_every_outcome(tmp_path: Path) -> None:
     assert "ALR02-090 INCONCLUSIVE (snapshot_truncated)" in sections["7-incomplete-snapshot"]
     poisoned = sections["8-poisoned-but-matching"]
     assert poisoned[0].startswith("ALR02-099 PASS")
-    assert any(line.startswith("ALR04-00") and "FAIL" in line for line in poisoned)
+    assert any(line.startswith("ALR04-00") and "FINDING" in line for line in poisoned)
 
 
 def test_cache_invalidates_same_size_mtime_replacement(tmp_path: Path) -> None:

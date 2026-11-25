@@ -6,7 +6,11 @@ import asyncio
 import csv
 import json
 import os
+import socket
+import subprocess
 import sys
+import threading
+import time
 from io import StringIO
 from pathlib import Path
 
@@ -412,3 +416,137 @@ def test_proxy_import_database_and_report_in_one_run(
                  tmp_path / "events.csv", tmp_path / "normalized.jsonl"):
         raw = path.read_bytes()
         assert sent.encode() not in raw and FAKE_TOKEN.encode() not in raw, path.name
+
+
+# --- one proxy in front of two servers (--mount) -----------------------------------------------
+
+_UPSTREAM = (
+    "from agent_latch.runtime.demo_server import server;"
+    "server.run(transport='http', host='127.0.0.1', port={port}, show_banner=False)"
+)
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def _wait_for_port(port: int, process: subprocess.Popen[bytes] | None = None) -> None:
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            raise AssertionError("the upstream server exited early")
+        with socket.socket() as probe:
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                return
+        time.sleep(0.1)
+    raise AssertionError(f"nothing listened on port {port}")
+
+
+async def _call_each(base: str) -> None:
+    async with Client(f"{base}/mcp/alpha") as client:
+        await client.call_tool("get_weather", {"city": "Oslo"})
+    async with Client(f"{base}/mcp/beta") as client:
+        await client.call_tool("recipe_steps", {"dish": "soup"})
+
+
+def test_one_proxy_fronts_two_servers_into_one_ledger(tmp_path: Path) -> None:
+    from agent_latch.runtime.ledger import (
+        STATUS_DELETED,
+        STATUS_INTACT,
+        FileAnchor,
+        Ledger,
+        point_for,
+        verify_ledger,
+    )
+    from agent_latch.runtime.proxy import build_mount_app
+
+    ports = [_free_port(), _free_port()]
+    upstreams = [
+        subprocess.Popen(
+            [sys.executable, "-c", _UPSTREAM.format(port=port)],
+            env={**os.environ, "PYTHONPATH": str(SRC)},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        for port in ports
+    ]
+    trace_path, ledger_path = tmp_path / "trace.jsonl", tmp_path / "trace.ledger.jsonl"
+    payloads = PayloadFile(tmp_path / "payloads.jsonl")
+    trace = TraceLog(trace_path, summary=None, transport="http", ledger=Ledger(ledger_path))
+    proxy_port = _free_port()
+    app = build_mount_app(
+        mounts={"alpha": f"http://127.0.0.1:{ports[0]}/mcp", "beta": f"http://127.0.0.1:{ports[1]}/mcp"},
+        trace=trace, tap=PayloadTap([payloads]),
+    )
+    import uvicorn
+
+    server = uvicorn.Server(uvicorn.Config(
+        app, host="127.0.0.1", port=proxy_port, log_level="warning", lifespan="on",
+    ))
+    thread = threading.Thread(target=server.run)
+    try:
+        for port, process in zip(ports, upstreams, strict=True):
+            _wait_for_port(port, process)
+        thread.start()
+        _wait_for_port(proxy_port)
+        asyncio.run(_call_each(f"http://127.0.0.1:{proxy_port}"))
+    finally:
+        server.should_exit = True
+        thread.join(timeout=20)
+        trace.close()
+        payloads.close()
+        for process in upstreams:
+            process.terminate()
+            process.wait(timeout=10)
+
+    records = _records(trace_path)
+    assert {r["server"] for r in records} == {"alpha", "beta"}
+    by_tool = {(r["method"], r.get("tool")): r["server"] for r in records}
+    assert by_tool[("tools/call", "get_weather")] == "alpha"
+    assert by_tool[("tools/call", "recipe_steps")] == "beta"
+    assert {r["server"] for r in records if r["method"] == "tools/list"} == {"alpha", "beta"}
+    assert {r["server"] for r in _records(tmp_path / "payloads.jsonl")} == {"alpha", "beta"}
+
+    head = Ledger.read_head(ledger_path)
+    assert head is not None and head.seq == len(records)  # one chain across both servers
+    anchor = tmp_path / "anchors.jsonl"
+    FileAnchor(anchor).publish(
+        point_for(ledger_path, seq=head.seq, digest=head.digest, records=head.seq)
+    )
+    assert verify_ledger(ledger_path, trace_path=trace_path, anchor_path=anchor).status == STATUS_INTACT
+
+    lines = trace_path.read_text(encoding="utf-8").splitlines()
+    trace_path.write_text("\n".join(lines[:2] + lines[3:]) + "\n", encoding="utf-8")
+    caught = verify_ledger(ledger_path, trace_path=trace_path, anchor_path=anchor)
+    assert caught.status == STATUS_DELETED
+
+
+def test_upstream_url_options_are_checked_before_anything_starts(capsys) -> None:
+    from agent_latch.runtime import cli
+
+    url = "http://127.0.0.1:1/mcp"
+    base = ["proxy", "--http", "127.0.0.1:0"]
+    for bad, message in (
+        ([f"a={url}", f"a={url}"], "used twice"),
+        ([f"Bad Name={url}", f"b={url}"], "'Bad Name'"),
+        ([f"{'x' * 33}={url}", f"b={url}"], "1 to 32"),
+        ([f"mcp={url}", f"b={url}"], "reserved"),
+        ([f"a={url}", url], "NAME="),
+        ([f"a={url}", "b=ftp://x"], "NAME=URL"),
+    ):
+        argv = [*base, *[arg for item in bad for arg in ("--upstream-url", item)]]
+        assert cli.main(argv) == 2
+        assert message in capsys.readouterr().err
+    assert cli.main(["proxy", "--upstream-url", f"a={url}", "--upstream-url", f"b={url}"]) == 2
+    assert "need --http" in capsys.readouterr().err
+    assert cli.main([*base, "--upstream-url", f"a={url}", "--", "server"]) == 2
+
+
+def test_a_query_string_equals_sign_is_not_read_as_a_name() -> None:
+    from agent_latch.runtime.cli import parse_upstreams
+
+    assert parse_upstreams(["https://a.example/mcp?key=1"]) == ("https://a.example/mcp?key=1", {})
+    assert parse_upstreams(["fetch=https://a.example/mcp?x=y", "git=http://b/mcp"]) == (
+        None, {"fetch": "https://a.example/mcp?x=y", "git": "http://b/mcp"},
+    )

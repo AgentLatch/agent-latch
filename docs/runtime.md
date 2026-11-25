@@ -104,6 +104,26 @@ agent-latch-runtime proxy --http 127.0.0.1:8770 --upstream-url https://tools.exa
 
 The HTTP listener has no authentication, so it accepts loopback addresses only. Upstream servers that need auth headers aren't supported yet.
 
+**Several remote servers, one proxy.** Repeat `--upstream-url` and give each a `NAME=`. One proxy then serves every server at `/mcp/NAME`, and all of them write to the same trace, payloads and ledger, so there is one ordered audit trail for the whole agent:
+
+```sh
+agent-latch-runtime proxy --http 127.0.0.1:8770 \
+  --trace runtime-logs/trace.jsonl --payloads runtime-logs/payloads.jsonl \
+  --ledger runtime-logs/trace.ledger.jsonl \
+  --upstream-url fetch=https://a.example/mcp --upstream-url git=https://b.example/mcp
+```
+
+```json
+{ "mcpServers": {
+  "fetch": { "type": "http", "url": "http://127.0.0.1:8770/mcp/fetch" },
+  "git":   { "type": "http", "url": "http://127.0.0.1:8770/mcp/git" }
+} }
+```
+
+Each record's `server` field is the name you gave (`fetch`, `git`), so `import-logs`, `verify` and the report work unchanged. Names are 1 to 32 characters of `a-z`, `0-9`, `_` and `-`, must be unique, and `mcp` is reserved; anything else is a usage error (exit `2`). A value that starts with `http://` or `https://` is always a URL, so an `=` in its query string is never read as a name. A single bare `--upstream-url URL` works as before (served at `/mcp`, named by `--name`). With more than one server every one needs a name, `--name` does not apply, and `--http` is required. The proxy does not change tool names: each server's tools reach the app exactly as the server lists them.
+
+**Limit:** several servers in one proxy must be remote URLs. A server started from a command (`uvx mcp-server-fetch`, `npx ...`) still needs its own proxy process (one trace and ledger per process). The same loopback-only, no-authentication rule applies.
+
 ## Supported clients
 
 Where an app's MCP client runs decides how it reaches the proxy:
@@ -168,7 +188,7 @@ Before a record is written, string values under secret-like keys (`api_key`, `pa
 agent-latch-runtime demo
 ```
 
-This runs a bundled synthetic MCP server behind the proxy, lists its tools, calls five tools (one returns a fake credential, one fails, one returns a prompt-injection payload that ALR05 flags, and one returns ordinary cooking steps that correctly raise no finding), gets a prompt, then imports the logs and prints one line per event. Everything stays on your machine. The files land in `runtime-logs/demo/` and are replaced on each run: `trace.jsonl`, `payloads.jsonl`, `events.csv`, `normalized.jsonl` and `proxy.log` (the proxy's own messages). Run `agent-latch --runtime-result runtime-logs/demo/gate-results.csv` afterwards to see the findings report.
+This runs a bundled synthetic MCP server behind the proxy, lists its tools, calls five tools (one returns a fake credential, one fails, one returns a prompt-injection payload that ALR05 flags, and one returns ordinary cooking steps that correctly raise no finding), gets a prompt, then imports the logs and prints one line per event. Everything stays on your machine. The files land in `runtime-logs/demo/` and are replaced on each run: `trace.jsonl`, `payloads.jsonl`, `events.csv`, `normalized.jsonl`, `gate-results.csv`, `gate-results.sarif` and `proxy.log` (the proxy's own messages). Run `agent-latch --runtime-result runtime-logs/demo/gate-results.csv` afterwards to see the findings report.
 
 `demo --scenario poisoned-output` runs a shorter session aimed at ALR05: one `fetch_page` call whose page hides an instruction in invisible Unicode tag characters and visibly steers the agent toward the sibling `send_email` tool. `ALR05-R02` (hidden content) and `ALR05-R03` (action steering) both fire on that one result.
 
@@ -184,16 +204,16 @@ The `secret-leak` scenario shows the ALR10 checks instead: the client calls `sea
 
 1. **Normalizes** it: the trace record and its payload record are joined into one event (below).
 2. **Shows** it: one line on stderr, one row in `events.csv`, and the full event (arguments, payload and response) in `normalized.jsonl`.
-3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR03, ALR04, ALR05 and ALR10 ship with the package, so this file is created. They record findings and do not block or change the call.
+3. **Runs every installed gate** in turn on that event and appends one row per gate result to `gate-results.csv`. ALR03, ALR04, ALR05 and ALR10 ship with the package, so this file is created. They record findings and do not block or change the call. When the import ends (a `--once` run, or after you stop a following one), it also writes `gate-results.sarif` next to it; see below.
 
-With no file options it reads and writes in `runtime-logs/`:
+`--dir` names the run folder: the importer reads `trace.jsonl` and `payloads.jsonl` there and writes its outputs beside them. The proxy creates one folder per run (see [Default recording](#default-recording)) and prints it, so copy that path. Without `--dir` the importer reads `./runtime-logs/`, where `demo` and older setups write.
 
 ```sh
-# Terminal 1: MCP traffic keeps flowing through the proxy.
-agent-latch-runtime proxy --trace runtime-logs/trace.jsonl --payloads runtime-logs/payloads.jsonl -- npx -y @modelcontextprotocol/server-github
+# Terminal 1: MCP traffic keeps flowing through the proxy. It prints the run folder.
+agent-latch-runtime proxy --name github --record-payloads -- npx -y @modelcontextprotocol/server-github
 
-# Terminal 2: follow both logs (Ctrl+C to stop).
-agent-latch-runtime import-logs
+# Terminal 2: follow the run's logs (Ctrl+C to stop). Use the folder the proxy printed.
+agent-latch-runtime import-logs --dir ~/agent-latch/runtime-logs/github/20261122-074500
 ```
 
 For a full live run with a real CrewAI agent and this repo's MCP gateway, follow [Part 4 of the gateway setup guide](../mcp-server/SETUP.md#part-4-watch-a-live-agent-run-with-agentlatch).
@@ -305,18 +325,20 @@ Two evidence layers feed that report. The marker checks read the prose. A typed 
 
 **Reading ALR04 on its own.** `python -m agent_latch.gates.alr04 PATH` runs the gate over stored
 `tools/list` payloads without the proxy: each file is one response, the table names severity,
-rule, `tool@server` and the decision reason, and the command exits `1` when a tool fails.
-`--sarif FILE` writes the same findings as a SARIF 2.1.0 log for GitHub, GitLab or a dashboard;
-results carry logical locations (`server/tool`) and fingerprints, because a runtime finding has no
-source file. The labelled corpus the tests use is `tests/runtime_fixtures/alr04_unit/`, whose
+rule, `tool@server` and the decision reason, and the command exits `1` when a tool fails. For a
+recorded session, use the `gate-results.sarif` that `import-logs` writes. The labelled corpus the tests use is `tests/runtime_fixtures/alr04_unit/`, whose
 payloads are synthetic and declare their expected outcome before the gate runs.
 **ALR03 (preview).** Reads the connection handshake (`initialize` / `server/discover`), which the middleware records as an `initialize` event carrying the client and server name/version and the protocol version. It reports a finding when a server does not identify itself (rule ALR03-001), when a server's name or version changes versus an earlier connection in the same run (ALR03-002), and when a server's declared name or title is a look-alike of the proxy label or of a name seen earlier in the run (ALR03-003, typosquat/homoglyph impersonation — string similarity only: confusable folding, edit distance and bigram overlap; no regular expressions). It does not authenticate the transport (that is ALR12) or pin the tool list (ALR02), and identity is self-declared, so a PASS is not proof a server is trustworthy. Findings carry the OWASP categories ASI02, ASI03, ASI04, and ASI07. ALR03 never blocks a connection.
 
 **ALR04 (preview).** It inspects tool definitions from `tools/list` responses and from the cached definition on a `tools/call` request: name, description, parameter schema, and metadata. It reports a finding for instruction-like content, including a definition that tells the agent to read a secret path such as `~/.ssh/id_rsa` (rule ALR04-004). Traffic that is not a tool definition produces no finding. Findings carry rule ids and the OWASP categories ASI01, ASI02, and ASI04. That mapping is context, not a claim those categories are fully covered. The rules can miss reworded instructions, and they do not look at tool results or what the agent does next. ALR04 never blocks a call.
 
+**ALR16 (preview).** It checks package-install commands in tool-call arguments for unpinned versions, non-default sources and execution of fetched or written scripts. Its trusted operator policy may contain an `indexes` list of approved index URLs or host names; a custom index not listed there still produces a finding. This policy is passed only to gates that accept it and must not come from the monitored project. The check is heuristic, sees request intent rather than completed installs, and never blocks a call.
+
 **ALR05 (preview).** It inspects tool *results*: the text blocks and structured content of `tools/call` responses, and tool error messages. Three detectors share the text engine in `agent_latch/gates/_text.py` (also used by ALR04): `ALR05-R01` flags instruction-like text (override phrases, forged authority or conversation turns, concealment requests, instructions to read sensitive files), `ALR05-R02` flags hidden or encoded instructions (invisible or bidi characters, Unicode tag sequences, HTML comments, Base64/hex layers that decode to instruction-like text), and `ALR05-R03` flags output that steers the next action (naming another tool of the same server, sending data somewhere, opening a URL). Each finding records whether the tool is expected to return outside content (`openWorldHint`, or a name like `fetch_page`) as `outside_content_context`. A server declares both, so that context never skips a check and never lowers a finding: severity follows the outcome alone. Ordinary instructions in benign data (a recipe's steps, a CLI's manual) do not raise a finding on their own, and one weak signal alone cannot reach FAIL. Payload records exist only with `--payloads`; without them the gate emits one coverage record per run (`ALR05-R90`), and output cut by `--payload-max-chars` gets one coverage record per tool. The proxy sits between the app and the server, so it cannot show whether the output later reached a model or was fenced as data — a finding is a review signal about suspicious untrusted output, never a claim that an injection succeeded. The static rule AG003 checks the code side of the same gate. Findings carry the OWASP category ASI01 as context, not as a coverage claim. ALR05 never blocks a call.
 
 **ALR10 (preview).** It watches secrets crossing the tool boundary on `tools/call` payload records. `ALR10-R01` reports a secret-like value sent to a tool in the request arguments; `ALR10-R02` reports one coming back in the tool's output (text content, structured content or an error message); `ALR10-R90` is a coverage record when a tool call has no payload record (the proxy ran without `--payloads`), because the gate then cannot check it. The gate works on **masked** payloads by design: the proxy replaces secrets with `[REDACTED]` before writing, so the gate never sees a raw secret and nothing it writes can leak one. Its evidence is the masking itself, the `masked` path-and-kind list described above; older records fall back to the `[REDACTED]` markers, which are reported as `INCONCLUSIVE` at `low` severity because a bare marker may also be ordinary text (a redacted legal document, a log line) and is never a FAIL. Severity is `high` for a token-shaped secret (`sk-`, `ghp_`, `AKIA…`, a JWT, a PEM key, a bearer header) in an argument or in tool output, and `high` for any secret sent to a remote (HTTP upstream) server; that remote escalation applies to requests only, so a key-name secret returned by a remote server is `medium`, like one returned by a local server. A secret under a key name sent to a local server is `medium`. A tool that looks like an authentication tool (named `login`/`auth`, or with a password parameter in its schema) is noted in the finding but never downgraded, because a server declares its own tool names and schemas; to expect a credential sent to such a tool, add it to the operator allowlist below. An operator allowlist, `allowed_secret_tools: [{server, tool}]` in a policy file you pass with `import-logs --policy FILE` (YAML or JSON; trusted configuration only, never a file from the monitored project), turns an expected pair into `PASS` with a note. Without `--policy` nothing is allowed. Metadata read from the payload file is treated as untrusted: a masking kind that is not one of the known kinds is reported as `unknown`, never copied into a finding. Findings carry OWASP category ASI03. Blind spots: secrets the masking patterns do not recognize (the same limit as the proxy's masking), secrets split across fields, and encoded secrets. On a small separate validation set (`tests/runtime_fixtures/alr10_heldout.json`, written after the patterns and not used to tune them; 48 synthetic cases) it flagged 7 of 12 secrets in requests and 8 of 10 in tool output, with no false positives in either direction. The misses were credentials inside URLs, GitLab, Stripe-style and Google API keys, npm tokens, and environment-style names with a prefix such as `AWS_SECRET_ACCESS_KEY` or `DB_PASSWORD`. These numbers come from a small hand-written set, so treat them as a regression check and not as a measure of real traffic. ALR10 never blocks a call and does not clear a tool.
+
+**gate-results.sarif.** Every `import-logs` run writes this SARIF 2.1.0 file next to `gate-results.csv` (or next to the `--output-csv` file, with the `.sarif` extension), so it always exists: with no findings it has an empty `results` list. It holds every finding in the CSV, from all gates (ALR03, ALR04, ALR05 and ALR10), for GitHub code scanning, GitLab or a dashboard, and it is rewritten from the whole CSV each time, so it matches the CSV. A following importer also refreshes it when the logs go quiet (and every few seconds under steady traffic), so a hard kill leaves a recent file. A runtime finding has no source file, so a result has a logical location (`server/tool`) and a `partialFingerprints` entry (`agentLatchRuntimeFinding/v1`). The fingerprint is built from the rule, the server and tool, the tool-definition hash (when the gate has one) and the message, never from the event order, so the same finding keeps its identity from one session to the next. `level` follows the severity (`critical` and `high` are `error`, `medium` is `warning`, `low` and `info` are `note`). The file is created with mode `0600` like the CSV, because its messages and evidence come from the same findings. It lists findings only and does not clear a tool.
 
 **gate-results.csv.** Columns are `run_id`, `order`, `gate_id`, `result_json`, and `result_json` always has the same shape: `{"gate_id":"...","status":"ok","findings":[],"error":null}`. If a gate raises, its row has `"status":"error"` and only the exception type in `error`; later gates still run.
 
@@ -390,20 +412,64 @@ runtime gates keep. Until a procedure is documented, do not rotate or move the l
 proxy or a follow-mode importer is running, and follow `docs/ledger-operations.md` ("Retention and
 rotation") for the ledger.
 
-## Tamper-evident audit ledger (preview)
+## Default recording
 
-A trace file is only evidence if nobody can quietly rewrite it. `--ledger FILE` seals every trace record into a local hash chain, and `anchor` publishes one short digest where the agent cannot write, so an edit, a deletion or a full rebuild shows up when you verify.
+The proxy records a trace and seals it into a ledger **by default**, with no flags. Every run gets its own folder:
 
-```sh
-agent-latch-runtime proxy --trace runtime-logs/trace.jsonl \
-  --ledger runtime-logs/trace.ledger.jsonl -- <server command>
-
-agent-latch-runtime anchor --ledger runtime-logs/trace.ledger.jsonl --to /mnt/audit/anchors.jsonl
-agent-latch-runtime verify --ledger runtime-logs/trace.ledger.jsonl \
-  --trace runtime-logs/trace.jsonl --anchor /mnt/audit/anchors.jsonl
+```
+~/agent-latch/runtime-logs/<server name>/<YYYYMMDD-HHMMSS>/trace.jsonl
+                                                          /trace.ledger.jsonl
 ```
 
-`agent-latch --runtime-result FILE --ledger runtime-logs/trace.ledger.jsonl --anchor /mnt/audit/anchors.jsonl` prints the verdict as the first thing in the report, in bold in a terminal (add `--database FILE [--database-anchor PATH]` for the event store's verdict too; the findings are listed by gate):
+The root is in your home folder, so it does not depend on where an MCP client happened to start the proxy, and it is outside any project, so the files are not committed by accident. The timestamp is UTC, taken when the proxy starts (a second run in the same second gets a `-2` suffix). Because a run never reuses a folder, two proxies never share a hash chain, and each run has its own ledger and its own anchor. The proxy prints the exact folder, with a ready-to-copy `import-logs` command, on stderr at startup, and the folder again on exit.
+
+**The run is imported for you when the proxy stops.** The proxy cannot know when an agent has finished, only when it is stopped (Ctrl+C or shutdown). At that point it runs the same one-shot import as `import-logs --once` over its own run folder and prints where everything is:
+
+```
+agent-latch-runtime: run folder: /home/you/agent-latch/runtime-logs/duckduckgo/20261122-074500
+agent-latch-runtime: 14 event(s), 2 finding(s) (ALR05-R90 x1, ALR10-R01 x1); ledger unanchored
+agent-latch-runtime: results: .../gate-results.csv  .../gate-results.sarif
+agent-latch-runtime: to view the results, copy and paste:
+RUN=/home/you/agent-latch/runtime-logs/duckduckgo/20261122-074500
+/home/you/venv/bin/agent-latch --runtime-result "$RUN/gate-results.csv" --ledger "$RUN/trace.ledger.jsonl"
+column -s, -t < "$RUN/events.csv" | less -S
+agent-latch-runtime: anchor it (to a path the agent cannot write): agent-latch-runtime anchor --ledger ... --to <anchor file>
+```
+
+The block under "copy and paste" has no prefix, so you can paste it into a shell as is. The `agent-latch` path is the install the proxy runs from, so it works even when that install's `bin` folder is not on your `PATH`.
+
+It only reads the run's own trace and payloads, runs after traffic has stopped, and never changes the proxy's exit code: a failed import prints a warning with the `import-logs` command to run by hand. `--no-import` turns it off (only the run folder is printed), and `--quiet` imports without printing. It does not help when an MCP client kills the proxy outright (for example Claude Desktop stopping a stdio server), because no output is seen then; use `import-logs --dir` for those runs. The ledger verdict is `unanchored` until you run `anchor`: the proxy cannot publish an anchor somewhere your agent cannot write.
+
+Importing by hand, for runs that were not imported (or to import again), needs the run named, because nothing is guessed:
+
+```sh
+RUN=~/agent-latch/runtime-logs/duckduckgo/20261122-074500
+agent-latch-runtime import-logs --dir "$RUN" --once
+agent-latch --runtime-result "$RUN/gate-results.csv" --ledger "$RUN/trace.ledger.jsonl"
+```
+
+If you point `import-logs --dir` at a folder of runs (or give no `--dir` while runs exist in the home folder), it lists the runs it found, newest last, and exits `2`. `agent-latch-runtime verify ~/agent-latch/runtime-logs --all` checks every ledger below a folder in one go.
+
+- `--log-dir DIR` moves the root (runs are then `DIR/<name>/<timestamp>`). `--trace FILE` and `--ledger FILE` set exact paths and skip the per-run folder (a trace alone gets `TRACE.ledger.jsonl` beside it).
+- `--no-ledger` records the trace without sealing it. `--no-trace` records nothing (and so no ledger). Combining an opt-out with its own path flag is an error (exit `2`).
+- **Payloads stay opt-in**: `--record-payloads` writes `payloads.jsonl` into the run folder, where `import-logs --dir` finds it with no extra flag; `--payloads FILE` sets another path (then pass the same file to `import-logs --payloads`). They cannot be combined. The file is opt-in because the file holds masked tool arguments and outputs and is sensitive. Without it, gates that read payloads, such as ALR10, have nothing to inspect.
+- If a *default* location cannot be written, the proxy warns and keeps running without recording. An explicitly given path that cannot be opened is still a configuration error.
+- Giving `--trace` and `--ledger` the same files for two proxies at once can break the chain, and verification then reports a false gap. The per-run default folders avoid this.
+- Old habit, still valid: `--trace runtime-logs/trace.jsonl --payloads runtime-logs/payloads.jsonl --ledger runtime-logs/trace.ledger.jsonl` writes exactly there, and `import-logs` with no `--dir` reads `./runtime-logs/`.
+
+## Tamper-evident audit ledger (preview)
+
+A trace file is only evidence if nobody can quietly rewrite it. The ledger (on by default, or `--ledger FILE`) seals every trace record into a local hash chain, and `anchor` publishes one short digest where the agent cannot write, so an edit, a deletion or a full rebuild shows up when you verify. Until you anchor it, the verdict is `unanchored`.
+
+```sh
+agent-latch-runtime proxy -- <server command>      # prints the run folder, shown as $RUN below
+
+agent-latch-runtime anchor --ledger "$RUN/trace.ledger.jsonl" --to /mnt/audit/anchors.jsonl
+agent-latch-runtime verify --ledger "$RUN/trace.ledger.jsonl" \
+  --trace "$RUN/trace.jsonl" --anchor /mnt/audit/anchors.jsonl
+```
+
+`agent-latch --runtime-result FILE --ledger "$RUN/trace.ledger.jsonl" --anchor /mnt/audit/anchors.jsonl` prints the verdict as the first thing in the report, in bold in a terminal (add `--database FILE [--database-anchor PATH]` for the event store's verdict too; the findings are listed by gate):
 
 ```
 AUDIT TRAIL TAMPERED — a record was altered; the log cannot be trusted.

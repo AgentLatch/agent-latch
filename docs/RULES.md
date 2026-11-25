@@ -38,6 +38,17 @@ Each rule belongs to one gate, the security outcome it provides evidence for. [G
 | ALR14-S03 | `ALR14` | An executed command (`os.system`, `os.popen`, `os.exec*`, `subprocess.*`, `pty.spawn`) containing a package install (`pip`, `uv pip`, `pipx`, `poetry`, `conda`, `npm`, `pnpm`, `yarn` ... `install`) | ASI10 Rogue Agents | Only the tool name is reported, never the full command line. Wrappers, shell scripts, and `pip` used through an API are missed. |
 | MAN000 | — | A prompt file referenced by the manifest could not be read | — | Informational coverage note; does not affect `--fail-on`. |
 
+## Runtime ALR04 checks
+
+These monitor-only checks run on observed MCP `tools/list` definitions. They do not block
+calls, and their OWASP mappings are informational.
+
+| Rule | Gate | Detection | OWASP Agentic Top 10 mapping | Limitations |
+|---|---|---|---|---|
+| ALR04-R01 | `ALR04` | Tool claims read-only or offline behavior while its input schema accepts a write, destructive action, network destination, or request body sent to a URL | ASI01 Agent Goal Hijack; ASI02 Tool Misuse and Exploitation; ASI04 Agentic Supply Chain Vulnerabilities | Compares declared annotations and wording with schema properties; declarations may be absent or misleading, and a schema is not tool behavior. |
+| ALR04-R02 | `ALR04` | Tool input schema accepts conversation context or credential parameters | ASI01 Agent Goal Hijack; ASI02 Tool Misuse and Exploitation; ASI04 Agentic Supply Chain Vulnerabilities | Name- and schema-based heuristic; benign authentication or context tools can match. |
+| ALR04-R03 | `ALR04` | Tool name collides with or resembles a name listed by another server in the same run | ASI01 Agent Goal Hijack; ASI02 Tool Misuse and Exploitation; ASI04 Agentic Supply Chain Vulnerabilities | Uses only observed listings, so later registrations and servers not routed through the proxy are unseen. |
+
 ## OWASP category list and coverage report
 
 Category IDs and names are defined once in `src/agent_latch/owasp.py` (`ASI_CATEGORIES`), using the titles from the OWASP publication. A test checks that every rule maps only to those IDs.

@@ -43,7 +43,7 @@ async def _drive(
     transport = StdioTransport(
         command=sys.executable,
         args=[
-            "-m", "agent_latch.runtime.cli", "proxy", "--quiet", "--name", DEMO_SERVER,
+            "-m", "agent_latch.runtime.cli", "proxy", "--quiet", "--no-import", "--name", DEMO_SERVER,
             "--trace", str(directory / "trace.jsonl"),
             "--payloads", str(directory / "payloads.jsonl"),
             *(["--payload-max-chars", str(payload_max_chars)] if payload_max_chars else []),

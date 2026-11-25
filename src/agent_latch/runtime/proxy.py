@@ -7,7 +7,8 @@ speak normal MCP, so neither needs changes.
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from contextlib import AsyncExitStack
 
 from fastmcp import FastMCP
 from fastmcp.client.transports import StdioTransport
@@ -70,3 +71,52 @@ def build_proxy(
     # it, so the recorded handshake is the final result the client receives.
     proxy.middleware.insert(0, AgentLatchMiddleware(trace, server=name, tap=tap))
     return proxy
+
+
+def build_mount_app(
+    *,
+    mounts: Mapping[str, str],
+    trace: TraceLog,
+    tap: PayloadTap | None = None,
+) -> object:
+    """One ASGI app that serves each upstream at ``/mcp/NAME``.
+
+    Every upstream gets its own proxy (and so its own ``server`` name in the records), but all of
+    them write to the same ``trace`` (and its ledger) and ``tap``. They share one process and one
+    event loop, and the writes are synchronous, so the records form a single ordered chain.
+    """
+    apps = {
+        name: build_proxy(name=name, trace=trace, upstream_url=url, tap=tap).http_app(
+            path=f"/mcp/{name}"
+        )
+        for name, url in mounts.items()
+    }
+
+    async def lifespan(receive, send) -> None:
+        await receive()  # lifespan.startup
+        try:
+            async with AsyncExitStack() as stack:
+                for sub in apps.values():
+                    await stack.enter_async_context(sub.router.lifespan_context(sub))
+                await send({"type": "lifespan.startup.complete"})
+                await receive()  # lifespan.shutdown
+        except Exception as error:
+            await send({"type": "lifespan.startup.failed", "message": str(error)})
+            raise
+        await send({"type": "lifespan.shutdown.complete"})
+
+    async def app(scope, receive, send) -> None:
+        if scope["type"] == "lifespan":
+            await lifespan(receive, send)
+            return
+        path = scope.get("path", "")
+        for name, sub in apps.items():
+            prefix = f"/mcp/{name}"
+            if path == prefix or path.startswith(prefix + "/"):
+                await sub(scope, receive, send)
+                return
+        if scope["type"] == "http":
+            await send({"type": "http.response.start", "status": 404, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+    return app

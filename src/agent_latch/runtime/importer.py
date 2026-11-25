@@ -84,6 +84,7 @@ EVENT_COLUMNS = (
 # A spreadsheet runs a cell that starts with one of these as a formula.
 _FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
 POLL_INTERVAL_SECONDS = 0.1
+SARIF_REFRESH_SECONDS = 5.0
 # With --anchor, new seals are published at most this often while following, and once at the end.
 ANCHOR_INTERVAL_SECONDS = 5.0
 # How long a trace record waits for its payload record before moving on without it (follow mode).
@@ -315,10 +316,12 @@ class RuntimeLogImporter:
         connector_paths = [c.connector.path for c in connectors] + [
             rejected_path_for(c.name, connector_dir or trace_path.parent) for c in connectors
         ]
+        # Next to the gate-results CSV, and written on every run so the file always exists.
+        sarif_path = output_csv.with_suffix(".sarif") if output_csv is not None else None
         paths = [
             p for p in (
-                trace_path, payloads_path, output_csv, events_csv, normalized_path, store_path,
-                anchor_path, *connector_paths,
+                trace_path, payloads_path, output_csv, sarif_path, events_csv, normalized_path,
+                store_path, anchor_path, *connector_paths,
             ) if p
         ]
         if len({p.resolve() for p in paths}) != len(paths):
@@ -326,6 +329,7 @@ class RuntimeLogImporter:
         self.trace_path = trace_path
         self.payloads_path = payloads_path
         self.output_csv = output_csv
+        self.sarif_path = sarif_path
         self.events_csv = events_csv
         self.normalized_path = normalized_path
         self.summary = summary
@@ -348,6 +352,7 @@ class RuntimeLogImporter:
         self._queues: dict[EventKey, deque[tuple[int, dict[str, Any]]]] = {}
         self._normalizer: MCPEventNormalizer | None = None
         self._csv: TextIO | None = None
+        self._sarif_stale, self._sarif_at = False, 0.0
         self._writer: csv.DictWriter[str] | None = None
         self._events: TextIO | None = None
         self._events_writer: csv.DictWriter[str] | None = None
@@ -392,7 +397,9 @@ class RuntimeLogImporter:
                 self._save_events(final=False)
                 self._deliver_connectors(final=False)
                 if progressed:
+                    self._refresh_sarif(idle=False)
                     continue
+                self._refresh_sarif(idle=True)
                 if not self.follow:
                     break
                 if not self._pending and not self._unsaved:
@@ -419,8 +426,35 @@ class RuntimeLogImporter:
             raise
         finally:
             self._close()
+            self._write_sarif()
         if not self.follow:
             self._raise_connector_problems()
+
+    def _refresh_sarif(self, *, idle: bool) -> None:
+        """While following, keep the SARIF current so a killed importer leaves a recent file.
+
+        Written once the logs go quiet, or every few seconds under steady traffic.
+        """
+        if not self.follow:
+            return
+        now = time.monotonic()
+        if idle and not self._sarif_stale:
+            return
+        self._sarif_stale = True
+        if idle or now - self._sarif_at >= SARIF_REFRESH_SECONDS:
+            self._write_sarif()
+            self._sarif_stale, self._sarif_at = False, now
+
+    def _write_sarif(self) -> None:
+        """Export every finding in the gate-results CSV as SARIF. A failure only warns."""
+        if self.sarif_path is None or self.output_csv is None or not self.gates:
+            return
+        from agent_latch.runtime.results import write_runtime_sarif  # lazy: pulls in rich
+
+        try:
+            write_runtime_sarif(self.output_csv, self.sarif_path)
+        except (OSError, ValueError) as error:
+            log.warning("agent-latch-runtime: could not write %s: %s", self.sarif_path, error)
 
     def _finish(self) -> None:
         """Read what is left in the files, then do the last drain and the last store save."""
@@ -820,7 +854,8 @@ class RuntimeLogImporter:
                 if (run_id, order, gate.gate_id) in self._done:
                     continue
                 result = _evaluate(gate, event)
-                findings += len(result["findings"])
+                findings += sum(record.get("is_finding") is True
+                                for record in result["findings"])
                 errors += result["status"] == "error"
                 self._writer.writerow({
                     "run_id": run_id,

@@ -77,6 +77,12 @@ _ALR04_RUNTIME: tuple[DetectorSpec, ...] = (
      "The tool definition pushes the model to always pick this tool"),
     ("ALR04-009", "runtime",
      "The tool definition demands a harmful step before it can be used"),
+    ("ALR04-R01", "runtime",
+     "The tool definition accepts parameters that contradict its declared behavior"),
+    ("ALR04-R02", "runtime",
+     "The tool definition collects conversation context or credential parameters"),
+    ("ALR04-R03", "runtime",
+     "The tool name collides with or resembles a tool registered by another server"),
 )
 
 GATES: tuple[Gate, ...] = (
