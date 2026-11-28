@@ -14,7 +14,7 @@
 # docs/docker.md explains how to run them.
 
 # ---- build: package AgentLatch itself as a wheel. Thrown away after the build. ---------------
-FROM python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1 AS build
+FROM python:3.13-slim@sha256:7249d5587b78209a006dc4a3b5340678f84ea729239193aa559962cd8c1fce50 AS build
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 COPY pyproject.toml README.md LICENSE ./
@@ -22,7 +22,7 @@ COPY src ./src
 RUN pip wheel --no-deps --wheel-dir /wheels .
 
 # ---- base: what both images share ------------------------------------------------------------
-FROM python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1 AS base
+FROM python:3.13-slim@sha256:7249d5587b78209a006dc4a3b5340678f84ea729239193aa559962cd8c1fce50 AS base
 LABEL org.opencontainers.image.source="https://github.com/AgentLatch/agent-latch" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.vendor="AgentLatch"
